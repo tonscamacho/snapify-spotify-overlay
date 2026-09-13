@@ -7,7 +7,12 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test": "vitest run",
+    "test:unit": "vitest run src",
+    "test:web": "playwright test -c playwright.config.ts",
+    "test:web-real": "playwright test -c playwright.config.ts verify/web/real-spotify.spec.ts",
+    "verify": "npm run test --silent && npm run test:web --silent"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -18,11 +23,13 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.2",
     "typescript": "~6.0.3",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "vitest": "^5.0.0"
   }
 }

@@ -23,6 +23,8 @@ PLAN-*.md
 prototype-liquid-glass.html
 mock/
 .agents/
+verify/web/test-results/
+verify/web/playwright-report/
 
 # Editor directories and files
 .vscode/*
