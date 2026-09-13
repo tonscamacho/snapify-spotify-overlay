@@ -43,36 +43,61 @@ function memo(): Cache {
   return mem;
 }
 
+const missCache = new Set<string>();
+const MISS_CAP = 500;
+function missHas(key: string): boolean {
+  return missCache.has(key);
+}
+function missAdd(key: string): void {
+  missCache.add(key);
+  if (missCache.size > MISS_CAP) {
+    const first = missCache.values().next().value;
+    if (first !== undefined) missCache.delete(first);
+  }
+}
+
 /**
  * Translates one lyric line from English via the MyMemory free tier.
  * Cached per line+language (cap 200) so a replay costs nothing.
  * Resolves null on any failure — the caller keeps the original line.
  */
-export async function translateLine(text: string, lang: Exclude<TransLang, "off">): Promise<string | null> {
+export async function translateLine(
+  text: string,
+  lang: Exclude<TransLang, "off">,
+  signal?: AbortSignal,
+): Promise<string | null> {
   const line = text.trim();
   if (!line) return null;
   const key = `${lang}:${line}`;
   const hit = memo()[key];
   if (hit !== undefined) return hit === "" ? null : hit;
+  if (missHas(key)) return null;
 
   const ctrl = new AbortController();
   const timer = window.setTimeout(() => ctrl.abort(), 8000);
+  const onAbort = () => ctrl.abort();
+  signal?.addEventListener("abort", onAbort, { once: true });
+  const fail = (): null => {
+    missAdd(key);
+    return null;
+  };
   try {
     const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(line)}&langpair=en|${lang}`;
     const res = await fetch(url, { signal: ctrl.signal });
-    if (!res.ok) return null;
+    if (!res.ok) return fail();
     const body = (await res.json()) as {
       responseData?: { translatedText?: string };
       responseStatus?: number;
     };
     const out = body.responseData?.translatedText?.trim();
-    if (!out || body.responseStatus === 429) return null;
+    if (!out || body.responseStatus === 429) return fail();
     memo()[key] = out;
     persist(memo());
     return out;
   } catch {
-    return null;
+    return signal?.aborted ? null : fail();
   } finally {
     window.clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
   }
 }

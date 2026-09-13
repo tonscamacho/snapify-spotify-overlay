@@ -202,6 +202,19 @@ export const api = {
     invoke("play_context", { contextUri: context_uri, deviceId: device_id ?? null }),
   playUris: (uris: string[], device_id?: string | null) =>
     invoke("play_uris", { uris, deviceId: device_id ?? null }),
+  requestLogCounts: () =>
+    invoke<{
+      total: number;
+      ok: number;
+      rate_limited: number;
+      quota_exceeded: number;
+      unauthorized: number;
+      other: number;
+    }>("request_log_counts"),
+  requestLogRecent: (limit = 50) =>
+    invoke<
+      Array<{ method: string; path: string; result: string; retry_after: string | null }>
+    >("request_log_recent", { limit }),
   lyrics: (p: {
     track_id: string;
     track_name: string;

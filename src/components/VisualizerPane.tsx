@@ -32,11 +32,26 @@ export default function VisualizerPane(p: Props) {
   stateRef.current.isPlaying = p.isPlaying;
   stateRef.current.seed = hashSeed(p.seed ?? "idle");
 
+  const lightRef = useRef<boolean | null>(null);
+  const sizeRef = useRef<{ w: number; h: number }>({ w: 300, h: 120 });
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    const app = document.querySelector(".app");
+    const readTheme = () => app?.getAttribute("data-theme") === "light";
+    lightRef.current = readTheme();
+    const themeObs = new MutationObserver(() => {
+      lightRef.current = readTheme();
+    });
+    if (app) themeObs.observe(app, { attributes: true, attributeFilter: ["data-theme"] });
+    const sizeObs = new ResizeObserver(() => {
+      const w = canvas.clientWidth > 0 ? canvas.clientWidth : 300;
+      const h = canvas.clientHeight > 0 ? canvas.clientHeight : 120;
+      sizeRef.current = { w, h };
+    });
+    sizeObs.observe(canvas);
 
     const reduced =
       typeof window !== "undefined" &&
@@ -56,8 +71,7 @@ export default function VisualizerPane(p: Props) {
         if (sig === lastStatic) return;
         lastStatic = sig;
       }
-      const w = canvas.clientWidth > 0 ? canvas.clientWidth : 300;
-      const h = canvas.clientHeight > 0 ? canvas.clientHeight : 120;
+      const { w, h } = sizeRef.current;
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
         canvas.width = Math.round(w * dpr);
@@ -65,7 +79,7 @@ export default function VisualizerPane(p: Props) {
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
-      const light = document.querySelector('.app[data-theme="light"]') !== null;
+      const light = lightRef.current ?? false;
       const gap = 3;
       const bw = (w - gap * (BARS - 1)) / BARS;
       for (let i = 0; i < BARS; i += 1) {
@@ -86,7 +100,12 @@ export default function VisualizerPane(p: Props) {
     };
 
     draw();
-    if (reduced) return;
+    if (reduced) {
+      return () => {
+        themeObs.disconnect();
+        sizeObs.disconnect();
+      };
+    }
 
     const loop = () => {
       // Pause the rAF while paused or hidden: one static frame stands in.
@@ -94,7 +113,11 @@ export default function VisualizerPane(p: Props) {
       raf = window.requestAnimationFrame(loop);
     };
     raf = window.requestAnimationFrame(loop);
-    return () => window.cancelAnimationFrame(raf);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      themeObs.disconnect();
+      sizeObs.disconnect();
+    };
   }, []);
 
   if (!p.seed) {

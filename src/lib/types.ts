@@ -109,7 +109,7 @@ export interface LibraryItem {
 }
 
 export type DetailData =
-  | { kind: "playlist"; name: string; image: string | null; owner: string; tracks: QueueItem[]; uri: string }
+  | { kind: "playlist"; name: string; image: string | null; owner: string; tracks: QueueItem[]; tracksTotal: number; uri: string }
   | { kind: "album"; name: string; image: string | null; artists: string; tracks: QueueItem[]; uri: string; explicit: boolean }
   | { kind: "artist"; name: string; image: string | null; genres: string[]; topTracks: QueueItem[]; albums: LibraryItem[]; uri: string }
   | { kind: "show"; name: string; image: string | null; publisher: string; episodes: QueueItem[]; uri: string; explicit: boolean }

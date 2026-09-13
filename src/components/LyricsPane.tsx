@@ -61,14 +61,16 @@ export default function LyricsPane(p: Props) {
     }
     const line = p.lyrics.data.cues[active]?.text ?? "";
     let live = true;
+    const ctrl = new AbortController();
     setTrans(null);
     if (line.trim()) {
-      void translateLine(line, p.transLang).then((t) => {
+      void translateLine(line, p.transLang, ctrl.signal).then((t) => {
         if (live) setTrans(t);
       });
     }
     return () => {
       live = false;
+      ctrl.abort();
     };
   }, [active, p.transLang, p.lyrics]);
 
@@ -133,11 +135,16 @@ export default function LyricsPane(p: Props) {
       </>
     );
   }
+  // Window to ~61 rows around the active cue so a long track stops
+  // rebuilding every word span on each 500 ms tick.
+  const lo = active < 0 ? 0 : Math.max(0, active - 30);
+  const hi = active < 0 ? 60 : active + 31;
   return (
     <>
       <Meta>Synced{d.cached ? <span className="cached"> · Cached</span> : ""}</Meta>
       <div className="lyrics">
-        {d.cues.map((c, i) => {
+        {d.cues.slice(lo, hi).map((c, k) => {
+          const i = lo + k;
           const isActive = i === active;
           const blank = c.text === "";
           const karaoke = p.wordKaraoke && isActive && !blank;

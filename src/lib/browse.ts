@@ -83,12 +83,33 @@ export function parseSavedAlbums(raw: unknown): { items: LibraryItem[]; total: n
   return { items, total: typeof o["total"] === "number" ? (o["total"] as number) : items.length };
 }
 
+function playlistEntry(w: unknown): Record<string, unknown> | undefined {
+  if (!w || typeof w !== "object") return undefined;
+  const r = w as Record<string, unknown>;
+  for (const k of ["item", "track", "episode"]) {
+    const v = r[k];
+    if (v && typeof v === "object") return v as Record<string, unknown>;
+  }
+  return r;
+}
+
+export function parsePlaylistItems(raw: unknown): { items: QueueItem[]; total: number } {
+  if (!raw || typeof raw !== "object") return { items: [], total: 0 };
+  const o = raw as Record<string, unknown>;
+  const list = Array.isArray(o["items"]) ? (o["items"] as Array<Record<string, unknown>>) : [];
+  const items = list
+    .map(playlistEntry)
+    .filter((t): t is Record<string, unknown> => !!t && typeof t["uri"] === "string")
+    .map(queueItem);
+  return { items, total: typeof o["total"] === "number" ? (o["total"] as number) : items.length };
+}
+
 export function parseSavedTracks(raw: unknown): { items: QueueItem[]; total: number } {
   if (!raw || typeof raw !== "object") return { items: [], total: 0 };
   const o = raw as Record<string, unknown>;
   const list = Array.isArray(o["items"]) ? (o["items"] as Array<Record<string, unknown>>) : [];
   const items = list
-    .map((w) => w["track"] as Record<string, unknown> | undefined)
+    .map(playlistEntry)
     .filter((t): t is Record<string, unknown> => !!t && typeof t["uri"] === "string")
     .map(queueItem);
   return { items, total: typeof o["total"] === "number" ? (o["total"] as number) : items.length };
@@ -118,16 +139,26 @@ export function parsePlaylistDetail(raw: unknown): DetailData | null {
   const o = raw as Record<string, unknown>;
   if (typeof o["id"] !== "string") return null;
   const owner = o["owner"] as Record<string, unknown> | undefined;
-  // New path /playlists/{id}/items nests under items[].track (or episode).
   const tracksNode = o["tracks"] as Record<string, unknown> | undefined;
-  const itemsNode = o["items"];
-  const list = tracksNode && Array.isArray(tracksNode["items"])
-    ? tracksNode["items"]
-    : Array.isArray(itemsNode) ? itemsNode : [];
-  const tracks = (list as Array<Record<string, unknown>>)
-    .map((w) => (w["track"] as Record<string, unknown> | undefined) ?? w)
+  const itemsNode = o["items"] as Record<string, unknown> | Array<Record<string, unknown>> | undefined;
+  let list: Array<Record<string, unknown>> = [];
+  if (tracksNode && Array.isArray(tracksNode["items"])) {
+    list = tracksNode["items"] as Array<Record<string, unknown>>;
+  } else if (itemsNode && !Array.isArray(itemsNode) && Array.isArray(itemsNode["items"])) {
+    list = itemsNode["items"] as Array<Record<string, unknown>>;
+  } else if (Array.isArray(itemsNode)) {
+    list = itemsNode;
+  }
+  const tracks = list
+    .map(playlistEntry)
     .filter((t): t is Record<string, unknown> => !!t && typeof t["uri"] === "string")
     .map(queueItem);
+  const totalOf = (n: Record<string, unknown> | undefined): number | null =>
+    n && typeof n["total"] === "number" ? (n["total"] as number) : null;
+  const tracksTotal =
+    totalOf(tracksNode) ??
+    (itemsNode && !Array.isArray(itemsNode) ? totalOf(itemsNode) : null) ??
+    tracks.length;
   return {
     kind: "playlist",
     name: typeof o["name"] === "string" ? (o["name"] as string) : "Playlist",
@@ -137,6 +168,7 @@ export function parsePlaylistDetail(raw: unknown): DetailData | null {
         ? (owner["display_name"] as string)
         : "",
     tracks,
+    tracksTotal,
     uri: typeof o["uri"] === "string" ? (o["uri"] as string) : "",
   };
 }

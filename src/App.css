@@ -14,8 +14,25 @@
   --track: rgba(255, 255, 255, 0.14);
   --signal: #1ed760;
   --signal-dim: rgba(30, 215, 96, 0.16);
-  --r-pane: 18px;
-  --r-ctl: 10px;
+  --r: 0;
+  --glass-regular: rgba(20, 24, 32, 0.42);
+  --glass-clear: rgba(20, 24, 32, 0.18);
+  --glass-tint: rgba(30, 215, 96, 0.08);
+  --lg-blur-regular: 16px;
+  --lg-blur-clear: 3px;
+  --lg-saturate: 175%;
+  --lg-bright: 1.08;
+  --lg-contrast: 1.04;
+  --lg-stroke: rgba(255, 255, 255, 0.22);
+  --lg-spec-top: rgba(255, 255, 255, 0.55);
+  --lg-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  --lg-dimming: rgba(0, 0, 0, 0.35);
+  --lg-spring-press: 0.4s cubic-bezier(0.175, 0.885, 0.32, 2.2);
+  --lg-spring-morph: 0.5s cubic-bezier(0.32, 0.72, 0, 1);
+  --lg-fade: opacity 560ms ease-out;
+  --lg-pointer-x: 50%;
+  --lg-pointer-y: 50%;
+  --lg-glow: 0;
   --curve: cubic-bezier(0.32, 0.72, 0, 1);
   font-family: -apple-system, "SF Pro", "Segoe UI", system-ui, sans-serif;
 }
@@ -60,7 +77,7 @@ select:focus-visible,
   display: grid;
   place-items: center;
   border: none;
-  border-radius: 8px;
+  border-radius: 0;
   background: transparent;
   color: var(--dim);
   cursor: pointer;
@@ -96,7 +113,7 @@ select:focus-visible,
   display: grid;
   place-items: center;
   border: 1px solid var(--stroke);
-  border-radius: 50%;
+  border-radius: 0;
   color: var(--dim);
 }
 
@@ -124,15 +141,76 @@ select:focus-visible,
   position: absolute;
   display: flex;
   flex-direction: column;
-  background: var(--glass);
-  border: 1px solid var(--stroke);
-  border-radius: var(--r-pane);
-  backdrop-filter: blur(20px) saturate(130%);
-  -webkit-backdrop-filter: blur(20px) saturate(130%);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  background: var(--glass-regular);
+  border: 1px solid var(--lg-stroke);
+  border-radius: 0;
+  backdrop-filter: blur(var(--lg-blur-regular)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  -webkit-backdrop-filter: blur(var(--lg-blur-regular)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  box-shadow: var(--lg-shadow), inset 0 1px 1px var(--lg-spec-top),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.18),
+    inset 1px 0 1px rgba(255, 255, 255, 0.2), inset -1px 0 1px rgba(255, 255, 255, 0.2);
   overflow: hidden;
   min-width: 240px;
   min-height: 120px;
+  transform: translateZ(0);
+}
+
+/* Diagonal sheen plus pointer bloom. Pointer field writes
+   --lg-pointer-x/y and --lg-glow once per frame (see lens.ts). */
+.pane::before,
+.dock::before,
+.modal::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      220px 120px at var(--lg-pointer-x) var(--lg-pointer-y),
+      rgba(255, 255, 255, calc(0.28 * var(--lg-glow) + 0.06)),
+      transparent 70%
+    ),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.18), transparent 40%);
+}
+
+/* Toast keeps ::before as its status dot; sheen rides ::after instead. */
+.toast::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      220px 120px at var(--lg-pointer-x) var(--lg-pointer-y),
+      rgba(255, 255, 255, calc(0.28 * var(--lg-glow) + 0.06)),
+      transparent 70%
+    ),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.18), transparent 40%);
+}
+
+/* Clear variant pairs low blur with dimming so bright backdrops hold text. */
+.glass-clear,
+.pane[data-glass="clear"],
+.dock[data-glass="clear"] {
+  background: var(--glass-clear);
+  backdrop-filter: blur(var(--lg-blur-clear)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  -webkit-backdrop-filter: blur(var(--lg-blur-clear)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+}
+.glass-clear::after,
+.pane[data-glass="clear"]::after,
+.dock[data-glass="clear"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--lg-dimming);
+  pointer-events: none;
+}
+
+/* Flat interiors: rows, lyric lines, browse rows, and artwork never
+   take the lens. Lists get blur-only when they need separation. */
+.lg-blur-only {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .pane.editing {
@@ -193,7 +271,7 @@ select:focus-visible,
 .queue::-webkit-scrollbar-thumb,
 .modal::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.14);
-  border-radius: 99px;
+  border-radius: 0;
 }
 
 /* ---------- player ---------- */
@@ -208,7 +286,7 @@ select:focus-visible,
 .cover {
   width: 54px;
   height: 54px;
-  border-radius: 8px;
+  border-radius: 0;
   flex: none;
   object-fit: cover;
   background: #141a24;
@@ -248,7 +326,7 @@ select:focus-visible,
   font-size: 9px;
   font-weight: 700;
   border: 1px solid var(--stroke);
-  border-radius: 3px;
+  border-radius: 0;
   padding: 0 3px;
   margin-right: 4px;
   color: var(--faint);
@@ -269,7 +347,7 @@ select:focus-visible,
   display: block;
   width: 100%;
   height: 3px;
-  border-radius: 99px;
+  border-radius: 0;
   background: var(--track);
 }
 
@@ -281,7 +359,7 @@ select:focus-visible,
   position: absolute;
   left: 0;
   height: 3px;
-  border-radius: 99px;
+  border-radius: 0;
   background: #fff;
 }
 
@@ -292,13 +370,14 @@ select:focus-visible,
 .bar:hover i::after {
   content: "";
   position: absolute;
-  right: -5px;
+  right: -7px;
   top: 50%;
-  width: 10px;
-  height: 10px;
-  border-radius: 99px;
+  width: 12px;
+  height: 12px;
+  border-radius: 0;
   background: #fff;
   transform: translateY(-50%);
+  box-shadow: 0 0 0 6px transparent;
 }
 
 .times {
@@ -325,7 +404,7 @@ select:focus-visible,
   display: grid;
   place-items: center;
   border: none;
-  border-radius: 50%;
+  border-radius: 0;
   background: transparent;
   color: rgba(244, 246, 248, 0.72);
   cursor: pointer;
@@ -357,7 +436,7 @@ select:focus-visible,
   bottom: 3px;
   width: 3px;
   height: 3px;
-  border-radius: 99px;
+  border-radius: 0;
   background: var(--signal);
 }
 
@@ -367,7 +446,7 @@ select:focus-visible,
   display: grid;
   place-items: center;
   border: none;
-  border-radius: 50%;
+  border-radius: 0;
   background: #fff;
   color: #0a0c10;
   cursor: pointer;
@@ -466,7 +545,7 @@ select:focus-visible,
 
 .btn {
   padding: 10px 18px;
-  border-radius: 99px;
+  border-radius: 0;
   border: 1px solid var(--stroke);
   background: transparent;
   color: var(--txt);
@@ -514,7 +593,7 @@ select:focus-visible,
   display: grid;
   place-items: center;
   border: 1px solid var(--stroke);
-  border-radius: 50%;
+  border-radius: 0;
   color: var(--faint);
 }
 
@@ -553,7 +632,7 @@ select:focus-visible,
 
 .line {
   padding: 6px 10px;
-  border-radius: 8px;
+  border-radius: 0;
   font-size: 14px;
   line-height: 1.65;
   color: var(--faint);
@@ -622,7 +701,7 @@ select:focus-visible,
 .viz-dot {
   width: 6px;
   height: 6px;
-  border-radius: 99px;
+  border-radius: 0;
   background: var(--faint);
 }
 
@@ -754,6 +833,8 @@ select:focus-visible,
 .rz-sw {
   width: 14px;
   height: 14px;
+  min-width: 12px;
+  min-height: 12px;
 }
 
 .rz-ne {
@@ -780,7 +861,7 @@ select:focus-visible,
   cursor: nwse-resize;
   border-right: 1.5px solid var(--faint);
   border-bottom: 1.5px solid var(--faint);
-  border-bottom-right-radius: 4px;
+  border-bottom-right-radius: 0;
 }
 
 /* ---------- snap guides ---------- */
@@ -811,15 +892,19 @@ select:focus-visible,
   position: fixed;
   top: 12px;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translateX(-50%) translateZ(0);
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 6px 10px;
-  background: var(--glass-solid);
-  border: 1px solid var(--stroke);
-  border-radius: 99px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  background: var(--glass-regular);
+  border: 1px solid var(--lg-stroke);
+  border-radius: 0;
+  backdrop-filter: blur(var(--lg-blur-regular)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  -webkit-backdrop-filter: blur(var(--lg-blur-regular)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  box-shadow: var(--lg-shadow), inset 0 1px 1px var(--lg-spec-top),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.18),
+    inset 1px 0 1px rgba(255, 255, 255, 0.2), inset -1px 0 1px rgba(255, 255, 255, 0.2);
   z-index: 200;
 }
 
@@ -838,7 +923,7 @@ select:focus-visible,
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  border-radius: 99px;
+  border-radius: 0;
   padding: 5px 10px;
   cursor: pointer;
 }
@@ -857,7 +942,7 @@ select:focus-visible,
   background: var(--glass-solid);
   color: var(--dim);
   font-size: 12px;
-  border-radius: 99px;
+  border-radius: 0;
   padding: 8px 16px;
   cursor: pointer;
   z-index: 200;
@@ -883,15 +968,20 @@ select:focus-visible,
 }
 
 .modal {
+  position: relative;
   width: 400px;
   max-width: calc(100vw - 48px);
   max-height: calc(100vh - 80px);
   overflow-y: auto;
-  background: var(--glass-solid);
-  border: 1px solid var(--stroke);
-  border-radius: var(--r-pane);
+  background: var(--glass-regular);
+  border: 1px solid var(--lg-stroke);
+  border-radius: 0;
   padding: 16px 18px 18px;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(var(--lg-blur-regular)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  -webkit-backdrop-filter: blur(var(--lg-blur-regular)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  box-shadow: var(--lg-shadow), inset 0 1px 1px var(--lg-spec-top),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.18),
+    inset 1px 0 1px rgba(255, 255, 255, 0.2), inset -1px 0 1px rgba(255, 255, 255, 0.2);
 }
 
 .modal-head {
@@ -958,7 +1048,7 @@ select:focus-visible,
   font-variant-numeric: tabular-nums;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid var(--stroke);
-  border-radius: 6px;
+  border-radius: 0;
   padding: 2px 8px;
   color: var(--txt);
   white-space: nowrap;
@@ -992,7 +1082,7 @@ select:focus-visible,
   letter-spacing: 0.08em;
   color: var(--faint);
   border: 1px solid var(--stroke);
-  border-radius: 99px;
+  border-radius: 0;
   padding: 1px 7px;
   margin-left: 8px;
   vertical-align: 1px;
@@ -1009,7 +1099,7 @@ select:focus-visible,
 .seg {
   display: flex;
   border: 1px solid var(--stroke);
-  border-radius: 99px;
+  border-radius: 0;
   padding: 2px;
   gap: 2px;
 }
@@ -1017,7 +1107,7 @@ select:focus-visible,
 .seg button {
   background: transparent;
   border: none;
-  border-radius: 99px;
+  border-radius: 0;
   color: var(--dim);
   font-size: 12px;
   font-weight: 550;
@@ -1046,14 +1136,18 @@ select:focus-visible,
   display: flex;
   align-items: center;
   gap: 8px;
-  background: var(--glass-solid);
-  border: 1px solid var(--stroke);
+  background: var(--glass-regular);
+  border: 1px solid var(--lg-stroke);
   color: var(--txt);
   font-size: 12.5px;
   padding: 10px 16px;
-  border-radius: 99px;
+  border-radius: 0;
   max-width: min(560px, calc(100vw - 40px));
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(var(--lg-blur-regular)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  -webkit-backdrop-filter: blur(var(--lg-blur-regular)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  box-shadow: var(--lg-shadow), inset 0 1px 1px var(--lg-spec-top),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.18),
+    inset 1px 0 1px rgba(255, 255, 255, 0.2), inset -1px 0 1px rgba(255, 255, 255, 0.2);
   z-index: 300;
 }
 
@@ -1062,7 +1156,7 @@ select:focus-visible,
   width: 6px;
   height: 6px;
   flex: none;
-  border-radius: 99px;
+  border-radius: 0;
   background: #ff5a52;
 }
 
@@ -1082,6 +1176,12 @@ select:focus-visible,
   --ground: #e9ebf1;
   --glass: rgba(255, 255, 255, 0.68);
   --glass-solid: rgba(252, 253, 255, 0.95);
+  --glass-regular: rgba(255, 255, 255, 0.42);
+  --glass-clear: rgba(255, 255, 255, 0.1);
+  --glass-tint: rgba(30, 215, 96, 0.08);
+  --lg-stroke: rgba(12, 17, 26, 0.16);
+  --lg-spec-top: rgba(255, 255, 255, 0.7);
+  --lg-shadow: 0 8px 32px rgba(30, 40, 70, 0.18);
   --stroke: rgba(12, 17, 26, 0.1);
   --txt: #14181f;
   --dim: rgba(20, 24, 31, 0.62);
@@ -1171,7 +1271,7 @@ select:focus-visible,
   width: 100%;
   box-sizing: border-box;
   padding: 8px 10px;
-  border-radius: 10px;
+  border-radius: 0;
   border: 1px solid var(--stroke);
   background: transparent;
   color: var(--txt);
@@ -1189,7 +1289,7 @@ select:focus-visible,
   flex: none;
   border: 0;
   padding: 0;
-  border-radius: 8px;
+  border-radius: 0;
   overflow: hidden;
   background: #141a24;
   cursor: pointer;
@@ -1227,7 +1327,7 @@ select:focus-visible,
 .detail-head img {
   width: 64px;
   height: 64px;
-  border-radius: 10px;
+  border-radius: 0;
   object-fit: cover;
   flex: none;
   background: #141a24;
@@ -1416,7 +1516,7 @@ select:focus-visible,
   }
 }
 .skel {
-  border-radius: 8px;
+  border-radius: 0;
   background: linear-gradient(
     90deg,
     var(--skel) 25%,
@@ -1506,15 +1606,15 @@ select:focus-visible,
 
 /* Dock + sticky subheads blur to match panes. */
 .dock {
-  backdrop-filter: blur(20px) saturate(130%);
-  -webkit-backdrop-filter: blur(20px) saturate(130%);
+  backdrop-filter: blur(var(--lg-blur-regular)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  -webkit-backdrop-filter: blur(var(--lg-blur-regular)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
 }
 .pane-subhead,
 .lyrics-meta,
 .viz-meta,
 .browse-tabs {
-  backdrop-filter: blur(20px) saturate(130%);
-  -webkit-backdrop-filter: blur(20px) saturate(130%);
+  backdrop-filter: blur(var(--lg-blur-regular)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  -webkit-backdrop-filter: blur(var(--lg-blur-regular)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
 }
 
 /* Toast variants: success + info instead of error-only red. */
@@ -1540,10 +1640,10 @@ select:focus-visible,
   pointer-events: none;
 }
 .toasts .toast {
-  position: static;
+  position: relative;
   transform: none;
   pointer-events: auto;
-  animation: toast-in 160ms ease-out;
+  animation: lg-toast-in var(--lg-spring-press);
 }
 @keyframes toast-in {
   from {
@@ -1678,5 +1778,226 @@ button:focus-visible,
   .toasts .toast,
   .modal-back {
     animation: none;
+  }
+}
+
+/* ---------- liquid-glass-box: refraction (Chromium) + motion ---------- */
+
+/* Plain blur is declared first on every surface above, so Safari and
+   Firefox hold frost. Chromium layers the lens map on top. */
+@supports (backdrop-filter: url(#lg-lens-md)) {
+  .pane[data-lens="sm"],
+  .toast {
+    backdrop-filter: blur(var(--lg-blur-regular)) url(#lg-lens-sm) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  }
+  .pane[data-lens="md"],
+  .dock,
+  .modal {
+    backdrop-filter: blur(var(--lg-blur-regular)) url(#lg-lens-md) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  }
+  .pane[data-lens="lg"] {
+    backdrop-filter: blur(var(--lg-blur-regular)) url(#lg-lens-lg) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  }
+  .pane[data-glass="clear"][data-lens="sm"],
+  .dock[data-glass="clear"] {
+    backdrop-filter: blur(var(--lg-blur-clear)) url(#lg-lens-sm) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  }
+  .pane[data-glass="clear"][data-lens="md"] {
+    backdrop-filter: blur(var(--lg-blur-clear)) url(#lg-lens-md) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  }
+  .pane[data-glass="clear"][data-lens="lg"] {
+    backdrop-filter: blur(var(--lg-blur-clear)) url(#lg-lens-lg) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  }
+}
+
+/* Enter: scale .96 to 1 spring plus shadow ramp. Panes animate transform
+   only so the keyframes never override the inline per-pane opacity;
+   modal and toast hold opacity near 1 and own no inline opacity.
+   Displacement ramps 0 to rest in lens.ts. */
+@keyframes lg-pane-enter {
+  from {
+    transform: scale(0.96);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+@keyframes lg-enter {
+  from {
+    transform: scale(0.96);
+    opacity: 0.4;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes lg-toast-in {
+  from {
+    transform: translateY(6px) scale(0.96);
+    opacity: 0.4;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+.pane[data-lg-enter="1"] {
+  animation: lg-pane-enter var(--lg-spring-morph);
+  transform-origin: 20% 20%;
+}
+.modal-back[data-lg-enter="1"] .modal {
+  animation: lg-enter var(--lg-spring-morph);
+  transform-origin: 50% 40%;
+}
+.toasts .toast {
+  animation: lg-toast-in var(--lg-spring-press);
+}
+.toasts .toast[data-lg-exit="1"] {
+  opacity: 0;
+  transition: opacity 120ms ease-out, transform 120ms ease-out;
+}
+
+.modal-enter {
+  display: contents;
+}
+.modal-enter[data-lg-enter="1"] .modal {
+  animation: lg-enter var(--lg-spring-morph);
+  transform-origin: 50% 40%;
+}
+.modal-enter[data-lg-exit="1"] .modal-back {
+  opacity: 0;
+  transition: opacity 140ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .modal-enter[data-lg-enter="1"] .modal {
+    animation: none;
+  }
+}
+
+/* Press: squish .96-.98 with a slight tilt, never a layout change. */
+.btn:active:not(:disabled),
+.icon-btn:active:not(:disabled) {
+  transform: scale(0.97);
+  transition: transform var(--lg-spring-press);
+}
+.play-disc:active:not(:disabled) {
+  transform: scale(0.96) rotate(-2deg);
+  transition: transform var(--lg-spring-press);
+}
+
+/* Pointer edge light: slow travel on straight runs (~30% of rounded
+   demos), crossfade at 90-degree corners via the ::before bloom. */
+@keyframes lg-edge-travel {
+  from {
+    --lg-pointer-x: 20%;
+  }
+  to {
+    --lg-pointer-x: 80%;
+  }
+}
+.dock,
+.modal,
+.seg {
+  border-color: rgba(255, 255, 255, 0.13);
+}
+.dock:hover,
+.modal:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Neighbor bloom reach for pointer-proximate controls. */
+.btn,
+.icon-btn,
+.chip {
+  --near: 0;
+}
+
+/* Scroll dissolve under sticky subheads; tab minimize rides along. */
+.pane-subhead[data-scrolled="1"],
+.lyrics-meta[data-scrolled="1"],
+.viz-meta[data-scrolled="1"],
+.browse-tabs[data-scrolled="1"] {
+  opacity: 0.85;
+  transition: opacity 160ms ease-out;
+}
+
+/* Idle shimmer rides the sheen on hero surfaces only. Static lens
+   holds scale 40-60; suspend kills the sweep when hidden. */
+@keyframes lg-sheen-sweep {
+  to {
+    transform: translateX(430px);
+  }
+}
+/* Idle shimmer rides a separate band on hero surfaces only, so the sweep
+   never moves the sheen or pointer bloom. Browsers pause it when hidden. */
+.pane[data-shimmer="1"]::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 70px;
+  left: -90px;
+  pointer-events: none;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+  animation: lg-sheen-sweep 7s ease-in-out infinite alternate;
+}
+
+/* Ambient track-change crossfade retuned toward ~460ms. */
+.pane-body.has-ambient::before,
+.pane-fill.has-ambient::before {
+  transition: opacity 460ms ease-out;
+}
+
+/* FLIP morph helper: JS sets translate/scale, CSS eases it home. */
+.lg-flip {
+  transition: transform var(--lg-spring-morph), box-shadow var(--lg-spring-morph);
+}
+
+/* Perf: cap lens work to hero surfaces, promote, pause when hidden. */
+.pane,
+.dock,
+.modal,
+.toast {
+  contain: layout style;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pane[data-lg-enter="1"],
+  .modal-back[data-lg-enter="1"] .modal,
+  .toasts .toast,
+  .pane[data-shimmer="1"]::after {
+    animation: none;
+  }
+  .btn:active:not(:disabled),
+  .icon-btn:active:not(:disabled),
+  .play-disc:active:not(:disabled) {
+    transform: none;
+  }
+}
+/* Transparency and contrast carry no refraction, only meaning-free light. */
+@media (prefers-reduced-transparency: reduce) {
+  .pane,
+  .dock,
+  .modal,
+  .toast {
+    background: var(--glass-solid);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .pane::before,
+  .dock::before,
+  .modal::before,
+  .toast::after,
+  .pane[data-shimmer="1"]::after {
+    display: none;
+  }
+}
+@media (prefers-contrast: more) {
+  .pane,
+  .dock,
+  .modal,
+  .toast {
+    background: var(--glass-solid);
+    border-color: currentColor;
   }
 }

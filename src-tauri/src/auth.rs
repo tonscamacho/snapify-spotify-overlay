@@ -1,7 +1,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
-use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand::RngCore;
@@ -353,11 +353,58 @@ async fn refresh_tokens(refresh: &str) -> Result<Tokens, String> {
     })
 }
 
+fn refresh_gate() -> &'static tokio::sync::Mutex<()> {
+    static GATE: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    GATE.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+fn refresh_fail_until() -> &'static Mutex<Option<Instant>> {
+    static STATE: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(None))
+}
+
+fn refresh_cooling_down() -> bool {
+    refresh_fail_until()
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .is_some_and(|until| Instant::now() < until)
+}
+
+fn mark_refresh_failed() {
+    if let Ok(mut g) = refresh_fail_until().lock() {
+        *g = Some(Instant::now() + Duration::from_secs(10));
+    }
+}
+
+fn clear_refresh_failed() {
+    if let Ok(mut g) = refresh_fail_until().lock() {
+        *g = None;
+    }
+}
+
+fn cached_token_if_fresh(state: &State<AuthState>) -> Option<String> {
+    let tokens = state.tokens.lock().ok()?;
+    let t = tokens.clone()?;
+    if t.expires_at - 60 > now_unix() && !t.access_token.is_empty() {
+        Some(t.access_token)
+    } else {
+        None
+    }
+}
+
 /// Force a refresh with the stored credential (used at boot and on 401).
 /// Self-heals a revoked or rotated refresh token by clearing the dead
 /// session so the login gate reopens instead of retrying forever.
 pub async fn refresh_now(app: &AppHandle) -> Result<String, String> {
+    if refresh_cooling_down() {
+        return Err("refresh cooling down after recent failure".into());
+    }
     let state = app.try_state::<AuthState>().ok_or("auth state missing")?;
+    let _guard = refresh_gate().lock().await;
+    if let Some(token) = cached_token_if_fresh(&state) {
+        return Ok(token);
+    }
     let refresh = {
         let tokens = state.tokens.lock().map_err(|e| e.to_string())?;
         tokens.clone().and_then(|t| t.refresh_token.clone())
@@ -370,6 +417,7 @@ pub async fn refresh_now(app: &AppHandle) -> Result<String, String> {
             if let Ok(mut tokens) = state.tokens.lock() {
                 *tokens = Some(fresh);
             }
+            clear_refresh_failed();
             let _ = app.emit("auth-changed", true);
             Ok(token)
         }
@@ -378,6 +426,7 @@ pub async fn refresh_now(app: &AppHandle) -> Result<String, String> {
                 kill_session(app, &state);
                 return Err("Session expired. Please login again.".into());
             }
+            mark_refresh_failed();
             Err(e)
         }
     }

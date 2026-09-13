@@ -324,14 +324,3 @@ export function snapSize(
   }
   return { x, y, w, h: hh, gv, gh };
 }
-
-/** @deprecated Use snapMove. Kept one release for external callers. */
-export function snapPane(
-  moving: PaneState,
-  siblings: PaneState[],
-  areaW: number,
-  areaH: number,
-): { x: number; y: number; snapped: boolean } {
-  const r = snapMove(moving, siblings, areaW, areaH);
-  return { x: r.x, y: r.y, snapped: r.v.length > 0 || r.h.length > 0 };
-}

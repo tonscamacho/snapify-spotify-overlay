@@ -19,6 +19,8 @@ src-tauri/target
 
 # Local-only working files, never commit
 PRODUCT.md
+PLAN-*.md
+prototype-liquid-glass.html
 mock/
 .agents/
 

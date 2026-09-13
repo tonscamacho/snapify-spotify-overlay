@@ -1,11 +1,232 @@
+use rand::Rng;
 use reqwest::{Method, StatusCode};
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 use tauri::AppHandle;
 
 use crate::auth;
 
+#[derive(Clone, Debug)]
+struct RequestEntry {
+    method: String,
+    path: String,
+    result: &'static str,
+    retry_after: Option<String>,
+}
+
+const REQUEST_LOG_CAP: usize = 500;
+
+fn request_log() -> &'static Mutex<VecDeque<RequestEntry>> {
+    static LOG: OnceLock<Mutex<VecDeque<RequestEntry>>> = OnceLock::new();
+    LOG.get_or_init(|| Mutex::new(VecDeque::with_capacity(REQUEST_LOG_CAP)))
+}
+
+fn classify_result(status: StatusCode, body: &str) -> &'static str {
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        if body.contains("QUOTA_EXCEEDED") || body.contains("quota") {
+            "429-quota"
+        } else {
+            "429-rate"
+        }
+    } else if status == StatusCode::UNAUTHORIZED {
+        "401"
+    } else if status.is_success()
+        || status == StatusCode::NO_CONTENT
+        || status == StatusCode::NOT_FOUND
+    {
+        "ok"
+    } else {
+        "other"
+    }
+}
+
+fn record_request(
+    method: &Method,
+    path: &str,
+    result: &'static str,
+    retry_after: Option<&str>,
+) {
+    if let Ok(mut log) = request_log().lock() {
+        if log.len() >= REQUEST_LOG_CAP {
+            log.pop_front();
+        }
+        log.push_back(RequestEntry {
+            method: method.to_string(),
+            path: path.to_string(),
+            result,
+            retry_after: retry_after.map(|s| s.to_string()),
+        });
+    }
+}
+
 fn api_url(path: &str) -> String {
     format!("https://api.spotify.com/v1{path}")
 }
+
+fn shared_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
+struct Cooldown {
+    rate_until: Option<tokio::time::Instant>,
+    quota_until: Option<tokio::time::Instant>,
+}
+
+fn cooldown_state() -> &'static tokio::sync::Mutex<Cooldown> {
+    static STATE: OnceLock<tokio::sync::Mutex<Cooldown>> = OnceLock::new();
+    STATE.get_or_init(|| {
+        tokio::sync::Mutex::new(Cooldown {
+            rate_until: None,
+            quota_until: None,
+        })
+    })
+}
+
+fn spotify_gate() -> &'static tokio::sync::Semaphore {
+    static GATE: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+    GATE.get_or_init(|| tokio::sync::Semaphore::new(1))
+}
+
+struct InflightSlot {
+    notify: tokio::sync::Notify,
+    result: tokio::sync::Mutex<Option<Result<serde_json::Value, String>>>,
+}
+
+fn inflight_gets() -> &'static tokio::sync::Mutex<HashMap<String, Arc<InflightSlot>>> {
+    static MAP: OnceLock<tokio::sync::Mutex<HashMap<String, Arc<InflightSlot>>>> =
+        OnceLock::new();
+    MAP.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+}
+
+fn inflight_key(method: &Method, path: &str, query: &[(&str, &str)]) -> String {
+    let mut key = String::with_capacity(path.len() + 32);
+    key.push_str(method.as_str());
+    key.push(' ');
+    key.push_str(path);
+    for (k, v) in query {
+        key.push('|');
+        key.push_str(k);
+        key.push('=');
+        key.push_str(v);
+    }
+    key
+}
+
+fn parse_retry_after(raw: Option<&str>, is_quota: bool) -> Duration {
+    let secs: u64 = raw.and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+    if is_quota {
+        Duration::from_secs(secs.max(30).min(300))
+    } else if secs == 0 {
+        Duration::from_millis(1000)
+    } else {
+        Duration::from_secs(secs.min(30))
+    }
+}
+
+fn jittered(base: Duration, attempt: u32) -> Duration {
+    let shift = attempt.min(3);
+    let doubled = base.as_millis() as u64 * (1u64 << shift);
+    let cap = doubled.min(8000).max(500);
+    let v = rand::thread_rng().gen_range(0..=cap);
+    Duration::from_millis(v.max(250))
+}
+
+async fn wait_for_cooldown() {
+    loop {
+        let wake_in = {
+            let guard = cooldown_state().lock().await;
+            let now = tokio::time::Instant::now();
+            let mut earliest: Option<Duration> = None;
+            for until in [guard.rate_until, guard.quota_until].into_iter().flatten() {
+                if until > now {
+                    let d = until - now;
+                    earliest = Some(match earliest {
+                        Some(e) => e.min(d),
+                        None => d,
+                    });
+                }
+            }
+            earliest
+        };
+        match wake_in {
+            Some(d) => tokio::time::sleep(d).await,
+            None => return,
+        }
+    }
+}
+
+async fn set_rate_cooldown(wait: Duration) {
+    let mut guard = cooldown_state().lock().await;
+    let until = tokio::time::Instant::now() + wait;
+    guard.rate_until = Some(match guard.rate_until {
+        Some(prev) => prev.max(until),
+        None => until,
+    });
+}
+
+async fn set_quota_cooldown(wait: Duration) {
+    let mut guard = cooldown_state().lock().await;
+    let until = tokio::time::Instant::now() + wait;
+    guard.quota_until = Some(match guard.quota_until {
+        Some(prev) => prev.max(until),
+        None => until,
+    });
+}
+
+#[derive(Clone)]
+struct CacheEntry {
+    body: serde_json::Value,
+    etag: Option<String>,
+    stored_at: tokio::time::Instant,
+    ttl: Duration,
+}
+
+const CACHE_CAP: usize = 100;
+
+fn response_cache(
+) -> &'static tokio::sync::Mutex<HashMap<String, CacheEntry>> {
+    static CACHE: OnceLock<tokio::sync::Mutex<HashMap<String, CacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+}
+
+fn cache_ttl(path: &str) -> Option<Duration> {
+    if path.starts_with("/me/player") || path.starts_with("/search") {
+        return None;
+    }
+    if path.contains("/contains") {
+        return None;
+    }
+    if path == "/me" {
+        return Some(Duration::from_secs(60));
+    }
+    for prefix in [
+        "/playlists/",
+        "/albums/",
+        "/artists/",
+        "/shows/",
+        "/audiobooks/",
+        "/episodes/",
+        "/tracks/",
+        "/chapters/",
+        "/me/tracks",
+        "/me/albums",
+        "/me/shows",
+        "/me/episodes",
+        "/me/audiobooks",
+        "/me/following",
+        "/me/top",
+        "/me/playlists",
+    ] {
+        if path.starts_with(prefix) {
+            return Some(Duration::from_secs(30));
+        }
+    }
+    None
+}
+
+
 
 async fn call(
     app: &AppHandle,
@@ -14,16 +235,177 @@ async fn call(
     query: &[(&str, &str)],
     body: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
-    let token = auth::access_token(app).await?;
-    let res = send(method.clone(), path, query, body.clone(), &token).await?;
-    if res.status() == StatusCode::UNAUTHORIZED {
-        // Token died mid-session (clock skew, revocation). Refresh once and
-        // retry before surfacing; refresh_now self-heals dead sessions.
-        let fresh = auth::refresh_now(app).await?;
-        let res = send(method, path, query, body, &fresh).await?;
-        return interpret(res).await;
+    if method == Method::GET {
+        let key = inflight_key(&method, path, query);
+        let slot = loop {
+            let shared = {
+                let mut map = inflight_gets().lock().await;
+                match map.get(&key) {
+                    Some(existing) => existing.clone(),
+                    None => {
+                        let fresh = Arc::new(InflightSlot {
+                            notify: tokio::sync::Notify::new(),
+                            result: tokio::sync::Mutex::new(None),
+                        });
+                        map.insert(key.clone(), fresh.clone());
+                        break fresh;
+                    }
+                }
+            };
+            // Race-free wait: register interest before re-checking the
+            // result, so a notify between check and sleep cannot strand us.
+            let notified = shared.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(result) = shared.result.lock().await.clone() {
+                return result;
+            }
+            notified.await;
+        };
+        let out = call_inner(app, method, path, query, body).await;
+        *slot.result.lock().await = Some(out.clone());
+        slot.notify.notify_waiters();
+        inflight_gets().lock().await.remove(&key);
+        return out;
     }
-    interpret(res).await
+    call_inner(app, method, path, query, body).await
+}
+
+async fn call_inner(
+    app: &AppHandle,
+    method: Method,
+    path: &str,
+    query: &[(&str, &str)],
+    body: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let cache_key = if method == Method::GET {
+        cache_ttl(path).map(|ttl| (inflight_key(&method, path, query), ttl))
+    } else {
+        None
+    };
+    if let Some((ref key, ttl)) = cache_key {
+        let hit = {
+            let cache = response_cache().lock().await;
+            cache.get(key).cloned().and_then(|entry| {
+                if entry.stored_at.elapsed() < entry.ttl.min(ttl) {
+                    Some(entry.body)
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some(cached) = hit {
+            return Ok(cached);
+        }
+    }
+    let mut token = auth::access_token(app).await?;
+    let mut refreshed = false;
+    let mut attempt: u32 = 0;
+    loop {
+        wait_for_cooldown().await;
+        let conditional_etag = if let Some((ref key, _)) = cache_key {
+            response_cache()
+                .lock()
+                .await
+                .get(key)
+                .and_then(|e| e.etag.clone())
+        } else {
+            None
+        };
+        let res = {
+            let _permit = spotify_gate()
+                .acquire()
+                .await
+                .map_err(|e| e.to_string())?;
+            send(
+                method.clone(),
+                path,
+                query,
+                body.clone(),
+                &token,
+                conditional_etag.as_deref(),
+            )
+            .await?
+        };
+        if res.status() == StatusCode::UNAUTHORIZED && !refreshed {
+            refreshed = true;
+            token = auth::refresh_now(app).await?;
+            continue;
+        }
+        if res.status() == StatusCode::TOO_MANY_REQUESTS {
+            let retry_raw = res
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            let status = res.status();
+            let response_body = res.text().await.unwrap_or_default();
+            let is_quota =
+                response_body.contains("QUOTA_EXCEEDED") || response_body.contains("quota");
+            let base = parse_retry_after(retry_raw.as_deref(), is_quota);
+            record_request(
+                &method,
+                path,
+                classify_result(status, &response_body),
+                retry_raw.as_deref(),
+            );
+            if is_quota {
+                set_quota_cooldown(base).await;
+                return decide(status, retry_raw.as_deref(), &response_body);
+            }
+            if method == Method::GET && attempt < 3 {
+                attempt += 1;
+                let wait = jittered(base, attempt);
+                set_rate_cooldown(wait).await;
+                tokio::time::sleep(wait).await;
+                continue;
+            }
+            set_rate_cooldown(base).await;
+            return decide(status, retry_raw.as_deref(), &response_body);
+        }
+        if res.status() == StatusCode::NOT_MODIFIED {
+            if let Some((ref key, _)) = cache_key {
+                let mut cache = response_cache().lock().await;
+                if let Some(entry) = cache.get_mut(key) {
+                    entry.stored_at = tokio::time::Instant::now();
+                    record_request(&method, path, "ok", None);
+                    return Ok(entry.body.clone());
+                }
+            }
+        }
+        let etag = res
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        let out = interpret(res, &method, path).await;
+        if method != Method::GET && out.is_ok() {
+            response_cache().lock().await.clear();
+        }
+        if let (Ok(ref value), Some((ref key, ttl))) = (&out, &cache_key) {
+            let empty = value
+                .as_object()
+                .is_some_and(|o| o.get("empty") == Some(&serde_json::Value::Bool(true)));
+            if !empty {
+                let mut cache = response_cache().lock().await;
+                if cache.len() >= CACHE_CAP {
+                    if let Some(oldest) = cache.keys().next().cloned() {
+                        cache.remove(&oldest);
+                    }
+                }
+                cache.insert(
+                    key.clone(),
+                    CacheEntry {
+                        body: value.clone(),
+                        etag,
+                        stored_at: tokio::time::Instant::now(),
+                        ttl: *ttl,
+                    },
+                );
+            }
+        }
+        return out;
+    }
 }
 
 async fn send(
@@ -32,12 +414,15 @@ async fn send(
     query: &[(&str, &str)],
     body: Option<serde_json::Value>,
     token: &str,
+    if_none_match: Option<&str>,
 ) -> Result<reqwest::Response, String> {
-    let client = reqwest::Client::new();
-    let mut req = client
+    let mut req = shared_client()
         .request(method, api_url(path))
         .bearer_auth(token)
         .query(query);
+    if let Some(tag) = if_none_match {
+        req = req.header("If-None-Match", tag);
+    }
     if let Some(b) = body {
         req = req.json(&b);
     } else {
@@ -49,7 +434,11 @@ async fn send(
     req.send().await.map_err(|e| e.to_string())
 }
 
-async fn interpret(res: reqwest::Response) -> Result<serde_json::Value, String> {
+async fn interpret(
+    res: reqwest::Response,
+    method: &Method,
+    path: &str,
+) -> Result<serde_json::Value, String> {
     let status = res.status();
     let retry_after = if status == StatusCode::TOO_MANY_REQUESTS {
         res.headers()
@@ -60,6 +449,12 @@ async fn interpret(res: reqwest::Response) -> Result<serde_json::Value, String> 
         None
     };
     let body = res.text().await.unwrap_or_default();
+    record_request(
+        method,
+        path,
+        classify_result(status, &body),
+        retry_after.as_deref(),
+    );
     decide(status, retry_after.as_deref(), &body)
 }
 
@@ -133,6 +528,53 @@ fn decide(
             trim_snippet(body)
         )
     })
+}
+
+#[tauri::command]
+pub async fn request_log_counts() -> Result<serde_json::Value, String> {
+    let log = request_log().lock().map_err(|e| e.to_string())?;
+    let mut ok = 0;
+    let mut rate = 0;
+    let mut quota = 0;
+    let mut unauthorized = 0;
+    let mut other = 0;
+    for entry in log.iter() {
+        match entry.result {
+            "ok" => ok += 1,
+            "429-rate" => rate += 1,
+            "429-quota" => quota += 1,
+            "401" => unauthorized += 1,
+            _ => other += 1,
+        }
+    }
+    Ok(serde_json::json!({
+        "total": log.len(),
+        "ok": ok,
+        "rate_limited": rate,
+        "quota_exceeded": quota,
+        "unauthorized": unauthorized,
+        "other": other,
+    }))
+}
+
+#[tauri::command]
+pub async fn request_log_recent(limit: Option<usize>) -> Result<serde_json::Value, String> {
+    let log = request_log().lock().map_err(|e| e.to_string())?;
+    let n = limit.unwrap_or(50).clamp(1, REQUEST_LOG_CAP);
+    let items: Vec<serde_json::Value> = log
+        .iter()
+        .rev()
+        .take(n)
+        .map(|entry| {
+            serde_json::json!({
+                "method": entry.method,
+                "path": entry.path,
+                "result": entry.result,
+                "retry_after": entry.retry_after,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!(items))
 }
 
 #[tauri::command]
@@ -392,25 +834,32 @@ pub async fn library_contains(
     kind: String,
     ids: Vec<String>,
 ) -> Result<serde_json::Value, String> {
-    // Removed bulk `?ids=` loops singly with quota backoff: one id per
-    // request, sequential, so a 429 backs off without losing place.
-    let mut out = Vec::with_capacity(ids.len());
-    for id in ids.iter().take(50) {
-        let q = [("ids", id.as_str())];
-        let path = match kind.as_str() {
-            "album" => "/me/albums/contains",
-            "episode" => "/me/episodes/contains",
-            "audiobook" => "/me/audiobooks/contains",
-            "show" => "/me/shows/contains",
-            _ => "/me/tracks/contains",
-        };
+    // Batch `?ids=` up to 50 per call. One network call per chunk; a 429
+    // returns partial results plus the queued-retry error.
+    let path = match kind.as_str() {
+        "album" => "/me/albums/contains",
+        "episode" => "/me/episodes/contains",
+        "audiobook" => "/me/audiobooks/contains",
+        "show" => "/me/shows/contains",
+        _ => "/me/tracks/contains",
+    };
+    let mut out: Vec<bool> = Vec::with_capacity(ids.len().min(50));
+    for chunk in ids.chunks(50).take(1) {
+        if chunk.is_empty() {
+            break;
+        }
+        let joined = chunk.join(",");
+        let q = [("ids", joined.as_str())];
         match call(&app, Method::GET, path, &q, None).await {
             Ok(v) => {
-                let flag = v.as_array().and_then(|a| a.first()).and_then(|x| x.as_bool()).unwrap_or(false);
-                out.push(flag);
-            }
-            Err(e) if e.contains("quota-exceeded") || e.contains("rate-limited") => {
-                return Err(e);
+                let flags = v.as_array().map(|a| {
+                    a.iter().map(|x| x.as_bool().unwrap_or(false)).collect::<Vec<_>>()
+                }).unwrap_or_default();
+                if flags.len() == chunk.len() {
+                    out.extend(flags);
+                } else {
+                    return Err("spotify contains: short batch response".into());
+                }
             }
             Err(e) => return Err(e),
         }
@@ -771,8 +1220,8 @@ pub async fn play_uris(
 
 #[cfg(test)]
 mod tests {
-    use super::decide;
-    use reqwest::StatusCode;
+    use super::{cache_ttl, classify_result, decide, inflight_key, parse_retry_after};
+    use reqwest::{Method, StatusCode};
 
     #[test]
     fn serde_mechanism_matches_user_screenshot() {
@@ -835,5 +1284,64 @@ mod tests {
         let err = decide(StatusCode::TOO_MANY_REQUESTS, Some("30"), body).unwrap_err();
         assert!(err.contains("quota-exceeded"), "quota lost: {err}");
         assert!(err.contains("30s"), "backoff lost: {err}");
+    }
+
+    #[test]
+    fn retry_after_defaults_are_safe() {
+        assert_eq!(
+            parse_retry_after(None, false),
+            std::time::Duration::from_millis(1000)
+        );
+        assert_eq!(
+            parse_retry_after(Some("0"), false),
+            std::time::Duration::from_millis(1000)
+        );
+        assert_eq!(
+            parse_retry_after(None, true),
+            std::time::Duration::from_secs(30)
+        );
+        assert_eq!(
+            parse_retry_after(Some("7"), false),
+            std::time::Duration::from_secs(7)
+        );
+    }
+
+    #[test]
+    fn result_classes_cover_plan_buckets() {
+        assert_eq!(
+            classify_result(StatusCode::OK, "{}"),
+            "ok"
+        );
+        assert_eq!(
+            classify_result(StatusCode::TOO_MANY_REQUESTS, "{}"),
+            "429-rate"
+        );
+        assert_eq!(
+            classify_result(StatusCode::TOO_MANY_REQUESTS, "QUOTA_EXCEEDED"),
+            "429-quota"
+        );
+        assert_eq!(
+            classify_result(StatusCode::UNAUTHORIZED, ""),
+            "401"
+        );
+        assert_eq!(
+            classify_result(StatusCode::BAD_GATEWAY, "x"),
+            "other"
+        );
+    }
+
+    #[test]
+    fn player_and_search_bypass_the_cache() {
+        assert!(cache_ttl("/me/player").is_none());
+        assert!(cache_ttl("/search").is_none());
+        assert!(cache_ttl("/playlists/abc").is_some());
+        assert!(cache_ttl("/me/tracks").is_some());
+    }
+
+    #[test]
+    fn inflight_key_separates_offsets() {
+        let a = inflight_key(&Method::GET, "/playlists/x/items", &[("limit", "50"), ("offset", "0")]);
+        let b = inflight_key(&Method::GET, "/playlists/x/items", &[("limit", "50"), ("offset", "50")]);
+        assert_ne!(a, b);
     }
 }

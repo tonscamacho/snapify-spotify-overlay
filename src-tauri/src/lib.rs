@@ -162,6 +162,11 @@ pub fn run() {
             // before the frontend effect runs.
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_ignore_cursor_events(true);
+                // Phase 5 desktop frost deliberately deferred: this window is
+                // maximized and transparent so the game shows through the gaps.
+                // A window-wide Mica/Acrylic/Vibrancy effect would frost the
+                // whole screen, hiding the game. Cards carry their own CSS
+                // frost plus the Chromium lens instead.
             }
             let map = keybinds::load_map(&app.handle());
             app.manage(keybinds::KeybindStore(Mutex::new(map.clone())));
@@ -226,6 +231,8 @@ pub fn run() {
             spotify::search,
             spotify::play_context,
             spotify::play_uris,
+            spotify::request_log_counts,
+            spotify::request_log_recent,
             lyrics::get_lyrics,
             system::autostart_state,
             system::set_autostart,

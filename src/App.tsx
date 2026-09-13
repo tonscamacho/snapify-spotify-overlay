@@ -1,13 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import PlayerPane from "./components/PlayerPane";
+const MemoPlayerPane = memo(PlayerPane);
+import LensDefs from "./components/LensDefs";
+import { getLensBucket, initPointerField, motionAllowed, rampLens } from "./lib/lens";
 import LyricsPane from "./components/LyricsPane";
+const MemoLyricsPane = memo(LyricsPane);
 import QueuePane from "./components/QueuePane";
+const MemoQueuePane = memo(QueuePane);
 import VisualizerPane from "./components/VisualizerPane";
+const MemoVisualizerPane = memo(VisualizerPane);
 import BrowsePane from "./components/BrowsePane";
+const MemoBrowsePane = memo(BrowsePane);
 import SettingsModal from "./components/SettingsModal";
 import {
   ListIcon,
@@ -117,6 +124,9 @@ export default function App() {
   const [tier, setTier] = useState<"premium" | "free">("premium");
   const [sdkDeviceId, setSdkDeviceId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsClosing, setSettingsClosing] = useState(false);
+  const [exitingToasts, setExitingToasts] = useState<number[]>([]);
+  const settingsTimer = useRef(0);
   const [guides, setGuides] = useState<{ v: number[]; h: number[] }>({ v: [], h: [] });
   const [uiScale, setUiScale] = useState(1);
   const [clickToSeek, setClickToSeek] = useState(true);
@@ -186,6 +196,45 @@ export default function App() {
     uiScaleRef.current = uiScale;
   }, [uiScale]);
 
+  // Liquid Glass pointer field plus enter displacement ramp. The lens map
+  // builds once per size bucket; only scale and CSS vars mutate per frame.
+  useEffect(() => {
+    const root = document.getElementById("root") ?? document.body;
+    const dispose = initPointerField(root);
+    const motion = motionAllowed();
+    for (const b of ["sm", "md", "lg"] as const) rampLens(b, motion);
+    return dispose;
+  }, []);
+
+  useEffect(() => () => {
+    if (settingsTimer.current) window.clearTimeout(settingsTimer.current);
+  }, []);
+
+  // Opening cancels a pending close so a fast close-reopen keeps the modal.
+  useEffect(() => {
+    if (settingsOpen) {
+      if (settingsTimer.current) window.clearTimeout(settingsTimer.current);
+      setSettingsClosing(false);
+    }
+  }, [settingsOpen]);
+
+  // Scroll dissolve under sticky subheads. Direct DOM writes per scroll
+  // event keep the 2Hz poll re-renders out of the path.
+  const onPaneScrollCapture = useCallback((e: React.SyntheticEvent) => {
+    const body = e.target as HTMLElement | null;
+    if (!body || !body.classList || !body.classList.contains("pane-body")) return;
+    const v = body.scrollTop > 8 ? "1" : "0";
+    body
+      .querySelectorAll(".pane-subhead, .lyrics-meta, .viz-meta, .browse-tabs")
+      .forEach((el) => el.setAttribute("data-scrolled", v));
+  }, []);
+
+  // Preset morph: displacement re-ramps while panes spring home.
+  useEffect(() => {
+    const motion = motionAllowed();
+    for (const b of ["sm", "md", "lg"] as const) rampLens(b, motion);
+  }, [preset]);
+
   const dragRef = useRef<{
     id: string;
     kind: "move" | Handle;
@@ -201,10 +250,33 @@ export default function App() {
     saveLayout({ version: 3, preset: name, panes });
   }, []);
 
+  const dismissToast = useCallback((id: number) => {
+    setExitingToasts((x) => (x.includes(id) ? x : [...x, id]));
+    window.setTimeout(() => {
+      setToasts((t) => t.filter((x) => x.id !== id));
+      setExitingToasts((x) => x.filter((y) => y !== id));
+    }, 120);
+  }, []);
+
   const pushToast = useCallback((kind: "success" | "info" | "error", text: string) => {
     const id = Date.now() + Math.random();
     setToasts((t) => [...t.slice(-2), { id, kind, text }]);
-    window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 6500);
+    window.setTimeout(() => {
+      setExitingToasts((x) => (x.includes(id) ? x : [...x, id]));
+      window.setTimeout(() => {
+        setToasts((t) => t.filter((x) => x.id !== id));
+        setExitingToasts((x) => x.filter((y) => y !== id));
+      }, 120);
+    }, 6500);
+  }, []);
+
+  const closeSettings = useCallback(() => {
+    if (settingsTimer.current) window.clearTimeout(settingsTimer.current);
+    setSettingsClosing(true);
+    settingsTimer.current = window.setTimeout(() => {
+      setSettingsOpen(false);
+      setSettingsClosing(false);
+    }, 140);
   }, []);
 
   const flashErr = useCallback(
@@ -214,6 +286,46 @@ export default function App() {
       window.setTimeout(() => setErr((e) => (e === m ? null : e)), 6000);
     },
     [pushToast],
+  );
+
+  // Throttled UX: stale content stays on screen; the live region hears one
+  // degrade note and one recovery note per episode, never per retry.
+  const degradedRef = useRef(false);
+  const isThrottledMsg = (m: string) => {
+    const s = m.toLowerCase();
+    return (
+      s.includes("rate-limited") ||
+      s.includes("quota-exceeded") ||
+      s.includes("429") ||
+      s.includes("cooling down") ||
+      s.includes("retry after")
+    );
+  };
+  const noteDegraded = useCallback(
+    (m: string) => {
+      if (degradedRef.current) return;
+      degradedRef.current = true;
+      const quota = /quota-exceeded/i.test(m);
+      pushToast(
+        "info",
+        quota
+          ? "Spotify quota hit — cooling down. Showing last updated content."
+          : "Spotify throttled — showing last updated content.",
+      );
+    },
+    [pushToast],
+  );
+  const noteRecovered = useCallback(() => {
+    if (!degradedRef.current) return;
+    degradedRef.current = false;
+    pushToast("info", "Spotify recovered — content is fresh.");
+  }, [pushToast]);
+  const flashErrThrottledAware = useCallback(
+    (m: string) => {
+      if (isThrottledMsg(m)) noteDegraded(m);
+      else flashErr(m);
+    },
+    [flashErr, noteDegraded],
   );
 
   const refreshAuth = useCallback(async () => {
@@ -228,19 +340,24 @@ export default function App() {
   }, []);
 
   const fetchPlayer = useCallback(async () => {
+    const seq = snapSeq.current;
     try {
       const raw = await invoke<unknown>("get_player");
+      if (seq !== snapSeq.current) return true;
       setSnap(parsePlayer(raw));
+      noteRecovered();
       return true;
     } catch (e) {
       // A rejected session surfaces here first: drop the gate open.
       const m = e instanceof Error ? e.message : String(e);
       if (/not logged in|session expired|invalid_grant|refresh failed/i.test(m)) {
         setLoggedIn(false);
+      } else if (isThrottledMsg(m)) {
+        noteDegraded(m);
       }
       return false;
     }
-  }, []);
+  }, [noteDegraded, noteRecovered]);
 
   const fetchQueue = useCallback(async () => {
     setQueueLoading(true);
@@ -348,13 +465,21 @@ export default function App() {
     };
   }, [refreshAuth, fetchPlayer, fetchDevices, fetchQueue, flashErr, persist]);
 
-  // Player poll every 3 s while logged in. Skipped while the window is
-  // hidden so a background overlay holds no CPU or network budget.
+  // Player poll while logged in: 5 s playing, 20 s paused, 30 s with no
+  // device. Skipped while hidden; visibilitychange refetches on return.
+  // Progress interpolates locally between polls from snap.progressMs.
+  const snapSeq = useRef(0);
+  const transportRef = useRef(false);
+  const pendingSeekRef = useRef<(() => Promise<unknown>) | null>(null);
+  const queueVisibleRef = useRef(false);
   useEffect(() => {
     if (!loggedIn) return;
+    const playing = snap.isPlaying && !snap.empty;
+    const hasDevice = !!snap.deviceId;
+    const delay = !hasDevice && snap.empty ? 30000 : playing ? 5000 : 20000;
     const t = window.setInterval(() => {
       if (!document.hidden) void fetchPlayer();
-    }, 3000);
+    }, delay);
     const onVis = () => {
       if (!document.hidden) void fetchPlayer();
     };
@@ -363,24 +488,31 @@ export default function App() {
       window.clearInterval(t);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [loggedIn, fetchPlayer]);
+  }, [loggedIn, snap.isPlaying, snap.empty, snap.deviceId, fetchPlayer]);
 
-  // Interpolation tick for progress and lyric sync. Paused while hidden.
+  // Interpolation tick for progress and lyric sync. Runs only while playing
+  // and visible; paused/hidden costs nothing.
   useEffect(() => {
+    if (!loggedIn || !snap.isPlaying) return;
     const t = window.setInterval(() => {
       if (!document.hidden) setNow(Date.now());
     }, 500);
     return () => window.clearInterval(t);
-  }, []);
+  }, [loggedIn, snap.isPlaying]);
 
-  // Track change drives lyrics + queue refresh.
+  useEffect(() => {
+    queueVisibleRef.current = layout.some((p) => p.type === "queue" && p.visible);
+  }, [layout]);
+
+  // Track change drives lyrics always, queue only when the queue pane is
+  // live. Lyrics fetch is non-Spotify and stays as-is.
   useEffect(() => {
     const id = snap.track?.id ?? null;
     if (id !== trackIdRef.current) {
       trackIdRef.current = id;
       if (id) {
         void fetchLyrics(id);
-        void fetchQueue();
+        if (queueVisibleRef.current) void fetchQueue();
       } else {
         setLyrics({ kind: "idle" });
       }
@@ -406,14 +538,28 @@ export default function App() {
   // visibility) arrive as Tauri events even while focused, so they are
   // handled only there to avoid double-firing. This listener keeps Esc plus
   // the focused-only chords, matched against the stored keybinds so remaps
-  // keep working.
+  // keep working. Subscribed once; state flows through refs so layout
+  // changes and drags never re-subscribe.
+  const settingsOpenRef = useRef(settingsOpen);
+  const editingRef = useRef(editing);
+  const interactiveRef = useRef(interactive);
+  const cyclePresetRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    settingsOpenRef.current = settingsOpen;
+  }, [settingsOpen]);
+  useEffect(() => {
+    editingRef.current = editing;
+  }, [editing]);
+  useEffect(() => {
+    interactiveRef.current = interactive;
+  }, [interactive]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Bare Esc exits edit first, then settings: one exit rule.
       if (e.key === "Escape" && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        if (settingsOpen) setSettingsOpen(false);
-        else if (editing) setEditing(false);
-        else if (interactive) setInteractive(false);
+        if (settingsOpenRef.current) closeSettings();
+        else if (editingRef.current) setEditing(false);
+        else if (interactiveRef.current) setInteractive(false);
         return;
       }
       const target = e.target as HTMLElement | null;
@@ -423,7 +569,7 @@ export default function App() {
       const kb = keybindsRef.current;
       if (acceleratorMatchesEvent(kb.cyclePreset, e)) {
         e.preventDefault();
-        cyclePreset();
+        cyclePresetRef.current();
         return;
       }
       if (acceleratorMatchesEvent(kb.legacyInteract, e)) {
@@ -434,23 +580,152 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layout, preset, interactive]);
+  }, []);
 
+  // Serialized transport: one in-flight slot. A second next/prev while one
+  // is pending is ignored; a seek queues the latest position only. The
+  // trailing fetchPlayer was removed: the next scheduled poll confirms.
   const run = useCallback(
-    async (fn: () => Promise<unknown>, after?: () => void) => {
+    async (
+      fn: () => Promise<unknown>,
+      opts?: {
+        after?: () => void;
+        transport?: "play" | "pause" | "next" | "prev" | "seek" | "other";
+        optimistic?: () => void;
+        needsRefresh?: boolean;
+      },
+    ) => {
+      const kind = opts?.transport ?? "other";
+      if (kind === "seek" && transportRef.current) {
+        pendingSeekRef.current = fn;
+        return;
+      }
+      if (kind !== "seek" && kind !== "other" && transportRef.current) return;
+      const isTransport = kind !== "other";
+      if (isTransport) {
+        transportRef.current = true;
+        snapSeq.current += 1;
+      }
       setBusy(true);
+      opts?.optimistic?.();
       try {
-        await fn();
-        after?.();
-        await fetchPlayer();
+        const res = await fn();
+        opts?.after?.();
+        if (opts?.needsRefresh) await fetchPlayer();
+        if ((kind === "next" || kind === "prev") && !snap.deviceId && !sdkDeviceId) {
+          const empty =
+            !!res && typeof res === "object" && (res as Record<string, unknown>)["empty"] === true;
+          if (empty) {
+            void fetchDevices();
+            pushToast("info", "No active Spotify device — choose one in the player.");
+          }
+        }
       } catch (e) {
-        flashErr(e instanceof Error ? e.message : String(e));
+        flashErrThrottledAware(e instanceof Error ? e.message : String(e));
       } finally {
+        if (isTransport) transportRef.current = false;
         setBusy(false);
+        if (!transportRef.current && pendingSeekRef.current) {
+          const queued = pendingSeekRef.current;
+          pendingSeekRef.current = null;
+          void run(queued, { transport: "seek" });
+        }
       }
     },
-    [fetchPlayer, flashErr],
+    [fetchPlayer, flashErrThrottledAware, snap.deviceId, sdkDeviceId, fetchDevices, pushToast],
   );
+
+  // Hoisted pane callbacks: stable across the 2Hz progress tick so memoized
+  // panes skip re-renders. Deps stay on primitives, never the snap object.
+  const playCb = useCallback(
+    () =>
+      void (async () => {
+        const target = snap.deviceId ?? sdkDeviceId ?? (await ensurePlayer());
+        if (target) setSdkDeviceId((cur) => cur ?? target);
+        await run(() => api.play(target), {
+          transport: "play",
+          optimistic: () => setSnap((prev) => ({ ...prev, isPlaying: true })),
+        });
+      })(),
+    [snap.deviceId, sdkDeviceId, run],
+  );
+  const pauseCb = useCallback(
+    () =>
+      void run(() => api.pause(snap.deviceId ?? sdkDeviceId), {
+        transport: "pause",
+        optimistic: () => setSnap((prev) => ({ ...prev, isPlaying: false })),
+      }),
+    [snap.deviceId, sdkDeviceId, run],
+  );
+  const nextCb = useCallback(
+    () => void run(() => api.next(snap.deviceId ?? sdkDeviceId), { transport: "next" }),
+    [snap.deviceId, sdkDeviceId, run],
+  );
+  const prevCb = useCallback(
+    () => void run(() => api.prev(snap.deviceId ?? sdkDeviceId), { transport: "prev" }),
+    [snap.deviceId, sdkDeviceId, run],
+  );
+  const seekCb = useCallback(
+    (ms: number) =>
+      void run(() => api.seek(ms, snap.deviceId ?? sdkDeviceId), {
+        transport: "seek",
+        optimistic: () => setSnap((prev) => ({ ...prev, progressMs: ms, fetchedAt: Date.now() })),
+      }),
+    [snap.deviceId, sdkDeviceId, run],
+  );
+  const volumeCb = useCallback(
+    (v: number) => {
+      setSnap((s) => ({ ...s, volume: v }));
+      void run(() => api.volume(v, snap.deviceId ?? sdkDeviceId));
+    },
+    [snap.deviceId, sdkDeviceId, run],
+  );
+  const shuffleCb = useCallback(
+    () => void run(() => api.shuffle(!snap.shuffle, snap.deviceId ?? sdkDeviceId)),
+    [snap.shuffle, snap.deviceId, sdkDeviceId, run],
+  );
+  const repeatNextCb = useMemo(
+    () => (snap.repeat === "off" ? "context" : snap.repeat === "context" ? "track" : "off"),
+    [snap.repeat],
+  );
+  const repeatCb = useCallback(
+    () => void run(() => api.repeat(repeatNextCb, snap.deviceId ?? sdkDeviceId)),
+    [repeatNextCb, snap.deviceId, sdkDeviceId, run],
+  );
+  const transferCb = useCallback(
+    (id: string) =>
+      void run(() => api.transfer(id, false), {
+        after: () => {
+          void fetchDevices();
+        },
+        needsRefresh: true,
+      }),
+    [run, fetchDevices],
+  );
+  const lyricsRetryCb = useCallback(
+    () => trackIdRef.current && void fetchLyrics(trackIdRef.current),
+    [fetchLyrics],
+  );
+  const applyPresetRef = useRef<(name: string) => void>(() => {});
+  const queueBrowseCb = useCallback(() => applyPresetRef.current("full"), []);
+  const browsePlayContextCb = useCallback(
+    (uri: string) => void run(() => api.playContext(uri, snap.deviceId ?? sdkDeviceId)),
+    [snap.deviceId, sdkDeviceId, run],
+  );
+  const browsePlayUrisCb = useCallback(
+    (uris: string[]) => void run(() => api.playUris(uris, snap.deviceId ?? sdkDeviceId)),
+    [snap.deviceId, sdkDeviceId, run],
+  );
+  const browseQueueAddCb = useCallback(
+    (uri: string) =>
+      void run(() => api.queueAdd(uri, snap.deviceId ?? sdkDeviceId), {
+        after: () => {
+          if (queueVisibleRef.current) void fetchQueue();
+        },
+      }),
+    [snap.deviceId, sdkDeviceId, run, fetchQueue],
+  );
+  const browseErrorCb = useCallback((m: string) => flashErrThrottledAware(m), [flashErrThrottledAware]);
 
   const login = useCallback(async () => {
     try {
@@ -480,6 +755,9 @@ export default function App() {
       return next;
     });
   }, [persist]);
+  useEffect(() => {
+    cyclePresetRef.current = cyclePreset;
+  }, [cyclePreset]);
 
   const applyPreset = useCallback(
     (name: string) => {
@@ -492,14 +770,28 @@ export default function App() {
     },
     [persist],
   );
+  useEffect(() => {
+    applyPresetRef.current = applyPreset;
+  }, [applyPreset]);
 
+  // Opacity slider fires per tick: paint immediately, persist debounced.
+  const opacityTimer = useRef(0);
+  useEffect(
+    () => () => {
+      if (opacityTimer.current) window.clearTimeout(opacityTimer.current);
+    },
+    [],
+  );
   const setPaneOpacity = useCallback(
     (id: string, opacity: number) => {
-      setLayout((l) => {
-        const panes = l.map((x) => (x.id === id ? { ...x, opacity } : x));
-        persist(panes, preset);
-        return panes;
-      });
+      setLayout((l) => l.map((x) => (x.id === id ? { ...x, opacity } : x)));
+      if (opacityTimer.current) window.clearTimeout(opacityTimer.current);
+      opacityTimer.current = window.setTimeout(() => {
+        setLayout((l) => {
+          persist(l, preset);
+          return l;
+        });
+      }, 300);
     },
     [persist, preset],
   );
@@ -640,12 +932,22 @@ export default function App() {
     const offPlay = listen("shortcut-playpause", () => {
       const s = snapRef.current;
       if (!s.track) return;
-      void run(s.isPlaying ? () => api.pause(s.deviceId) : () => api.play(s.deviceId));
+      if (s.isPlaying) {
+        void run(() => api.pause(s.deviceId), {
+          transport: "pause",
+          optimistic: () => setSnap((prev) => ({ ...prev, isPlaying: false })),
+        });
+      } else {
+        void run(() => api.play(s.deviceId), {
+          transport: "play",
+          optimistic: () => setSnap((prev) => ({ ...prev, isPlaying: true })),
+        });
+      }
     });
     const offNext = listen("shortcut-next", () => {
       const s = snapRef.current;
       if (!s.track) return;
-      void run(() => api.next(s.deviceId));
+      void run(() => api.next(s.deviceId), { transport: "next" });
     });
     const offToggle = listen("overlay-toggle-active", () => setInteractive((v) => !v));
     const offEdit = listen("shortcut-edit", () => setEditing((v) => !v));
@@ -714,15 +1016,46 @@ export default function App() {
     }
   };
 
+  const dragRaf = useRef(0);
+  const dragPending = useRef<{ x: number; y: number; shift: boolean; w: number; h: number } | null>(null);
+  useEffect(
+    () => () => {
+      if (dragRaf.current) window.cancelAnimationFrame(dragRaf.current);
+    },
+    [],
+  );
+
   const onStageMove = (e: React.PointerEvent) => {
     const d = dragRef.current;
     if (!d) return;
-    const k = uiScaleRef.current || 1;
-    const dx = (e.clientX - d.startX) / k;
-    const dy = (e.clientY - d.startY) / k;
     const stage = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const areaW = stage.width / k;
-    const areaH = stage.height / k;
+    dragPending.current = {
+      x: e.clientX,
+      y: e.clientY,
+      shift: e.shiftKey,
+      w: stage.width,
+      h: stage.height,
+    };
+    if (dragRaf.current) return;
+    dragRaf.current = window.requestAnimationFrame(() => {
+      dragRaf.current = 0;
+      const p = dragPending.current;
+      dragPending.current = null;
+      const dd = dragRef.current;
+      if (!dd || !p) return;
+      applyDrag(dd, p);
+    });
+  };
+
+  const applyDrag = (
+    d: NonNullable<typeof dragRef.current>,
+    p: { x: number; y: number; shift: boolean; w: number; h: number },
+  ) => {
+    const k = uiScaleRef.current || 1;
+    const dx = (p.x - d.startX) / k;
+    const dy = (p.y - d.startY) / k;
+    const areaW = p.w / k;
+    const areaH = p.h / k;
     setLayout((l) => {
       const panes = l.map((x) => ({ ...x }));
       const m = panes.find((x) => x.id === d.id);
@@ -731,7 +1064,7 @@ export default function App() {
       if (d.kind === "move") {
         m.x = Math.max(0, Math.round(d.origX + dx));
         m.y = Math.max(0, Math.round(d.origY + dy));
-        if (!e.shiftKey) {
+        if (!p.shift) {
           const s = snapMove(m, panes, areaW, areaH);
           m.x = s.x;
           m.y = s.y;
@@ -768,7 +1101,7 @@ export default function App() {
         m.y = ny;
         m.w = nw;
         m.h = nh;
-        if (!e.shiftKey) {
+        if (!p.shift) {
           const s = snapSize(m, panes, areaW, areaH, {
             east: d.kind.includes("e"),
             south: d.kind.includes("s"),
@@ -789,6 +1122,7 @@ export default function App() {
   };
 
   const onStageUp = () => {
+    if (dragPending.current) dragPending.current = null;
     if (dragRef.current) {
       dragRef.current = null;
       setGuides({ v: [], h: [] });
@@ -805,16 +1139,18 @@ export default function App() {
     return Math.min(Math.max(0, base), snap.track.durationMs);
   })();
 
-  const repeatNext = snap.repeat === "off" ? "context" : snap.repeat === "context" ? "track" : "off";
-
   const renderPane = (pane: PaneState) => {
     if (!pane.visible) return null;
+    const bucket = getLensBucket(pane.w, pane.h);
     return (
       <section
-        key={pane.id}
-        className={`pane${editing ? " editing" : ""}`}
+        key={`${preset}:${pane.id}`}
+        className={`pane lg-flip${editing ? " editing" : ""}`}
         data-pane={pane.type}
         data-density={density}
+        data-lens={bucket}
+        data-lg-enter="1"
+        data-shimmer={pane.type === "player" ? "1" : undefined}
         style={{ left: pane.x, top: pane.y, width: pane.w, height: pane.h, zIndex: pane.z, opacity: pane.opacity }}
         onPointerDown={(e) => {
           if (editing) e.stopPropagation();
@@ -842,7 +1178,7 @@ export default function App() {
         </header>
         <div className="pane-body">
           {pane.type === "player" && (
-            <PlayerPane
+            <MemoPlayerPane
               snapshot={snap}
               devices={devices}
               progressMs={progressMs}
@@ -850,68 +1186,51 @@ export default function App() {
               ambientOn={ambientTint}
               tier={tier}
               sdkDeviceId={sdkDeviceId}
-              onPlay={() =>
-                void (async () => {
-                  const target = snap.deviceId ?? sdkDeviceId ?? (await ensurePlayer());
-                  if (target) setSdkDeviceId((cur) => cur ?? target);
-                  await run(() => api.play(target));
-                })()
-              }
-              onPause={() => void run(() => api.pause(snap.deviceId ?? sdkDeviceId))}
-              onNext={() => void run(() => api.next(snap.deviceId ?? sdkDeviceId))}
-              onPrev={() => void run(() => api.prev(snap.deviceId ?? sdkDeviceId))}
-              onSeek={(ms) => void run(() => api.seek(ms, snap.deviceId ?? sdkDeviceId))}
-              onVolume={(v) => {
-                setSnap((s) => ({ ...s, volume: v }));
-                void run(() => api.volume(v, snap.deviceId ?? sdkDeviceId));
-              }}
-              onShuffle={() => void run(() => api.shuffle(!snap.shuffle, snap.deviceId ?? sdkDeviceId))}
-              onRepeat={() => void run(() => api.repeat(repeatNext, snap.deviceId ?? sdkDeviceId))}
-              onTransfer={(id) =>
-                void run(() => api.transfer(id, false), () => {
-                  void fetchDevices();
-                })
-              }
-              onRefreshDevices={() => void fetchDevices()}
-              onToast={(kind, text) => pushToast(kind, text)}
+              onPlay={playCb}
+              onPause={pauseCb}
+              onNext={nextCb}
+              onPrev={prevCb}
+              onSeek={seekCb}
+              onVolume={volumeCb}
+              onShuffle={shuffleCb}
+              onRepeat={repeatCb}
+              onTransfer={transferCb}
+              onRefreshDevices={fetchDevices}
+              onToast={pushToast}
             />
           )}
           {pane.type === "lyrics" && (
-            <LyricsPane
+            <MemoLyricsPane
               lyrics={lyrics}
               positionMs={progressMs}
               clickToSeek={clickToSeek}
               wordKaraoke={wordKaraoke}
               transLang={transLang}
-              onSeek={(ms) => void run(() => api.seek(ms, snap.deviceId ?? sdkDeviceId))}
-              onRetry={() => trackIdRef.current && void fetchLyrics(trackIdRef.current)}
+              onSeek={seekCb}
+              onRetry={lyricsRetryCb}
             />
           )}
           {pane.type === "queue" && (
-            <QueuePane
+            <MemoQueuePane
               current={queue.current}
               upcoming={queue.upcoming}
               loading={queueLoading}
-              onRefresh={() => void fetchQueue()}
-              onBrowse={() => applyPreset("full")}
+              onRefresh={fetchQueue}
+              onBrowse={queueBrowseCb}
             />
           )}
           {pane.type === "visualizer" && (
-            <VisualizerPane isPlaying={snap.isPlaying} seed={snap.track?.id ?? null} />
+            <MemoVisualizerPane isPlaying={snap.isPlaying} seed={snap.track?.id ?? null} />
           )}
           {pane.type === "browse" && (
-            <BrowsePane
+            <MemoBrowsePane
               state={browse}
               deviceId={snap.deviceId ?? sdkDeviceId}
               onChange={setBrowse}
-              onPlayContext={(uri) => void run(() => api.playContext(uri, snap.deviceId ?? sdkDeviceId))}
-              onPlayUris={(uris) => void run(() => api.playUris(uris, snap.deviceId ?? sdkDeviceId))}
-              onQueueAdd={(uri) =>
-                void run(() => api.queueAdd(uri, snap.deviceId ?? sdkDeviceId), () => {
-                  void fetchQueue();
-                })
-              }
-              onError={(m) => flashErr(m)}
+              onPlayContext={browsePlayContextCb}
+              onPlayUris={browsePlayUrisCb}
+              onQueueAdd={browseQueueAddCb}
+              onError={browseErrorCb}
             />
           )}
         </div>
@@ -929,9 +1248,10 @@ export default function App() {
 
   return (
     <div className="app" data-theme={theme}>
+      <LensDefs />
       {!loggedIn ? (
         <div className="gate">
-          <div className="pane gate-card" style={{ opacity: 0.97 }}>
+          <div className="pane gate-card" data-lens="md" data-lg-enter="1" style={{ opacity: 0.97 }}>
             <div className="gate-icon">
               <NoteIcon size={26} />
             </div>
@@ -949,6 +1269,7 @@ export default function App() {
             className="stage"
             onPointerMove={onStageMove}
             onPointerUp={onStageUp}
+            onScrollCapture={onPaneScrollCapture}
             onDoubleClick={(e) => {
               // Reachable only while editing: passive mode passes all
               // mouse events to the game below, so re-entry is via the
@@ -1058,11 +1379,15 @@ export default function App() {
 
       <div className="toasts" role="status" aria-live="polite">
         {toasts.slice(-1).map((t) => (
-          <div key={t.id} className={`toast toast-${t.kind}`}>
+          <div
+            key={t.id}
+            className={`toast toast-${t.kind}`}
+            data-lg-exit={exitingToasts.includes(t.id) ? "1" : undefined}
+          >
             <span>{t.text}</span>
             <button
               className="btn sm"
-              onClick={() => setToasts((x) => x.filter((y) => y.id !== t.id))}
+              onClick={() => dismissToast(t.id)}
               aria-label="Dismiss notification"
             >
               Dismiss
@@ -1071,7 +1396,7 @@ export default function App() {
               <button
                 className="btn sm"
                 onClick={() => {
-                  setToasts((x) => x.filter((y) => y.id !== t.id));
+                  dismissToast(t.id);
                   setErr(null);
                   void logout().finally(() => void login());
                 }}
@@ -1106,8 +1431,14 @@ export default function App() {
         </div>
       )}
 
-      <SettingsModal
-        open={settingsOpen}
+      {(settingsOpen || settingsClosing) && (
+        <div
+          className="modal-enter"
+          data-lg-enter={settingsClosing ? undefined : "1"}
+          data-lg-exit={settingsClosing ? "1" : undefined}
+        >
+          <SettingsModal
+            open={settingsOpen || settingsClosing}
         loggedIn={loggedIn}
         preset={preset}
         uiScale={uiScale}
@@ -1193,8 +1524,10 @@ export default function App() {
         onDownloadUpdate={() => void downloadUpdate()}
         onRestartUpdate={restartUpdate}
         onLogout={() => void logout()}
-        onClose={() => setSettingsOpen(false)}
+        onClose={closeSettings}
       />
+        </div>
+      )}
     </div>
   );
 }

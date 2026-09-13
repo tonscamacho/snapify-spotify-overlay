@@ -10,14 +10,29 @@ export interface Page<T, C> {
  *  cursor=number; keyset paging (followed artists) as cursor=string.
  *  One IntersectionObserver sentinel per list; renders only fire on
  *  threshold crossings and page arrivals, never per scroll pixel. */
+export function isThrottledError(m: string): boolean {
+  const s = m.toLowerCase();
+  return (
+    s.includes("rate-limited") ||
+    s.includes("quota-exceeded") ||
+    s.includes("429") ||
+    s.includes("cooling down") ||
+    s.includes("retry after")
+  );
+}
+
+const MAX_ITEMS_DEFAULT = 200;
+
 export function usePagedList<T, C>(
   fetcher: (limit: number, cursor: C | null) => Promise<Page<T, C>>,
-  opts: { pageSize?: number; resetKey: string; onError?: (m: string) => void },
+  opts: { pageSize?: number; resetKey: string; onError?: (m: string) => void; maxItems?: number },
 ) {
   const pageSize = opts.pageSize ?? 20;
+  const maxItems = opts.maxItems ?? MAX_ITEMS_DEFAULT;
   const [items, setItems] = useState<T[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  const [throttled, setThrottled] = useState<string | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const cursorRef = useRef<C | null>(null);
   const loadingRef = useRef(false);
@@ -33,21 +48,37 @@ export function usePagedList<T, C>(
     try {
       const page = await fetcherRef.current(pageSize, cursorRef.current);
       cursorRef.current = page.next;
-      setItems((prev) => [...prev, ...page.items]);
+      setItems((prev) => {
+        const merged = [...prev, ...page.items];
+        return merged.length > maxItems ? merged.slice(merged.length - maxItems) : merged;
+      });
       setHasMore(page.next !== null);
+      setThrottled(null);
     } catch (e) {
-      errorRef.current?.(e instanceof Error ? e.message : String(e));
-      setHasMore(false);
+      const m = e instanceof Error ? e.message : String(e);
+      if (isThrottledError(m)) {
+        setThrottled(m);
+        setHasMore(true);
+      } else {
+        errorRef.current?.(m);
+        setHasMore(false);
+      }
     } finally {
       loadingRef.current = false;
       setLoading(false);
     }
-  }, [pageSize]);
+  }, [pageSize, maxItems]);
+
+  const retry = useCallback(() => {
+    setThrottled(null);
+    void loadMore();
+  }, [loadMore]);
 
   useEffect(() => {
     cursorRef.current = null;
     setItems([]);
     setHasMore(true);
+    setThrottled(null);
     void loadMore();
   }, [opts.resetKey, loadMore]);
 
@@ -73,5 +104,5 @@ export function usePagedList<T, C>(
 
   useEffect(() => () => observerRef.current?.disconnect(), []);
 
-  return { items, loading, hasMore, sentinelRef: setSentinel };
+  return { items, loading, hasMore, throttled, retry, sentinelRef: setSentinel };
 }

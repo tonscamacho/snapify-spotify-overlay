@@ -206,7 +206,6 @@ export function coerceKeybinds(raw: unknown): KeybindMap {
     return `${p.ctrl ? 1 : 0}${p.alt ? 1 : 0}${p.shift ? 1 : 0}${p.meta ? 1 : 0}+${p.key.toLowerCase()}`;
   };
   for (const action of Object.keys(DEFAULT_KEYBINDS) as KeybindAction[]) {
-    fingerprint(out[action]);
     seen.add(fingerprint(out[action]) ?? action);
   }
   (Object.keys(DEFAULT_KEYBINDS) as KeybindAction[]).forEach((action) => {

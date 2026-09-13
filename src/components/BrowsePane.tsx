@@ -9,6 +9,7 @@ import {
   parseEpisodeDetail,
   parseFollowedArtists,
   parsePlaylistDetail,
+  parsePlaylistItems,
   parsePlaylistPage,
   parseSavedAlbums,
   parseSavedAudiobooks,
@@ -80,7 +81,7 @@ function Row({
 }) {
   // Shelves are full-row Spotify-only, max 20 items, Spotify mark per row,
   // no mixed-service rows, link at row end into the Spotify app.
-  const fullTitle = title.length > 25 ? title : title;
+  const fullTitle = title;
   return (
     <li className="q browse-row">
       <button className="browse-thumb" onClick={onOpen} aria-label={`Open ${title}`} title={fullTitle}>
@@ -176,13 +177,31 @@ function Skeletons({ n = 3 }: { n?: number }) {
 function MoreSentinel({
   list,
 }: {
-  list: { loading: boolean; hasMore: boolean; sentinelRef: React.RefCallback<HTMLDivElement> };
+  list: {
+    loading: boolean;
+    hasMore: boolean;
+    throttled: string | null;
+    retry: () => void;
+    sentinelRef: React.RefCallback<HTMLDivElement>;
+  };
 }) {
   return (
     <li className="sentinel" aria-hidden="true">
       <div ref={list.sentinelRef} />
       {list.loading && list.hasMore && <div className="skel skel-row" />}
     </li>
+  );
+}
+
+function ThrottledNote({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const quota = /quota-exceeded/i.test(message);
+  return (
+    <div className="throttled-note" role="status">
+      <span>{quota ? "Spotify quota hit — cooling down." : "Spotify throttled — retrying in background."}</span>
+      <button className="btn sm" onClick={onRetry}>
+        Retry
+      </button>
+    </div>
   );
 }
 
@@ -255,6 +274,20 @@ function LibraryList({
   );
 
   if (list.loading && list.items.length === 0) return <Skeletons />;
+  if (list.items.length === 0 && list.throttled) {
+    return (
+      <>
+        <ThrottledNote message={list.throttled} onRetry={list.retry} />
+        <div className="empty">
+          <div className="empty-title">Throttled</div>
+          <div className="empty-sub">Spotify rate-limited this list. Stale results kept; retry when ready.</div>
+          <button className="btn sm" onClick={list.retry}>
+            Retry
+          </button>
+        </div>
+      </>
+    );
+  }
   if (list.items.length === 0) {
     return (
       <div className="empty">
@@ -270,38 +303,41 @@ function LibraryList({
     );
   }
   return (
-    <ol className="queue">
-      {list.items.map((it, i) =>
-        "durationMs" in it ? (
-          <TrackRow
-            key={`${(it as QueueItem).uri}-${i}`}
-            t={it as QueueItem}
-            index={i}
-            onPlay={() => onPlayUris([(it as QueueItem).uri])}
-            onQueue={() => onQueueAdd((it as QueueItem).uri)}
-          />
-        ) : (
-          <Row
-            key={`${tab}-${(it as LibraryItem).id}`}
-            title={(it as LibraryItem).name}
-            sub={(it as LibraryItem).subtitle}
-            image={(it as LibraryItem).image}
-            onOpen={() => {
-              const li = it as LibraryItem;
-              if (!li.id) return;
-              if (tab === "playlists") onOpen({ kind: "playlist", id: li.id, name: li.name });
-              else if (tab === "albums") onOpen({ kind: "album", id: li.id, name: li.name });
-              else if (tab === "shows") onOpen({ kind: "show", id: li.id, name: li.name });
-              else if (tab === "audiobooks") onOpen({ kind: "audiobook", id: li.id, name: li.name });
-              else if (tab === "episodes") onOpen({ kind: "episode", id: li.id, name: li.name });
-              else onOpen({ kind: "artist", id: li.id, name: li.name });
-            }}
-            onPlay={(it as LibraryItem).uri ? () => onPlayContext((it as LibraryItem).uri) : undefined}
-          />
-        ),
-      )}
-      <MoreSentinel list={list} />
-    </ol>
+    <>
+      {list.throttled && <ThrottledNote message={list.throttled} onRetry={list.retry} />}
+      <ol className="queue">
+        {list.items.map((it, i) =>
+          "durationMs" in it ? (
+            <TrackRow
+              key={`${(it as QueueItem).uri}-${i}`}
+              t={it as QueueItem}
+              index={i}
+              onPlay={() => onPlayUris([(it as QueueItem).uri])}
+              onQueue={() => onQueueAdd((it as QueueItem).uri)}
+            />
+          ) : (
+            <Row
+              key={`${tab}-${(it as LibraryItem).id}`}
+              title={(it as LibraryItem).name}
+              sub={(it as LibraryItem).subtitle}
+              image={(it as LibraryItem).image}
+              onOpen={() => {
+                const li = it as LibraryItem;
+                if (!li.id) return;
+                if (tab === "playlists") onOpen({ kind: "playlist", id: li.id, name: li.name });
+                else if (tab === "albums") onOpen({ kind: "album", id: li.id, name: li.name });
+                else if (tab === "shows") onOpen({ kind: "show", id: li.id, name: li.name });
+                else if (tab === "audiobooks") onOpen({ kind: "audiobook", id: li.id, name: li.name });
+                else if (tab === "episodes") onOpen({ kind: "episode", id: li.id, name: li.name });
+                else onOpen({ kind: "artist", id: li.id, name: li.name });
+              }}
+              onPlay={(it as LibraryItem).uri ? () => onPlayContext((it as LibraryItem).uri) : undefined}
+            />
+          ),
+        )}
+        <MoreSentinel list={list} />
+      </ol>
+    </>
   );
 }
 
@@ -309,40 +345,87 @@ function LibraryList({
 function PlaylistTracks({
   id,
   resetKey,
+  initialItems,
+  initialTotal,
   onPlayUris,
   onQueueAdd,
   onError,
 }: {
   id: string;
   resetKey: string;
+  initialItems?: QueueItem[];
+  initialTotal?: number;
   onPlayUris: (uris: string[]) => void;
   onQueueAdd: (uri: string) => void;
   onError: (m: string) => void;
 }) {
   const err = useCallback((m: string) => onError(scopeHint(m) ?? m), [onError]);
+  const initialRef = useRef<{ id: string; items: QueueItem[]; total: number } | null>(null);
+  initialRef.current =
+    initialItems && initialItems.length > 0
+      ? { id, items: initialItems, total: initialTotal ?? initialItems.length }
+      : null;
   const list = usePagedList<QueueItem, number>(
     async (limit, cursor) => {
       const off = cursor ?? 0;
-      const parsed = parseSavedTracks(await api.playlistTracks(id, limit, off));
-      const next = off + parsed.items.length < parsed.total ? off + parsed.items.length : null;
+      const seed = initialRef.current;
+      if (seed && seed.id === id && off < seed.items.length) {
+        const slice = seed.items.slice(off, off + limit);
+        const next = off + slice.length < seed.total ? off + slice.length : null;
+        if (slice.length > 0 || seed.total <= seed.items.length) {
+          return { items: slice, next };
+        }
+      }
+      const raw = await api.playlistTracks(id, limit, off);
+      const parsed = parsePlaylistItems(raw);
+      const node = raw as Record<string, unknown> | null;
+      const rawCount =
+        node && Array.isArray(node["items"]) ? (node["items"] as unknown[]).length : parsed.items.length;
+      const fetched = Math.max(rawCount, parsed.items.length, 1);
+      const next = off + fetched < parsed.total ? off + fetched : null;
       return { items: parsed.items, next };
     },
     { pageSize: 50, resetKey: `pl-tracks:${resetKey}:${id}`, onError: err },
   );
   if (list.loading && list.items.length === 0) return <Skeletons />;
+  if (list.items.length === 0 && list.throttled) {
+    return (
+      <>
+        <ThrottledNote message={list.throttled} onRetry={list.retry} />
+        <div className="empty">
+          <div className="empty-title">Throttled</div>
+          <div className="empty-sub">Spotify rate-limited this playlist. Retry keeps your place.</div>
+          <button className="btn sm" onClick={list.retry}>
+            Retry
+          </button>
+        </div>
+      </>
+    );
+  }
+  if (!list.loading && list.items.length === 0 && !list.hasMore) {
+    return (
+      <div className="empty">
+        <div className="empty-title">No tracks here</div>
+        <div className="empty-sub">Spotify returned no playable items for this playlist.</div>
+      </div>
+    );
+  }
   return (
-    <ol className="queue">
-      {list.items.map((t, i) => (
-        <TrackRow
-          key={`${t.uri}-${i}`}
-          t={t}
-          index={i}
-          onPlay={() => onPlayUris([t.uri])}
-          onQueue={() => onQueueAdd(t.uri)}
-        />
-      ))}
-      <MoreSentinel list={list} />
-    </ol>
+    <>
+      {list.throttled && <ThrottledNote message={list.throttled} onRetry={list.retry} />}
+      <ol className="queue">
+        {list.items.map((t, i) => (
+          <TrackRow
+            key={`${t.uri}-${i}`}
+            t={t}
+            index={i}
+            onPlay={() => onPlayUris([t.uri])}
+            onQueue={() => onQueueAdd(t.uri)}
+          />
+        ))}
+        <MoreSentinel list={list} />
+      </ol>
+    </>
   );
 }
 
@@ -601,8 +684,11 @@ export default function BrowsePane(p: Props) {
             </div>
             {detail.kind === "playlist" && top.kind === "playlist" ? (
               <PlaylistTracks
+                key={top.id}
                 id={top.id}
                 resetKey={String(gen)}
+                initialItems={detail.tracks}
+                initialTotal={detail.tracksTotal}
                 onPlayUris={p.onPlayUris}
                 onQueueAdd={p.onQueueAdd}
                 onError={p.onError}
