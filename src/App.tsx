@@ -172,6 +172,13 @@ export default function App() {
       return true;
     }
   });
+  const [forceEffects, setForceEffects] = useState(() => {
+    try {
+      return localStorage.getItem("snapify-force-effects") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [autostart, setAutostart] = useState(false);
   const [keybinds, setKeybinds] = useState<KeybindMap>({ ...DEFAULT_KEYBINDS });
   const keybindsRef = useRef<KeybindMap>({ ...DEFAULT_KEYBINDS });
@@ -230,10 +237,11 @@ export default function App() {
   }, []);
 
   // Preset morph: displacement re-ramps while panes spring home.
+  // Force-effects toggle re-ramps too so the lens animates back in.
   useEffect(() => {
     const motion = motionAllowed();
     for (const b of ["sm", "md", "lg"] as const) rampLens(b, motion);
-  }, [preset]);
+  }, [preset, forceEffects]);
 
   const dragRef = useRef<{
     id: string;
@@ -1206,6 +1214,7 @@ export default function App() {
               clickToSeek={clickToSeek}
               wordKaraoke={wordKaraoke}
               transLang={transLang}
+              forceMotion={forceEffects}
               onSeek={seekCb}
               onRetry={lyricsRetryCb}
             />
@@ -1220,7 +1229,7 @@ export default function App() {
             />
           )}
           {pane.type === "visualizer" && (
-            <MemoVisualizerPane isPlaying={snap.isPlaying} seed={snap.track?.id ?? null} />
+            <MemoVisualizerPane isPlaying={snap.isPlaying} seed={snap.track?.id ?? null} forceEffects={forceEffects} />
           )}
           {pane.type === "browse" && (
             <MemoBrowsePane
@@ -1247,7 +1256,7 @@ export default function App() {
   };
 
   return (
-    <div className="app" data-theme={theme}>
+    <div className="app" data-theme={theme} data-force-effects={forceEffects ? "1" : "0"}>
       <LensDefs />
       {!loggedIn ? (
         <div className="gate">
@@ -1445,6 +1454,7 @@ export default function App() {
         theme={theme}
         density={density}
         ambientTint={ambientTint}
+        forceEffects={forceEffects}
         autostart={autostart}
         interactive={interactive}
         clickToSeek={clickToSeek}
@@ -1472,6 +1482,14 @@ export default function App() {
           setAmbientTint(v);
           try {
             localStorage.setItem("snapify-ambient", v ? "1" : "0");
+          } catch {
+            // Private mode. Choice lasts the session.
+          }
+        }}
+        onForceEffects={(v) => {
+          setForceEffects(v);
+          try {
+            localStorage.setItem("snapify-force-effects", v ? "1" : "0");
           } catch {
             // Private mode. Choice lasts the session.
           }

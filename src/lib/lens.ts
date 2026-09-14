@@ -130,8 +130,19 @@ export function lensSupported(): boolean {
   }
 }
 
-export function motionAllowed(): boolean {
+export function shouldForceEffects(): boolean {
   try {
+    const root = document.querySelector(".app");
+    if (root?.getAttribute("data-force-effects") === "1") return true;
+    return localStorage.getItem("snapify-force-effects") === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function motionAllowed(force?: boolean): boolean {
+  try {
+    if (force ?? shouldForceEffects()) return true;
     return !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   } catch {
     return true;

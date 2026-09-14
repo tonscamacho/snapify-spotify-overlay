@@ -2001,3 +2001,104 @@ button:focus-visible,
     border-color: currentColor;
   }
 }
+
+/* Force effects: user opt-in that beats the OS reduced-motion and
+   reduced-transparency kills above. Stays after every prefers-* block so
+   equal-specificity ties resolve here; the .app[data-force-effects="1"]
+   prefix outranks bare selectors. prefers-contrast stays authoritative. */
+@media (prefers-reduced-motion: reduce) {
+  .app[data-force-effects="1"] .skel {
+    animation: skel 1.2s infinite linear;
+  }
+  .app[data-force-effects="1"] .kbd-live {
+    animation: skel 1.2s infinite linear;
+  }
+  .app[data-force-effects="1"] .toasts .toast {
+    animation: lg-toast-in var(--lg-spring-press);
+  }
+  .app[data-force-effects="1"] .modal-back {
+    animation: toast-in 160ms ease-out;
+  }
+  .app[data-force-effects="1"] .pane[data-lg-enter="1"] {
+    animation: lg-pane-enter var(--lg-spring-morph);
+  }
+  .app[data-force-effects="1"] .modal-back[data-lg-enter="1"] .modal,
+  .app[data-force-effects="1"] .modal-enter[data-lg-enter="1"] .modal {
+    animation: lg-enter var(--lg-spring-morph);
+  }
+  .app[data-force-effects="1"] .pane[data-shimmer="1"]::after {
+    animation: lg-sheen-sweep 7s ease-in-out infinite alternate;
+  }
+  .app[data-force-effects="1"] .btn:active:not(:disabled),
+  .app[data-force-effects="1"] .icon-btn:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+  .app[data-force-effects="1"] .play-disc:active:not(:disabled) {
+    transform: scale(0.96) rotate(-2deg);
+  }
+  .app[data-force-effects="1"] .bar::before,
+  .app[data-force-effects="1"] .bar i {
+    transition: height 120ms ease-out !important;
+  }
+  .app[data-force-effects="1"] .pane-body.has-ambient::before,
+  .app[data-force-effects="1"] .pane-fill.has-ambient::before {
+    transition: opacity 460ms ease-out !important;
+  }
+  .app[data-force-effects="1"] .lg-flip {
+    transition: transform var(--lg-spring-morph), box-shadow var(--lg-spring-morph) !important;
+  }
+  .app[data-force-effects="1"] .seg button {
+    transition: background 160ms var(--curve), color 160ms var(--curve) !important;
+  }
+  .app[data-force-effects="1"] .btn:active:not(:disabled),
+  .app[data-force-effects="1"] .icon-btn:active:not(:disabled),
+  .app[data-force-effects="1"] .play-disc:active:not(:disabled) {
+    transition: transform var(--lg-spring-press) !important;
+  }
+  .app[data-force-effects="1"] .toasts .toast[data-lg-exit="1"] {
+    transition: opacity 120ms ease-out, transform 120ms ease-out !important;
+  }
+  .app[data-force-effects="1"] .modal-enter[data-lg-exit="1"] .modal-back {
+    transition: opacity 140ms ease-out !important;
+  }
+  .app[data-force-effects="1"] .pane-subhead[data-scrolled="1"],
+  .app[data-force-effects="1"] .lyrics-meta[data-scrolled="1"],
+  .app[data-force-effects="1"] .viz-meta[data-scrolled="1"],
+  .app[data-force-effects="1"] .browse-tabs[data-scrolled="1"] {
+    transition: opacity 160ms ease-out !important;
+  }
+}
+/* Transparency and contrast carry no refraction, only meaning-free light. */
+@media (prefers-reduced-transparency: reduce) {
+  .app[data-force-effects="1"] .pane,
+  .app[data-force-effects="1"] .dock,
+  .app[data-force-effects="1"] .modal,
+  .app[data-force-effects="1"] .toast {
+    background: var(--glass-regular);
+    backdrop-filter: blur(var(--lg-blur-regular)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+    -webkit-backdrop-filter: blur(var(--lg-blur-regular)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+  }
+  .app[data-force-effects="1"] .pane::before,
+  .app[data-force-effects="1"] .dock::before,
+  .app[data-force-effects="1"] .modal::before,
+  .app[data-force-effects="1"] .toast::after,
+  .app[data-force-effects="1"] .pane[data-shimmer="1"]::after {
+    display: block;
+  }
+}
+@supports (backdrop-filter: url(#lg-lens-md)) {
+  @media (prefers-reduced-transparency: reduce) {
+    .app[data-force-effects="1"] .pane[data-lens="sm"],
+    .app[data-force-effects="1"] .toast {
+      backdrop-filter: blur(var(--lg-blur-regular)) url(#lg-lens-sm) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+    }
+    .app[data-force-effects="1"] .pane[data-lens="md"],
+    .app[data-force-effects="1"] .dock,
+    .app[data-force-effects="1"] .modal {
+      backdrop-filter: blur(var(--lg-blur-regular)) url(#lg-lens-md) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+    }
+    .app[data-force-effects="1"] .pane[data-lens="lg"] {
+      backdrop-filter: blur(var(--lg-blur-regular)) url(#lg-lens-lg) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
+    }
+  }
+}
