@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { DeviceInfo, PlayerSnapshot } from "../lib/types";
 import { formatMs } from "../lib/lrc";
-import { sampleAmbient } from "../lib/ambient";
 import { api } from "../lib/spotify";
 import {
   LikePlusIcon,
@@ -27,7 +26,6 @@ interface Props {
   devices: DeviceInfo[];
   progressMs: number;
   busy: boolean;
-  ambientOn: boolean;
   tier?: "premium" | "free";
   sdkDeviceId?: string | null;
   onPlay: () => void;
@@ -65,7 +63,6 @@ function uriIsEpisodic(uri: string): boolean {
 
 export default function PlayerPane(p: Props) {
   const [vol, setVol] = useState<number | null>(null);
-  const [tint, setTint] = useState<string | null>(null);
   const [liked, setLiked] = useState(false);
   const s = p.snapshot;
   const track = s.track;
@@ -73,20 +70,6 @@ export default function PlayerPane(p: Props) {
   const tier = p.tier ?? "premium";
   const isFree = tier === "free";
   const isEpisodic = track ? uriIsEpisodic(track.uri) : false;
-
-  useEffect(() => {
-    if (!p.ambientOn || !track?.image) {
-      setTint(null);
-      return;
-    }
-    let live = true;
-    void sampleAmbient(track.image).then((c) => {
-      if (live) setTint(c);
-    });
-    return () => {
-      live = false;
-    };
-  }, [p.ambientOn, track?.image]);
 
   useEffect(() => {
     setLiked(false);
@@ -165,10 +148,7 @@ export default function PlayerPane(p: Props) {
   const displayArtist = truncate(track.artists, 18);
 
   return (
-    <div
-      className={`pane-fill${tint ? " has-ambient" : ""}`}
-      style={tint ? ({ "--ambient": tint } as React.CSSProperties) : undefined}
-    >
+    <div className="pane-fill">
       <div className="track-row">
         {track.image ? (
           <img className="cover" src={track.image} alt="" draggable={false} />

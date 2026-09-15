@@ -1,4 +1,4 @@
-import type { QueueItem } from "../lib/types";
+import type { BrowseEntry, QueueContext, QueueItem } from "../lib/types";
 import { formatMs } from "../lib/lrc";
 import { RefreshIcon } from "./icons";
 
@@ -6,11 +6,14 @@ interface Props {
   current: QueueItem | null;
   upcoming: QueueItem[];
   loading: boolean;
+  context: QueueContext | null;
   onRefresh: () => void;
   onBrowse?: () => void;
+  onOpenContext?: (entry: BrowseEntry) => void;
 }
 
 export default function QueuePane(p: Props) {
+  const ctx = p.context;
   return (
     <>
       <div className="pane-subhead">
@@ -27,6 +30,19 @@ export default function QueuePane(p: Props) {
           <RefreshIcon size={14} />
         </button>
       </div>
+      {ctx?.name && (
+        <button
+          className="queue-context"
+          onClick={() =>
+            p.onOpenContext?.({ kind: ctx.kind, id: ctx.id, name: ctx.name ?? undefined })
+          }
+          title={`Open ${ctx.name}`}
+          aria-label={`Open ${ctx.name}`}
+        >
+          <span className="queue-context-label">Next from:</span>
+          <span className="queue-context-name">{ctx.name}</span>
+        </button>
+      )}
       {p.loading && p.upcoming.length === 0 ? (
         <div aria-label="Loading queue" role="status">
           <div className="skel skel-row" />

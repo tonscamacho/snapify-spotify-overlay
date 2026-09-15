@@ -10,7 +10,6 @@ interface Props {
   clickToSeek: boolean;
   wordKaraoke: boolean;
   transLang: TransLang;
-  forceMotion?: boolean;
   onSeek: (ms: number) => void;
   onRetry: () => void;
 }
@@ -43,10 +42,10 @@ export default function LyricsPane(p: Props) {
     if (activeRef.current) {
       activeRef.current.scrollIntoView({
         block: "center",
-        behavior: reduceMotion.current && !p.forceMotion ? "auto" : "smooth",
+        behavior: reduceMotion.current ? "auto" : "smooth",
       });
     }
-  }, [active, p.forceMotion]);
+  }, [active]);
 
   // Translation follows the active line. Failures stay silent: the
   // original line is always the source of truth.

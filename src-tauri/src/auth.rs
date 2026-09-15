@@ -14,7 +14,7 @@ pub const CLIENT_ID: &str = "38bf5383c2a84de1a829a91ebd140421";
 // Must match the redirect URI allowlisted in the Spotify dashboard exactly.
 pub const REDIRECT_URI: &str = "http://127.0.0.1:3000";
 const SCOPES: &str =
-    "user-read-playback-state user-read-currently-playing user-modify-playback-state playlist-read-private playlist-read-collaborative user-library-read user-top-read user-read-recently-played user-read-private user-read-email user-follow-read user-library-modify user-follow-modify playlist-modify-private playlist-modify-public";
+    "user-read-playback-state user-read-currently-playing user-modify-playback-state playlist-read-private playlist-read-collaborative user-library-read user-top-read user-read-recently-played user-read-private user-read-email user-follow-read user-library-modify user-follow-modify playlist-modify-private playlist-modify-public streaming";
 const KEYRING_SERVICE: &str = "spotify-overlay";
 const KEYRING_USER: &str = "refresh-token";
 
@@ -474,7 +474,9 @@ pub fn restore_session(app: &AppHandle) {
 
 /// Fresh OAuth token for the Web Playback SDK. Reuses `access_token`
 /// refresh logic (refresh if `expires_at-60 <= now`), max 60 min lifetime.
-/// Union scopes from PLAN-master.md mean no second re-login.
+/// Union scopes mean one login grants everything, but refresh never widens
+/// granted scopes: installs predating a scope addition re-login once via
+/// the Reconnect prompt (see the sdk-error listener in App.tsx).
 #[tauri::command]
 pub async fn get_fresh_token(app: AppHandle) -> Result<String, String> {
     access_token(&app).await
@@ -488,4 +490,22 @@ pub async fn logout(app: AppHandle, state: State<'_, AuthState>) -> Result<(), S
     clear_refresh_token();
     let _ = app.emit("auth-changed", false);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SCOPES;
+
+    #[test]
+    fn scopes_cover_sdk_playback() {
+        // The Web Playback SDK rejects tokens without `streaming`
+        // (authentication_error "Invalid token scopes"). A missing scope
+        // here toasts on every built-in playback attempt with recovery
+        // only via re-login, so pin it.
+        let scopes: Vec<&str> = SCOPES.split_whitespace().collect();
+        assert!(
+            scopes.contains(&"streaming"),
+            "SCOPES lacks streaming: {SCOPES}"
+        );
+    }
 }

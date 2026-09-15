@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-import { parseDevices, parsePlayer, parseQueue } from "./spotify";
+import { parseDevices, parsePlayer, parseQueue, parseQueueContext } from "./spotify";
 
 const fullTrack = {
   id: "t1",
@@ -146,6 +146,48 @@ describe("parseQueue", () => {
     expect(q.upcoming[0].name).toBe("T0");
     expect(q.upcoming[9].name).toBe("T9");
     expect(q.current).toBeNull();
+  });
+});
+
+describe("parseQueueContext", () => {
+  it("returns null for missing or malformed context", () => {
+    expect(parseQueueContext(null)).toBeNull();
+    expect(parseQueueContext({})).toBeNull();
+    expect(parseQueueContext({ context: null })).toBeNull();
+    expect(parseQueueContext({ context: { type: "playlist" } })).toBeNull();
+    expect(parseQueueContext({ context: { uri: "spotify:playlist:abc" } })).toBeNull();
+  });
+
+  it("rejects unknown types and uri mismatches", () => {
+    expect(
+      parseQueueContext({ context: { type: "collection", uri: "spotify:collection:xyz" } }),
+    ).toBeNull();
+    expect(
+      parseQueueContext({ context: { type: "playlist", uri: "spotify:album:abc" } }),
+    ).toBeNull();
+    expect(parseQueueContext({ context: { type: "playlist", uri: "not-a-uri" } })).toBeNull();
+    expect(parseQueueContext({ context: { type: "playlist", uri: "spotify:playlist:" } })).toBeNull();
+  });
+
+  it("parses playlist, album, artist, and show contexts", () => {
+    expect(
+      parseQueueContext({ context: { type: "playlist", uri: "spotify:playlist:pl1" } }),
+    ).toEqual({ kind: "playlist", id: "pl1", uri: "spotify:playlist:pl1" });
+    expect(parseQueueContext({ context: { type: "album", uri: "spotify:album:al1" } })).toEqual({
+      kind: "album",
+      id: "al1",
+      uri: "spotify:album:al1",
+    });
+    expect(parseQueueContext({ context: { type: "artist", uri: "spotify:artist:ar1" } })).toEqual({
+      kind: "artist",
+      id: "ar1",
+      uri: "spotify:artist:ar1",
+    });
+    expect(parseQueueContext({ context: { type: "show", uri: "spotify:show:sh1" } })).toEqual({
+      kind: "show",
+      id: "sh1",
+      uri: "spotify:show:sh1",
+    });
   });
 });
 

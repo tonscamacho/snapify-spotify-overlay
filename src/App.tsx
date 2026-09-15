@@ -5,8 +5,6 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import PlayerPane from "./components/PlayerPane";
 const MemoPlayerPane = memo(PlayerPane);
-import LensDefs from "./components/LensDefs";
-import { getLensBucket, initPointerField, motionAllowed, rampLens } from "./lib/lens";
 import LyricsPane from "./components/LyricsPane";
 const MemoLyricsPane = memo(LyricsPane);
 import QueuePane from "./components/QueuePane";
@@ -50,6 +48,7 @@ import {
   snapSize,
 } from "./lib/layout";
 import type {
+  BrowseEntry,
   BrowseState,
   Density,
   DeviceInfo,
@@ -57,6 +56,7 @@ import type {
   PaneState,
   PaneType,
   PlayerSnapshot,
+  QueueContext,
   QueueItem,
 } from "./lib/types";
 import "./App.css";
@@ -87,6 +87,28 @@ const PANE_TITLES: Record<PaneType, string> = {
   browse: "Browse",
 };
 
+/** Display name for a queue context. One lookup per context, silent on
+ *  failure so a throttled name never breaks the queue itself. */
+async function resolveQueueContextName(
+  kind: QueueContext["kind"],
+  id: string,
+): Promise<string | null> {
+  try {
+    const raw =
+      kind === "playlist"
+        ? await api.playlist(id)
+        : kind === "album"
+          ? await api.album(id)
+          : kind === "artist"
+            ? await api.artist(id)
+            : await api.show(id);
+    const o = raw as Record<string, unknown> | null;
+    return o && typeof o["name"] === "string" ? (o["name"] as string) : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [awaitingAuth, setAwaitingAuth] = useState(false);
@@ -98,6 +120,7 @@ export default function App() {
     upcoming: [],
   });
   const [queueLoading, setQueueLoading] = useState(false);
+  const [queueContext, setQueueContext] = useState<QueueContext | null>(null);
   const [lyrics, setLyrics] = useState<LyricsState>({ kind: "idle" });
   const [browse, setBrowse] = useState<BrowseState>(initialBrowse);
   const [busy, setBusy] = useState(false);
@@ -125,7 +148,6 @@ export default function App() {
   const [sdkDeviceId, setSdkDeviceId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsClosing, setSettingsClosing] = useState(false);
-  const [exitingToasts, setExitingToasts] = useState<number[]>([]);
   const settingsTimer = useRef(0);
   const [guides, setGuides] = useState<{ v: number[]; h: number[] }>({ v: [], h: [] });
   const [uiScale, setUiScale] = useState(1);
@@ -165,20 +187,6 @@ export default function App() {
       return "default";
     }
   });
-  const [ambientTint, setAmbientTint] = useState(() => {
-    try {
-      return localStorage.getItem("snapify-ambient") !== "0";
-    } catch {
-      return true;
-    }
-  });
-  const [forceEffects, setForceEffects] = useState(() => {
-    try {
-      return localStorage.getItem("snapify-force-effects") === "1";
-    } catch {
-      return false;
-    }
-  });
   const [autostart, setAutostart] = useState(false);
   const [keybinds, setKeybinds] = useState<KeybindMap>({ ...DEFAULT_KEYBINDS });
   const keybindsRef = useRef<KeybindMap>({ ...DEFAULT_KEYBINDS });
@@ -203,16 +211,6 @@ export default function App() {
     uiScaleRef.current = uiScale;
   }, [uiScale]);
 
-  // Liquid Glass pointer field plus enter displacement ramp. The lens map
-  // builds once per size bucket; only scale and CSS vars mutate per frame.
-  useEffect(() => {
-    const root = document.getElementById("root") ?? document.body;
-    const dispose = initPointerField(root);
-    const motion = motionAllowed();
-    for (const b of ["sm", "md", "lg"] as const) rampLens(b, motion);
-    return dispose;
-  }, []);
-
   useEffect(() => () => {
     if (settingsTimer.current) window.clearTimeout(settingsTimer.current);
   }, []);
@@ -224,24 +222,6 @@ export default function App() {
       setSettingsClosing(false);
     }
   }, [settingsOpen]);
-
-  // Scroll dissolve under sticky subheads. Direct DOM writes per scroll
-  // event keep the 2Hz poll re-renders out of the path.
-  const onPaneScrollCapture = useCallback((e: React.SyntheticEvent) => {
-    const body = e.target as HTMLElement | null;
-    if (!body || !body.classList || !body.classList.contains("pane-body")) return;
-    const v = body.scrollTop > 8 ? "1" : "0";
-    body
-      .querySelectorAll(".pane-subhead, .lyrics-meta, .viz-meta, .browse-tabs")
-      .forEach((el) => el.setAttribute("data-scrolled", v));
-  }, []);
-
-  // Preset morph: displacement re-ramps while panes spring home.
-  // Force-effects toggle re-ramps too so the lens animates back in.
-  useEffect(() => {
-    const motion = motionAllowed();
-    for (const b of ["sm", "md", "lg"] as const) rampLens(b, motion);
-  }, [preset, forceEffects]);
 
   const dragRef = useRef<{
     id: string;
@@ -259,32 +239,21 @@ export default function App() {
   }, []);
 
   const dismissToast = useCallback((id: number) => {
-    setExitingToasts((x) => (x.includes(id) ? x : [...x, id]));
-    window.setTimeout(() => {
-      setToasts((t) => t.filter((x) => x.id !== id));
-      setExitingToasts((x) => x.filter((y) => y !== id));
-    }, 120);
+    setToasts((t) => t.filter((x) => x.id !== id));
   }, []);
 
   const pushToast = useCallback((kind: "success" | "info" | "error", text: string) => {
     const id = Date.now() + Math.random();
     setToasts((t) => [...t.slice(-2), { id, kind, text }]);
     window.setTimeout(() => {
-      setExitingToasts((x) => (x.includes(id) ? x : [...x, id]));
-      window.setTimeout(() => {
-        setToasts((t) => t.filter((x) => x.id !== id));
-        setExitingToasts((x) => x.filter((y) => y !== id));
-      }, 120);
+      setToasts((t) => t.filter((x) => x.id !== id));
     }, 6500);
   }, []);
 
   const closeSettings = useCallback(() => {
     if (settingsTimer.current) window.clearTimeout(settingsTimer.current);
-    setSettingsClosing(true);
-    settingsTimer.current = window.setTimeout(() => {
-      setSettingsOpen(false);
-      setSettingsClosing(false);
-    }, 140);
+    setSettingsOpen(false);
+    setSettingsClosing(false);
   }, []);
 
   const flashErr = useCallback(
@@ -369,8 +338,30 @@ export default function App() {
 
   const fetchQueue = useCallback(async () => {
     setQueueLoading(true);
+    const seq = ++queueContextSeq.current;
     try {
-      setQueue(await api.queue());
+      const q = await api.queue();
+      setQueue({ current: q.current, upcoming: q.upcoming });
+      const c = q.context;
+      if (!c) {
+        queueContextCache.current = null;
+        if (seq === queueContextSeq.current) setQueueContext(null);
+        return;
+      }
+      const hit = queueContextCache.current;
+      if (hit && hit.uri === c.uri) {
+        if (seq === queueContextSeq.current) setQueueContext({ ...c, name: hit.name });
+        return;
+      }
+      if (seq === queueContextSeq.current) setQueueContext({ ...c, name: null });
+      const name = await resolveQueueContextName(c.kind, c.id);
+      if (seq !== queueContextSeq.current) return;
+      if (name) {
+        queueContextCache.current = { uri: c.uri, name };
+        setQueueContext({ ...c, name });
+      } else {
+        setQueueContext({ ...c, name: null });
+      }
     } catch {
       // Leave previous queue in place.
     } finally {
@@ -480,6 +471,8 @@ export default function App() {
   const transportRef = useRef(false);
   const pendingSeekRef = useRef<(() => Promise<unknown>) | null>(null);
   const queueVisibleRef = useRef(false);
+  const queueContextSeq = useRef(0);
+  const queueContextCache = useRef<{ uri: string; name: string } | null>(null);
   useEffect(() => {
     if (!loggedIn) return;
     const playing = snap.isPlaying && !snap.empty;
@@ -838,6 +831,16 @@ export default function App() {
     [persist],
   );
 
+  // Queue "Next from" navigation: reveal the browse pane when hidden, then
+  // push the playing context so its detail loads through the normal path.
+  const openQueueContext = useCallback(
+    (entry: BrowseEntry) => {
+      if (!layout.some((p) => p.type === "browse" && p.visible)) togglePaneType("browse");
+      setBrowse((s) => ({ ...s, stack: [...s.stack, entry] }));
+    },
+    [layout, togglePaneType],
+  );
+
   const changeKeybind = useCallback(
     async (action: KeybindAction, accelerator: string) => {
       try {
@@ -967,7 +970,17 @@ export default function App() {
     const offSdkErr = listen<string>("sdk-error", (e) => {
       const m = String(e.payload);
       if (/account_error|premium/i.test(m)) setTier("free");
-      pushToast("error", m);
+      if (/invalid token scopes/i.test(m)) {
+        // Refresh never widens granted scopes, so the only recovery is a
+        // fresh login. The "new permissions" phrasing earns the toast's
+        // Reconnect button, which runs logout followed by login.
+        pushToast(
+          "error",
+          "Spotify needs new permissions for built-in playback. Reconnect to grant them.",
+        );
+      } else {
+        pushToast("error", m);
+      }
     });
     const all = [offPlay, offNext, offToggle, offEdit, offTrayEdit, offTrayPreset, offTraySettings, offVis, offSdk, offSdkErr];
     return () => {
@@ -1149,16 +1162,12 @@ export default function App() {
 
   const renderPane = (pane: PaneState) => {
     if (!pane.visible) return null;
-    const bucket = getLensBucket(pane.w, pane.h);
     return (
       <section
         key={`${preset}:${pane.id}`}
-        className={`pane lg-flip${editing ? " editing" : ""}`}
+        className={`pane${editing ? " editing" : ""}`}
         data-pane={pane.type}
         data-density={density}
-        data-lens={bucket}
-        data-lg-enter="1"
-        data-shimmer={pane.type === "player" ? "1" : undefined}
         style={{ left: pane.x, top: pane.y, width: pane.w, height: pane.h, zIndex: pane.z, opacity: pane.opacity }}
         onPointerDown={(e) => {
           if (editing) e.stopPropagation();
@@ -1191,7 +1200,6 @@ export default function App() {
               devices={devices}
               progressMs={progressMs}
               busy={busy}
-              ambientOn={ambientTint}
               tier={tier}
               sdkDeviceId={sdkDeviceId}
               onPlay={playCb}
@@ -1214,7 +1222,6 @@ export default function App() {
               clickToSeek={clickToSeek}
               wordKaraoke={wordKaraoke}
               transLang={transLang}
-              forceMotion={forceEffects}
               onSeek={seekCb}
               onRetry={lyricsRetryCb}
             />
@@ -1224,12 +1231,14 @@ export default function App() {
               current={queue.current}
               upcoming={queue.upcoming}
               loading={queueLoading}
+              context={queueContext}
               onRefresh={fetchQueue}
               onBrowse={queueBrowseCb}
+              onOpenContext={openQueueContext}
             />
           )}
           {pane.type === "visualizer" && (
-            <MemoVisualizerPane isPlaying={snap.isPlaying} seed={snap.track?.id ?? null} forceEffects={forceEffects} />
+            <MemoVisualizerPane isPlaying={snap.isPlaying} seed={snap.track?.id ?? null} />
           )}
           {pane.type === "browse" && (
             <MemoBrowsePane
@@ -1256,11 +1265,10 @@ export default function App() {
   };
 
   return (
-    <div className="app" data-theme={theme} data-force-effects={forceEffects ? "1" : "0"}>
-      <LensDefs />
+    <div className="app" data-theme={theme}>
       {!loggedIn ? (
         <div className="gate">
-          <div className="pane gate-card" data-lens="md" data-lg-enter="1" style={{ opacity: 0.97 }}>
+          <div className="pane gate-card">
             <div className="gate-icon">
               <NoteIcon size={26} />
             </div>
@@ -1278,7 +1286,6 @@ export default function App() {
             className="stage"
             onPointerMove={onStageMove}
             onPointerUp={onStageUp}
-            onScrollCapture={onPaneScrollCapture}
             onDoubleClick={(e) => {
               // Reachable only while editing: passive mode passes all
               // mouse events to the game below, so re-entry is via the
@@ -1391,7 +1398,6 @@ export default function App() {
           <div
             key={t.id}
             className={`toast toast-${t.kind}`}
-            data-lg-exit={exitingToasts.includes(t.id) ? "1" : undefined}
           >
             <span>{t.text}</span>
             <button
@@ -1441,11 +1447,6 @@ export default function App() {
       )}
 
       {(settingsOpen || settingsClosing) && (
-        <div
-          className="modal-enter"
-          data-lg-enter={settingsClosing ? undefined : "1"}
-          data-lg-exit={settingsClosing ? "1" : undefined}
-        >
           <SettingsModal
             open={settingsOpen || settingsClosing}
         loggedIn={loggedIn}
@@ -1453,8 +1454,6 @@ export default function App() {
         uiScale={uiScale}
         theme={theme}
         density={density}
-        ambientTint={ambientTint}
-        forceEffects={forceEffects}
         autostart={autostart}
         interactive={interactive}
         clickToSeek={clickToSeek}
@@ -1476,22 +1475,6 @@ export default function App() {
             localStorage.setItem("snapify-density", v);
           } catch {
             // Private mode. Density lasts the session.
-          }
-        }}
-        onAmbientTint={(v) => {
-          setAmbientTint(v);
-          try {
-            localStorage.setItem("snapify-ambient", v ? "1" : "0");
-          } catch {
-            // Private mode. Choice lasts the session.
-          }
-        }}
-        onForceEffects={(v) => {
-          setForceEffects(v);
-          try {
-            localStorage.setItem("snapify-force-effects", v ? "1" : "0");
-          } catch {
-            // Private mode. Choice lasts the session.
           }
         }}
         onAutostart={(v) => {
@@ -1544,7 +1527,6 @@ export default function App() {
         onLogout={() => void logout()}
         onClose={closeSettings}
       />
-        </div>
       )}
     </div>
   );

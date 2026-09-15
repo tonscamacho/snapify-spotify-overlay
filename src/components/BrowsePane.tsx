@@ -20,6 +20,7 @@ import {
   parseShowDetail,
   parseTrackDetail,
   parseUserProfile,
+  scopeHint,
   toLibraryItem,
 } from "../lib/browse";
 import { usePagedList } from "../lib/usePagedList";
@@ -48,16 +49,14 @@ interface Props {
   onError: (m: string) => void;
 }
 
-function scopeHint(m: string): string | null {
-  const missing =
-    /missing permission "([^"]+)"/i.exec(m) ??
-    /Insufficient client scope:\s*([A-Za-z0-9_-]+)/.exec(m);
-  if (missing) {
-    return `Spotify is missing permission “${missing[1]}”. Log out in Settings, then login again.`;
-  }
-  return /insufficient|scope|403/i.test(m)
-    ? "Spotify needs new permissions. Log out in Settings, then login again."
-    : null;
+/** Play needs at least one known track, except a walled playlist keeps its
+ *  Play button: Spotify still plays the context URI even when the track
+ *  list is owner-only, so hiding it would remove the one action that works.
+ *  An empty owned playlist still hides Play instead of failing on press. */
+function playableDetail(d: DetailData): boolean {
+  if (d.kind === "playlist") return d.uri.length > 0 && (d.tracksTotal > 0 || d.walled);
+  if (d.kind === "album") return d.tracks.length > 0;
+  return true;
 }
 
 function Row({
@@ -341,13 +340,18 @@ function LibraryList({
   );
 }
 
-/** Paged playlist tracks for the detail view. */
+/** Paged playlist tracks for the detail view. The wall path keeps Play and
+ *  Open actions: context playback still works for playlists the viewer
+ *  does not own even though the track list itself is owner-only. */
 function PlaylistTracks({
   id,
   resetKey,
   initialItems,
   initialTotal,
+  playlistUri,
+  ownerName,
   onPlayUris,
+  onPlayContext,
   onQueueAdd,
   onError,
 }: {
@@ -355,11 +359,27 @@ function PlaylistTracks({
   resetKey: string;
   initialItems?: QueueItem[];
   initialTotal?: number;
+  playlistUri: string;
+  ownerName: string;
   onPlayUris: (uris: string[]) => void;
+  onPlayContext: (uri: string) => void;
   onQueueAdd: (uri: string) => void;
   onError: (m: string) => void;
 }) {
   const err = useCallback((m: string) => onError(scopeHint(m) ?? m), [onError]);
+  // Last non-throttled load failure, so an unloadable list never
+  // masquerades as an empty one. Clears per playlist and on recovery.
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const errInline = useCallback(
+    (m: string) => {
+      setLoadError(m);
+      err(m);
+    },
+    [err],
+  );
+  useEffect(() => {
+    setLoadError(null);
+  }, [resetKey, id]);
   const initialRef = useRef<{ id: string; items: QueueItem[]; total: number } | null>(null);
   initialRef.current =
     initialItems && initialItems.length > 0
@@ -377,6 +397,7 @@ function PlaylistTracks({
         }
       }
       const raw = await api.playlistTracks(id, limit, off);
+      setLoadError(null);
       const parsed = parsePlaylistItems(raw);
       const node = raw as Record<string, unknown> | null;
       const rawCount =
@@ -385,7 +406,7 @@ function PlaylistTracks({
       const next = off + fetched < parsed.total ? off + fetched : null;
       return { items: parsed.items, next };
     },
-    { pageSize: 50, resetKey: `pl-tracks:${resetKey}:${id}`, onError: err },
+    { pageSize: 50, resetKey: `pl-tracks:${resetKey}:${id}`, onError: errInline },
   );
   if (list.loading && list.items.length === 0) return <Skeletons />;
   if (list.items.length === 0 && list.throttled) {
@@ -403,6 +424,35 @@ function PlaylistTracks({
     );
   }
   if (!list.loading && list.items.length === 0 && !list.hasMore) {
+    if (loadError) {
+      const walled = /403/.test(loadError);
+      return (
+        <div className="empty">
+          <div className="empty-title">{walled ? "Tracks unavailable" : "Couldn't load tracks"}</div>
+          <div className="empty-sub">
+            {walled
+              ? `Spotify only shares track lists for playlists you own or collaborate on${ownerName ? ` (owner: ${ownerName})` : ""}. Playback still works. Ask the owner for a collaborator invite, then Retry. ID: ${id}.`
+              : "Spotify didn't return this playlist's tracks."}
+          </div>
+          {walled && playlistUri && (
+            <button className="btn sm primary" onClick={() => onPlayContext(playlistUri)}>
+              Play
+            </button>
+          )}
+          <button className="btn sm" onClick={list.retry}>
+            Retry
+          </button>
+          {walled && (
+            <button
+              className="btn sm"
+              onClick={() => void openUrl(`https://open.spotify.com/playlist/${id}`)}
+            >
+              Open in Spotify
+            </button>
+          )}
+        </div>
+      );
+    }
     return (
       <div className="empty">
         <div className="empty-title">No tracks here</div>
@@ -677,9 +727,11 @@ export default function BrowsePane(p: Props) {
                   {detail.kind === "chapter" && `${detail.book}${detail.explicit ? " · Explicit" : ""}`}
                   {detail.kind === "track" && `${detail.artists} · ${detail.album}${detail.explicit ? " · Explicit" : ""}`}
                 </div>
-                <button className="btn sm primary" onClick={() => p.onPlayContext(detail.uri)}>
-                  Play
-                </button>
+                {playableDetail(detail) && (
+                  <button className="btn sm primary" onClick={() => p.onPlayContext(detail.uri)}>
+                    Play
+                  </button>
+                )}
               </div>
             </div>
             {detail.kind === "playlist" && top.kind === "playlist" ? (
@@ -689,7 +741,10 @@ export default function BrowsePane(p: Props) {
                 resetKey={String(gen)}
                 initialItems={detail.tracks}
                 initialTotal={detail.tracksTotal}
+                playlistUri={detail.uri}
+                ownerName={detail.owner}
                 onPlayUris={p.onPlayUris}
+                onPlayContext={p.onPlayContext}
                 onQueueAdd={p.onQueueAdd}
                 onError={p.onError}
               />

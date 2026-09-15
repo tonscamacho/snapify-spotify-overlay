@@ -22,6 +22,18 @@ export function switchView(s: BrowseState, view: BrowseState["view"]): BrowseSta
   return { ...s, view, stack: [] };
 }
 
+/** Reconnect prompt, and only for errors that actually name a missing
+ *  scope. Anything else returns null so the caller surfaces Spotify's
+ *  real message: a generic 403 (Restriction violated, gateway quirks)
+ *  must never send the user on a pointless re-login loop. */
+export function scopeHint(m: string): string | null {
+  const missing =
+    /missing permission "([^"]+)"/i.exec(m) ??
+    /Insufficient client scope:\s*([A-Za-z0-9_-]+)/.exec(m);
+  if (!missing) return null;
+  return `Spotify is missing permission “${missing[1]}”. Log out in Settings, then login again.`;
+}
+
 function img(images: unknown): string | null {
   if (!Array.isArray(images) || images.length === 0) return null;
   const mid = images[Math.min(1, images.length - 1)] as Record<string, unknown>;
@@ -159,6 +171,7 @@ export function parsePlaylistDetail(raw: unknown): DetailData | null {
     totalOf(tracksNode) ??
     (itemsNode && !Array.isArray(itemsNode) ? totalOf(itemsNode) : null) ??
     tracks.length;
+  const walled = !tracksNode && itemsNode == null;
   return {
     kind: "playlist",
     name: typeof o["name"] === "string" ? (o["name"] as string) : "Playlist",
@@ -170,6 +183,7 @@ export function parsePlaylistDetail(raw: unknown): DetailData | null {
     tracks,
     tracksTotal,
     uri: typeof o["uri"] === "string" ? (o["uri"] as string) : "",
+    walled,
   };
 }
 

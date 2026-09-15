@@ -1,14 +1,14 @@
 # Snapify - Spotify Overlay
 
-A lightweight, always-on-top Spotify overlay for Windows. Transparent glass panes you can drag, snap, and lock: player, synced lyrics, queue, and visualizer. Built with Tauri v2, React, and Rust.
+A lightweight, always-on-top Spotify overlay for Windows. Solid panes you can drag, snap, and lock: player, synced lyrics, queue, and visualizer. Built with Tauri v2, React, and Rust.
 
 ![Status](https://img.shields.io/badge/status-v1.0.0-blue) ![Tauri](https://img.shields.io/badge/tauri-v2-orange) ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## What it does
 
-- **Player pane** — cover art, now playing, progress with click-to-seek, play/pause/next/previous, volume, shuffle, repeat, device picker, plus an album-art ambient tint sampled into the pane backdrop.
+- **Player pane** — cover art, now playing, progress with click-to-seek, play/pause/next/previous, volume, shuffle, repeat, and device picker.
 - **Lyrics pane** — line-synced lyrics with karaoke highlight, word-by-word singing progress on the active line, click a line to seek, auto-scroll, cached offline, plus optional per-line translations (ES/FR/DE/PT/JA, cached, silent when offline). Plain-lyrics, instrumental, and no-match states included.
-- **Queue pane** — up-next list with refresh.
+- **Queue pane** — up-next list with refresh, plus the playing collection ("Next from") that opens in browse.
 - **Visualizer pane** — ambient motion signature seeded by the track. The Spotify Web API exposes no audio stream, so bars advance while the track plays and freeze on pause. Still under reduced-motion.
 - **Snappable layout** — drag panes by their header in edit mode, magnet snap to edges and other panes (Shift bypasses), corner resize, four presets (minimal, full, lyrics, spotlight), geometry persists across restarts (v1 layouts migrate forward untouched).
 - **Settings** — preset switch, pane opacity, UI scale, dark/light theme, album-art tint, word karaoke, lyric translation language, launch-on-login, click-through-when-locked, click-lyric-to-seek, shortcuts reference.
@@ -18,7 +18,7 @@ A lightweight, always-on-top Spotify overlay for Windows. Transparent glass pane
 | Layer    | Choice                              |
 | -------- | ----------------------------------- |
 | Shell    | Tauri v2 (single `WebviewWindow`)   |
-| UI       | React 19 + TypeScript + Vite, custom CSS glass theme |
+| UI       | React 19 + TypeScript + Vite, custom CSS solid theme |
 | Auth     | Spotify Authorization Code + PKCE, no client secret in the app |
 | Lyrics   | LRCLIB (`lrclib.net`), LRC parsed in Rust, cached locally |
 | Secrets  | OS keychain via the `keyring` crate |
@@ -90,7 +90,6 @@ src/
   App.tsx            # fullscreen chromeless shell, polling, drag/resize/snap, shortcuts, edit dock
   lib/spotify.ts     # response parsers + command wrappers
   lib/lrc.ts         # active-line binary search, time format
-  lib/ambient.ts     # cover-art average-color sampler (24px canvas, memo cap 20)
   lib/translate.ts   # per-line translations, localStorage cache (cap 200)
   lib/layout.ts      # presets, move/resize snap engine with guides, localStorage persistence (v3, per-pane opacity)
   lib/types.ts       # Pane, PlayerSnapshot, LyricsData, QueueItem
@@ -103,7 +102,7 @@ Release target is 40–70 MB. What keeps it there:
 
 - Player polling (3 s) and the 500 ms progress tick pause while the window is hidden and resume on show.
 - The visualizer runs one rAF loop only while its pane is mounted, freezes on pause, and stops under reduced-motion.
-- Lyrics file cache caps at 500 tracks, translation cache at 200 lines, ambient sampler memo at 20 covers.
+- Lyrics file cache caps at 500 tracks and translation cache at 200 lines.
 - Icon and bundle assets ship from `icon pack/` (`src-tauri/icons`, `public/snapify-icon.*`).
 
 ## Shortcuts

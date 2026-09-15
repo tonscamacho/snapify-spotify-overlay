@@ -96,7 +96,7 @@ export async function ensurePlayer(): Promise<string | null> {
         emit("sdk-error", `Player init failed: ${JSON.stringify(e)}`),
       );
       player.addListener("authentication_error", (e) =>
-        emit("sdk-error", `Player auth failed (token refreshed silently): ${JSON.stringify(e)}`),
+        emit("sdk-error", `Player auth failed (Spotify SDK rejected the token): ${JSON.stringify(e)}`),
       );
       player.addListener("account_error", () =>
         emit("sdk-error", "account_error: Spotify Premium is required for headless playback."),

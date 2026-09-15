@@ -1,5 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DeviceInfo, PlayerSnapshot, QueueItem, TrackInfo } from "./types";
+import type {
+  DeviceInfo,
+  PlayerSnapshot,
+  QueueContext,
+  QueueContextKind,
+  QueueItem,
+  TrackInfo,
+} from "./types";
 
 function asTrack(item: unknown): TrackInfo | null {
   if (!item || typeof item !== "object") return null;
@@ -99,6 +106,22 @@ function parseTrackLite(o: Record<string, unknown>): QueueItem {
   };
 }
 
+const QUEUE_CONTEXT_KINDS: ReadonlySet<string> = new Set(["playlist", "album", "artist", "show"]);
+
+export function parseQueueContext(raw: unknown): Omit<QueueContext, "name"> | null {
+  if (!raw || typeof raw !== "object") return null;
+  const ctx = (raw as Record<string, unknown>)["context"];
+  if (!ctx || typeof ctx !== "object") return null;
+  const o = ctx as Record<string, unknown>;
+  const type = o["type"];
+  const uri = o["uri"];
+  if (typeof type !== "string" || typeof uri !== "string") return null;
+  if (!QUEUE_CONTEXT_KINDS.has(type)) return null;
+  const parts = uri.split(":");
+  if (parts.length !== 3 || parts[0] !== "spotify" || parts[1] !== type || !parts[2]) return null;
+  return { kind: type as QueueContextKind, id: parts[2], uri };
+}
+
 export function parseQueue(raw: unknown): { current: QueueItem | null; upcoming: QueueItem[] } {
   const out = { current: null as QueueItem | null, upcoming: [] as QueueItem[] };
   if (!raw || typeof raw !== "object") return out;
@@ -123,7 +146,10 @@ export const api = {
   setAutostart: (enabled: boolean) => invoke<void>("set_autostart", { enabled }),
   player: async () => parsePlayer(await invoke<unknown>("get_player")),
   devices: async () => parseDevices(await invoke<unknown>("get_devices")),
-  queue: async () => parseQueue(await invoke<unknown>("get_queue")),
+  queue: async () => {
+    const raw = await invoke<unknown>("get_queue");
+    return { ...parseQueue(raw), context: parseQueueContext(raw) };
+  },
   play: (device_id?: string | null) => invoke("play", { deviceId: device_id ?? null }),
   pause: (device_id?: string | null) => invoke("pause", { deviceId: device_id ?? null }),
   next: (device_id?: string | null) => invoke("next_track", { deviceId: device_id ?? null }),

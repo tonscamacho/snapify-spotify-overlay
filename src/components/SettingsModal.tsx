@@ -19,8 +19,6 @@ interface Props {
   uiScale: number;
   theme: "dark" | "light";
   density: Density;
-  ambientTint: boolean;
-  forceEffects: boolean;
   autostart: boolean;
   interactive: boolean;
   editing?: boolean;
@@ -35,8 +33,6 @@ interface Props {
   onUiScale: (v: number) => void;
   onTheme: (v: "dark" | "light") => void;
   onDensity: (v: Density) => void;
-  onAmbientTint: (v: boolean) => void;
-  onForceEffects: (v: boolean) => void;
   onAutostart: (v: boolean) => void;
   onInteractToggle: () => void;
   onEditToggle?: () => void;
@@ -239,28 +235,6 @@ export default function SettingsModal(p: Props) {
               </button>
             ))}
           </span>
-        </div>
-        <div className="row">
-          <span>Album-art tint</span>
-          <input
-            type="checkbox"
-            checked={p.ambientTint}
-            aria-label="Album-art tint"
-            onChange={(e) => p.onAmbientTint(e.target.checked)}
-          />
-        </div>
-        <div className="row">
-          <span>Force effects</span>
-          <input
-            type="checkbox"
-            checked={p.forceEffects}
-            aria-label="Force effects"
-            onChange={(e) => p.onForceEffects(e.target.checked)}
-          />
-        </div>
-        <div className="hint">
-          Overrides your OS reduced-motion and transparency setting so blur
-          and animations stay on even on low-effects Windows.
         </div>
         <div className="row">
           <span>Preset</span>

@@ -21,6 +21,7 @@ import {
   parseUserProfile,
   pop,
   push,
+  scopeHint,
   switchView,
   toLibraryItem,
 } from "./browse";
@@ -43,6 +44,25 @@ describe("browse navigation", () => {
   it("switchView resets the stack", () => {
     const s = push(initialBrowse, { kind: "playlist", id: "p1" });
     expect(switchView(s, "search")).toEqual({ view: "search", stack: [], query: "" });
+  });
+});
+
+describe("scopeHint", () => {
+  it("names the missing scope for re-login", () => {
+    expect(scopeHint('spotify 403 Forbidden: missing permission "user-top-read" — logout')).toContain(
+      "user-top-read",
+    );
+    expect(
+      scopeHint('{"error":{"status":403,"message":"Insufficient client scope: user-top-read"}}'),
+    ).toContain("user-top-read");
+  });
+
+  it("stays quiet for generic 403s so failures surface truthfully", () => {
+    expect(
+      scopeHint('spotify 403 Forbidden: {"error":{"status":403,"message":"Player command failed: Restriction violated"}}'),
+    ).toBeNull();
+    expect(scopeHint("spotify 502 Bad Gateway: <html>bad gateway</html>")).toBeNull();
+    expect(scopeHint("rate-limited: retry after 7s")).toBeNull();
   });
 });
 
@@ -243,6 +263,7 @@ describe("parsePlaylistDetail", () => {
       tracks: [{ name: "T", artists: "X", durationMs: 100, uri: "u:t" }],
       tracksTotal: 5,
       uri: "u:pl",
+      walled: false,
     });
   });
 
@@ -253,7 +274,47 @@ describe("parsePlaylistDetail", () => {
       tracks: [],
       tracksTotal: 0,
       owner: "",
+      walled: true,
     });
+  });
+
+  it("flags metadata-only responses as walled but keeps the context uri", () => {
+    const d = parsePlaylistDetail({
+      id: "other123",
+      name: "Someone Else Mix",
+      images: [{ url: "cover" }],
+      owner: { display_name: "Other" },
+      uri: "spotify:playlist:other123",
+    });
+    expect(d).toMatchObject({
+      kind: "playlist",
+      tracksTotal: 0,
+      uri: "spotify:playlist:other123",
+      walled: true,
+    });
+  });
+
+  it("reads the renamed items field for owned playlists", () => {
+    const d = parsePlaylistDetail({
+      id: "pl2",
+      name: "Owned",
+      owner: { display_name: "Me" },
+      items: {
+        items: [
+          {
+            item: {
+              name: "T",
+              artists: [{ name: "X" }],
+              duration_ms: 100,
+              uri: "u:t",
+            },
+          },
+        ],
+        total: 1,
+      },
+      uri: "u:pl2",
+    });
+    expect(d).toMatchObject({ kind: "playlist", tracksTotal: 1, walled: false });
   });
 });
 

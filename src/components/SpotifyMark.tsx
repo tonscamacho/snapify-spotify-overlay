@@ -7,7 +7,7 @@ interface MarkProps {
 // Spotify attribution mark. Full logo (icon + wordmark) in headers and
 // browse; 21px-minimum icon only when space is under the 70px full-logo
 // minimum (now-playing bar). Half-icon exclusion zone via padding.
-// White on dark glass, black on light glass, green only on pure black or
+// White on dark surfaces, black on light surfaces, green only on pure black or
 // white. Never rotate, stretch, recolor, reshape, or place over art.
 export default function SpotifyMark({ variant = "full", size = 21, label = "Spotify" }: MarkProps) {
   const isFull = variant === "full";

@@ -351,7 +351,7 @@ async fn call_inner(
             );
             if is_quota {
                 set_quota_cooldown(base).await;
-                return decide(status, retry_raw.as_deref(), &response_body);
+                return decide(&method, status, retry_raw.as_deref(), &response_body);
             }
             if method == Method::GET && attempt < 3 {
                 attempt += 1;
@@ -361,7 +361,7 @@ async fn call_inner(
                 continue;
             }
             set_rate_cooldown(base).await;
-            return decide(status, retry_raw.as_deref(), &response_body);
+            return decide(&method, status, retry_raw.as_deref(), &response_body);
         }
         if res.status() == StatusCode::NOT_MODIFIED {
             if let Some((ref key, _)) = cache_key {
@@ -455,7 +455,7 @@ async fn interpret(
         classify_result(status, &body),
         retry_after.as_deref(),
     );
-    decide(status, retry_after.as_deref(), &body)
+    decide(method, status, retry_after.as_deref(), &body)
 }
 
 fn trim_snippet(body: &str) -> String {
@@ -482,6 +482,7 @@ fn missing_scope(body: &str) -> Option<String> {
 }
 
 fn decide(
+    method: &Method,
     status: StatusCode,
     retry_after: Option<&str>,
     body: &str,
@@ -522,12 +523,23 @@ fn decide(
     if body.trim().is_empty() {
         return Ok(serde_json::json!({ "empty": true }));
     }
-    serde_json::from_str(body).map_err(|_| {
-        format!(
-            "spotify {status}: unexpected response (not JSON): {}",
-            trim_snippet(body)
-        )
-    })
+    match serde_json::from_str(body) {
+        Ok(v) => Ok(v),
+        Err(_) => {
+            if *method != Method::GET && status.is_success() {
+                // Commands are fire-and-forget: Spotify answers 2xx with an
+                // empty body, so on success an out-of-contract body still
+                // means the press worked. Queries stay strict so corrupt
+                // player/queue payloads keep erroring instead of wiping
+                // on-screen state to empty.
+                return Ok(serde_json::json!({ "empty": true }));
+            }
+            Err(format!(
+                "spotify {status}: unexpected response (not JSON): {}",
+                trim_snippet(body)
+            ))
+        }
+    }
 }
 
 #[tauri::command]
@@ -962,6 +974,27 @@ pub async fn get_playlist(app: AppHandle, playlist_id: String) -> Result<serde_j
     .await
 }
 
+/// Playlist track reads, newest endpoint first. `/items` is the documented
+/// read path and serves owned/collaborator playlists on apps of any age;
+/// `/tracks` is the legacy path that still serves grandfathered apps.
+/// Spotify answers 403 on both for other people's playlists (owner-only
+/// reads since Feb 2026), so callers must treat terminal 403 as a wall,
+/// not a scope problem.
+fn playlist_items_primary(playlist_id: &str) -> String {
+    format!("/playlists/{playlist_id}/items")
+}
+
+fn playlist_items_fallback(playlist_id: &str) -> String {
+    format!("/playlists/{playlist_id}/tracks")
+}
+
+/// Follow-up read only when the refusal looks like an endpoint/ownership
+/// wall. Auth (401), throttling (429), and server errors surface at once
+/// instead of spending quota on a second call.
+fn playlist_items_should_retry(err: &str) -> bool {
+    err.contains("403")
+}
+
 #[tauri::command]
 pub async fn get_playlist_items(
     app: AppHandle,
@@ -969,16 +1002,30 @@ pub async fn get_playlist_items(
     limit: i64,
     offset: i64,
 ) -> Result<serde_json::Value, String> {
-    // New path: /playlists/{id}/items (param tracks -> items).
-    paged(
+    match paged(
         &app,
         Method::GET,
-        &format!("/playlists/{playlist_id}/items"),
+        &playlist_items_primary(&playlist_id),
         &[],
         limit,
         offset,
     )
     .await
+    {
+        Ok(v) => Ok(v),
+        Err(e) if playlist_items_should_retry(&e) => {
+            paged(
+                &app,
+                Method::GET,
+                &playlist_items_fallback(&playlist_id),
+                &[],
+                limit,
+                offset,
+            )
+            .await
+        }
+        Err(e) => Err(e),
+    }
 }
 
 #[tauri::command]
@@ -1220,8 +1267,27 @@ pub async fn play_uris(
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_ttl, classify_result, decide, inflight_key, parse_retry_after};
+    use super::{cache_ttl, classify_result, decide, inflight_key, parse_retry_after, playlist_items_fallback, playlist_items_primary, playlist_items_should_retry};
     use reqwest::{Method, StatusCode};
+
+    #[test]
+    fn playlist_track_reads_prefer_items_then_tracks() {
+        // `/items` is the documented read path; `/tracks` is the legacy
+        // fallback for grandfathered apps. Both 403 other people's
+        // playlists, so the order only decides which wall is hit first.
+        assert_eq!(playlist_items_primary("abc"), "/playlists/abc/items");
+        assert_eq!(playlist_items_fallback("abc"), "/playlists/abc/tracks");
+    }
+
+    #[test]
+    fn playlist_track_retry_only_on_forbidden() {
+        assert!(playlist_items_should_retry("spotify 403 Forbidden: {\"error\":{}}"));
+        assert!(!playlist_items_should_retry("rate-limited: retry after 7s"));
+        assert!(!playlist_items_should_retry("quota-exceeded: back off"));
+        assert!(!playlist_items_should_retry("unauthorized: token rejected"));
+        assert!(!playlist_items_should_retry("spotify 502 Bad Gateway: boom"));
+        assert!(!playlist_items_should_retry(""));
+    }
 
     #[test]
     fn serde_mechanism_matches_user_screenshot() {
@@ -1236,9 +1302,48 @@ mod tests {
     }
 
     #[test]
+    fn command_success_with_opaque_body_stays_quiet() {
+        // The screenshot toast: a transport press answers 200 with a
+        // non-JSON body. Commands must treat any 2xx as worked.
+        assert_eq!(
+            decide(&Method::PUT, StatusCode::OK, None, "QH5I6kkdObcuRF50pH4EJULmB0").unwrap(),
+            serde_json::json!({"empty": true})
+        );
+        assert_eq!(
+            decide(&Method::POST, StatusCode::OK, None, "QH5I6kkdObcuRF50pH4EJULmB0").unwrap(),
+            serde_json::json!({"empty": true})
+        );
+    }
+
+    #[test]
+    fn query_success_with_opaque_body_still_errors() {
+        // Queries stay strict: a corrupt player/queue payload must error,
+        // never silently wipe on-screen state to empty.
+        let err = decide(&Method::GET, StatusCode::OK, None, "QH5I6kkdObcuRF50pH4EJULmB0")
+            .unwrap_err();
+        assert!(err.contains("not JSON"), "unfriendly: {err}");
+    }
+
+    #[test]
+    fn command_failure_still_errors() {
+        // Non-2xx stays an error for commands too.
+        let err = decide(&Method::PUT, StatusCode::FORBIDDEN, None, "nope").unwrap_err();
+        assert!(err.contains("403"), "status lost: {err}");
+    }
+
+    #[test]
+    fn probe_valid_json_still_parses() {
+        // Rules out C2 (valid-JSON mishandling): a JSON body on 200
+        // must keep parsing, before and after the fix.
+        let v = decide(&Method::GET, StatusCode::OK, None, r#"{"snapshot_id":"abc"}"#).unwrap();
+        assert_eq!(v, serde_json::json!({"snapshot_id": "abc"}));
+    }
+
+    #[test]
     fn html_body_on_success_does_not_leak_serde_error() {
         let err =
-            decide(StatusCode::OK, None, "<html><body>gateway</body></html>").unwrap_err();
+            decide(&Method::GET, StatusCode::OK, None, "<html><body>gateway</body></html>")
+                .unwrap_err();
         assert!(
             !err.contains("line 1 column 1"),
             "raw serde error leaked: {err}"
@@ -1250,7 +1355,7 @@ mod tests {
     fn forbidden_names_missing_scope() {
         let body =
             r#"{"error":{"status":403,"message":"Insufficient client scope: user-top-read"}}"#;
-        let err = decide(StatusCode::FORBIDDEN, None, body).unwrap_err();
+        let err = decide(&Method::GET, StatusCode::FORBIDDEN, None, body).unwrap_err();
         assert!(err.contains("user-top-read"), "scope lost: {err}");
         assert!(err.contains("login again"), "no action: {err}");
     }
@@ -1258,14 +1363,15 @@ mod tests {
     #[test]
     fn other_errors_keep_status_and_snippet() {
         let err =
-            decide(StatusCode::BAD_GATEWAY, None, "<html>bad gateway</html>").unwrap_err();
+            decide(&Method::GET, StatusCode::BAD_GATEWAY, None, "<html>bad gateway</html>")
+                .unwrap_err();
         assert!(err.contains("502"), "status lost: {err}");
     }
 
     #[test]
     fn empty_success_stays_empty() {
         assert_eq!(
-            decide(StatusCode::OK, None, "  ").unwrap(),
+            decide(&Method::GET, StatusCode::OK, None, "  ").unwrap(),
             serde_json::json!({"empty": true})
         );
     }
@@ -1273,7 +1379,7 @@ mod tests {
     #[test]
     fn rate_limit_uses_header() {
         assert_eq!(
-            decide(StatusCode::TOO_MANY_REQUESTS, Some("7"), "").unwrap_err(),
+            decide(&Method::GET, StatusCode::TOO_MANY_REQUESTS, Some("7"), "").unwrap_err(),
             "rate-limited: retry after 7s"
         );
     }
@@ -1281,7 +1387,8 @@ mod tests {
     #[test]
     fn quota_exceeded_is_distinct_from_rate_limit() {
         let body = r#"{"error":{"status":429,"message":"QUOTA_EXCEEDED"}}"#;
-        let err = decide(StatusCode::TOO_MANY_REQUESTS, Some("30"), body).unwrap_err();
+        let err =
+            decide(&Method::GET, StatusCode::TOO_MANY_REQUESTS, Some("30"), body).unwrap_err();
         assert!(err.contains("quota-exceeded"), "quota lost: {err}");
         assert!(err.contains("30s"), "backoff lost: {err}");
     }

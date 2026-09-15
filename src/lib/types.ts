@@ -11,7 +11,7 @@ export interface PaneState {
   y: number;
   w: number;
   h: number;
-  /** Per-pane glass opacity, 0.4–1. Persisted in layout v3. */
+  /** Per-pane opacity, 0.4–1. Persisted in layout v3. */
   opacity: number;
   visible: boolean;
   z: number;
@@ -74,6 +74,18 @@ export interface QueueItem {
   uri: string;
 }
 
+/** Where the current queue is playing from. Spotify reports the context
+ *  uri and type but never the display name; the name resolves separately
+ *  and stays null until it does so no stale label ever renders. */
+export type QueueContextKind = "playlist" | "album" | "artist" | "show";
+
+export interface QueueContext {
+  kind: QueueContextKind;
+  id: string;
+  uri: string;
+  name: string | null;
+}
+
 export interface DeviceInfo {
   id: string;
   name: string;
@@ -109,7 +121,7 @@ export interface LibraryItem {
 }
 
 export type DetailData =
-  | { kind: "playlist"; name: string; image: string | null; owner: string; tracks: QueueItem[]; tracksTotal: number; uri: string }
+  | { kind: "playlist"; name: string; image: string | null; owner: string; tracks: QueueItem[]; tracksTotal: number; uri: string; walled: boolean }
   | { kind: "album"; name: string; image: string | null; artists: string; tracks: QueueItem[]; uri: string; explicit: boolean }
   | { kind: "artist"; name: string; image: string | null; genres: string[]; topTracks: QueueItem[]; albums: LibraryItem[]; uri: string }
   | { kind: "show"; name: string; image: string | null; publisher: string; episodes: QueueItem[]; uri: string; explicit: boolean }

@@ -6,8 +6,6 @@ interface Props {
   isPlaying: boolean;
   /** Changes per track so the motion signature follows the music. */
   seed: string | null;
-  /** Overrides the OS reduced-motion signal so motion plays on low-effects Windows. */
-  forceEffects?: boolean;
 }
 
 const BARS = 40;
@@ -58,8 +56,7 @@ export default function VisualizerPane(p: Props) {
     const reduced =
       typeof window !== "undefined" &&
       typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches &&
-      !p.forceEffects;
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     let raf = 0;
     let t = 0;
@@ -121,7 +118,7 @@ export default function VisualizerPane(p: Props) {
       themeObs.disconnect();
       sizeObs.disconnect();
     };
-  }, [p.forceEffects]);
+  }, []);
 
   if (!p.seed) {
     return (
