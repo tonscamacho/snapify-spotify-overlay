@@ -90,7 +90,7 @@ describe("clampLayoutToArea", () => {
       pane({ id: "a", x: 2000, y: 1500, w: 2000, h: 1500 }),
     ]);
     const out = clampLayoutToArea(l, 800, 600);
-    expect(out.panes[0]).toMatchObject({ x: 520, y: 480, w: 784, h: 584 });
+    expect(out.panes[0]).toMatchObject({ x: 16, y: 16, w: 784, h: 584 });
   });
 
   it("leaves an in-bounds pane untouched", () => {
@@ -99,12 +99,24 @@ describe("clampLayoutToArea", () => {
     expect(out.panes[0]).toMatchObject({ x: 10, y: 10, w: 300, h: 200 });
   });
 
+  it("pulls a normal-size pane fully inside the east and south edges", () => {
+    const l = layout([pane({ x: 1700, y: 900, w: 340, h: 230 })]);
+    const out = clampLayoutToArea(l, 1920, 1040);
+    expect(out.panes[0]).toMatchObject({ x: 1580, y: 810, w: 340, h: 230 });
+  });
+
+  it("anchors at zero when the area is narrower than the minimum", () => {
+    const l = layout([pane({ x: 50, y: 50, w: 340, h: 230 })]);
+    const out = clampLayoutToArea(l, 200, 600);
+    expect(out.panes[0]).toMatchObject({ x: 0, w: 280 });
+  });
+
   it("divides the area by uiScale before clamping", () => {
     const l = layout([
       pane({ id: "a", x: 2000, y: 1500, w: 2000, h: 1500 }),
     ]);
     const out = clampLayoutToArea(l, 1600, 1200, 2);
-    expect(out.panes[0]).toMatchObject({ x: 520, y: 480, w: 784, h: 584 });
+    expect(out.panes[0]).toMatchObject({ x: 16, y: 16, w: 784, h: 584 });
   });
 
   it("does not mutate the input layout", () => {

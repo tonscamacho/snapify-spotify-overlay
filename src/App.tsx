@@ -1118,13 +1118,25 @@ export default function App() {
         } else {
           setGuides({ v: [], h: [] });
         }
+        // Snap only catches within its threshold; a fast drag sails past
+        // the edge, so pin the pane fully inside the area here.
+        m.x = Math.min(m.x, Math.max(0, Math.round(areaW - m.w)));
+        m.y = Math.min(m.y, Math.max(0, Math.round(areaH - m.h)));
       } else {
         let nx = d.origX;
         let ny = d.origY;
         let nw = d.origW;
         let nh = d.origH;
-        if (d.kind.includes("e")) nw = Math.max(min.w, Math.round(d.origW + dx));
-        if (d.kind.includes("s")) nh = Math.max(min.h, Math.round(d.origH + dy));
+        if (d.kind.includes("e")) {
+          nw = Math.max(min.w, Math.round(d.origW + dx));
+          // Resize has no snap threshold on the far side: cap the edge at
+          // the area so the pane cannot grow off-screen.
+          nw = Math.min(nw, Math.max(min.w, Math.round(areaW - m.x)));
+        }
+        if (d.kind.includes("s")) {
+          nh = Math.max(min.h, Math.round(d.origH + dy));
+          nh = Math.min(nh, Math.max(min.h, Math.round(areaH - m.y)));
+        }
         if (d.kind.includes("w")) {
           nx = Math.round(d.origX + dx);
           nw = Math.round(d.origW - dx);

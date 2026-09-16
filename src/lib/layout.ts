@@ -166,6 +166,28 @@ export function saveLayout(layout: LayoutState): void {
   }
 }
 
+/** Clamp one pane fully inside an area, shrinking it first when the area
+ *  itself is smaller. Position bounds use the pane's own clamped size, so
+ *  a wide pane cannot strand its right edge off-screen. */
+export function clampPaneToArea(
+  p: PaneState,
+  areaW: number,
+  areaH: number,
+): PaneState {
+  const min = getPaneMin(p.type);
+  const W = Math.floor(areaW);
+  const H = Math.floor(areaH);
+  const w = Math.min(Math.max(min.w, Math.round(p.w)), Math.max(min.w, W - 16));
+  const h = Math.min(Math.max(min.h, Math.round(p.h)), Math.max(min.h, H - 16));
+  return {
+    ...p,
+    w,
+    h,
+    x: Math.min(Math.max(0, Math.round(p.x)), Math.max(0, W - w)),
+    y: Math.min(Math.max(0, Math.round(p.y)), Math.max(0, H - h)),
+  };
+}
+
 /** Clamp a restored layout into the live window so panes never strand off-screen.
  *  Areas are divided by uiScale because the stage renders under a zoom
  *  wrapper while layout state stays in logical px. */
@@ -176,18 +198,7 @@ export function clampLayoutToArea(
   uiScale = 1,
 ): LayoutState {
   const k = uiScale || 1;
-  const W = Math.floor(areaW / k);
-  const H = Math.floor(areaH / k);
-  const panes = layout.panes.map((p) => {
-    const min = getPaneMin(p.type);
-    return {
-      ...p,
-      w: Math.min(p.w, Math.max(min.w, W - 16)),
-      h: Math.min(p.h, Math.max(min.h, H - 16)),
-      x: Math.min(Math.max(0, p.x), Math.max(0, W - min.w)),
-      y: Math.min(Math.max(0, p.y), Math.max(0, H - 120)),
-    };
-  });
+  const panes = layout.panes.map((p) => clampPaneToArea(p, areaW / k, areaH / k));
   return { ...layout, panes };
 }
 
