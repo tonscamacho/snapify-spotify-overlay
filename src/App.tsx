@@ -24,7 +24,7 @@ import {
 } from "./components/icons";
 import { api, parsePlayer } from "./lib/spotify";
 import { reportOverlayMode, reportOverlayRegions } from "./lib/overlay";
-import { ensurePlayer } from "./lib/player-sdk";
+import { ensurePlayer, setSdkVolume } from "./lib/player-sdk";
 import { initialBrowse } from "./lib/browse";
 import type { TransLang } from "./lib/translate";
 import {
@@ -666,8 +666,10 @@ export default function App() {
   const playCb = useCallback(
     () =>
       void (async () => {
-        const target = snap.deviceId ?? sdkDeviceId ?? (await ensurePlayer());
+        const seed = (snapRef.current.volume ?? 50) / 100;
+        const target = snap.deviceId ?? sdkDeviceId ?? (await ensurePlayer(seed));
         if (target) setSdkDeviceId((cur) => cur ?? target);
+        setSdkVolume(seed);
         await run(() => api.play(target), {
           transport: "play",
           optimistic: () => setSnap((prev) => ({ ...prev, isPlaying: true })),
@@ -702,6 +704,7 @@ export default function App() {
   const volumeCb = useCallback(
     (v: number) => {
       setSnap((s) => ({ ...s, volume: v }));
+      setSdkVolume(v / 100);
       void run(() => api.volume(v, snap.deviceId ?? sdkDeviceId));
     },
     [snap.deviceId, sdkDeviceId, run],
@@ -723,6 +726,7 @@ export default function App() {
       void run(() => api.transfer(id, false), {
         after: () => {
           void fetchDevices();
+          setSdkVolume((snapRef.current.volume ?? 50) / 100);
         },
         needsRefresh: true,
       }),
@@ -1022,8 +1026,12 @@ export default function App() {
     const arm = () => {
       window.removeEventListener("pointerdown", arm);
       window.removeEventListener("keydown", arm);
-      void ensurePlayer().then((id) => {
-        if (id) setSdkDeviceId(id);
+      const seed = (snapRef.current.volume ?? 50) / 100;
+      void ensurePlayer(seed).then((id) => {
+        if (id) {
+          setSdkDeviceId(id);
+          setSdkVolume(seed);
+        }
       });
     };
     window.addEventListener("pointerdown", arm);

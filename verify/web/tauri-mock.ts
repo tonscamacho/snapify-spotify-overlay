@@ -43,7 +43,7 @@ function buildInitScript(
     "    sdkTag.setAttribute('data-spotify-sdk', '1');\n" +
     "    (document.head || document.documentElement).appendChild(sdkTag);\n" +
     "  } catch (e) {}\n" +
-    "  function FakePlayer(opts) { this._opts = opts || {}; this._ev = {}; }\n" +
+    "  function FakePlayer(opts) { this._opts = opts || {}; this._ev = {}; window.__SDK_INIT_VOLUME__ = (opts || {}).volume; }\n" +
     "  FakePlayer.prototype.addListener = function (name, cb) {\n" +
     "    if (!this._ev[name]) this._ev[name] = [];\n" +
     "    this._ev[name].push(cb);\n" +
@@ -59,6 +59,10 @@ function buildInitScript(
     "  FakePlayer.prototype.disconnect = function () {};\n" +
     "  FakePlayer.prototype.getCurrentState = function () { return Promise.resolve(null); };\n" +
     "  FakePlayer.prototype.setVolume = function () { return Promise.resolve(); };\n" +
+    "  FakePlayer.prototype.setVolume = function (v) {\n" +
+    "    window.__SDK_LAST_VOLUME__ = v;\n" +
+    "    return Promise.resolve();\n" +
+    "  };\n" +
     "  FakePlayer.prototype.pause = function () { return Promise.resolve(); };\n" +
     "  FakePlayer.prototype.resume = function () { return Promise.resolve(); };\n" +
     "  window.Spotify = { Player: FakePlayer };\n" +
@@ -106,7 +110,9 @@ function buildInitScript(
     "        if (typeof args.positionMs === 'number') player.progress_ms = args.positionMs;\n" +
     "        else if (typeof args.position_ms === 'number') player.progress_ms = args.position_ms;\n" +
     "        return null;\n" +
-    "      case 'set_volume': return null;\n" +
+    "      case 'set_volume':\n" +
+    "        if (typeof args.volumePercent === 'number') player.device.volume_percent = args.volumePercent;\n" +
+    "        return null;\n" +
     "      case 'set_shuffle': player.shuffle_state = !!args.enabled; return null;\n" +
     "      case 'set_repeat': player.repeat_state = args.mode || 'off'; return null;\n" +
     "      case 'transfer_playback': return null;\n" +

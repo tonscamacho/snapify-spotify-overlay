@@ -28,6 +28,11 @@ let player: SpotifyPlayer | null = null;
 let deviceId: string | null = null;
 let ready = false;
 
+function clampGain(v: number): number {
+  if (!Number.isFinite(v)) return 0.5;
+  return Math.min(1, Math.max(0, v));
+}
+
 function loadScript(): Promise<void> {
   if (document.querySelector('script[data-spotify-sdk="1"]')) return Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -53,8 +58,10 @@ async function freshToken(): Promise<string> {
   return invoke<string>("get_fresh_token");
 }
 
-/** Create/resume the player. Call inside a user gesture (autoplay policy). */
-export async function ensurePlayer(): Promise<string | null> {
+/** Create/resume the player. Call inside a user gesture (autoplay policy).
+ *  The local gain seeds from the caller's 0-1 volume so overlay playback
+ *  starts at the level Spotify already shows, never a fixed blast. */
+export async function ensurePlayer(initialVolume?: number): Promise<string | null> {
   if (ready && deviceId) return deviceId;
   try {
     await loadScript();
@@ -71,7 +78,7 @@ export async function ensurePlayer(): Promise<string | null> {
             .then(cb)
             .catch(() => cb(""));
         },
-        volume: 0.8,
+        volume: clampGain(initialVolume ?? 0.5),
       });
       player.addListener("ready", (e) => {
         const id = (e as { device_id?: string } | undefined)?.device_id ?? null;
@@ -117,6 +124,18 @@ export async function ensurePlayer(): Promise<string | null> {
 
 export function getSdkDeviceId(): string | null {
   return deviceId;
+}
+
+/** Mirror the volume slider into the local player gain. The Web API volume
+ *  call moves server-side state; this moves the air in the room. Safe to
+ *  call any time: a missing player is a silent no-op. */
+export function setSdkVolume(v: number): void {
+  if (!player) return;
+  try {
+    void player.setVolume(clampGain(v));
+  } catch {
+    // A half-torn-down player must never break the slider.
+  }
 }
 
 export function teardownPlayer(): void {
