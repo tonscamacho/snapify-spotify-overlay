@@ -1,6 +1,7 @@
 mod auth;
 mod keybinds;
 mod lyrics;
+mod overlay;
 mod spotify;
 mod system;
 
@@ -156,6 +157,7 @@ pub fn run() {
                 .build(),
         )
         .manage(auth::AuthState::default())
+        .manage(overlay::OverlayState::default())
         .setup(|app| {
             auth::restore_session(&app.handle());
             // Boot click-through so a launch over a game never eats input
@@ -170,6 +172,7 @@ pub fn run() {
             }
             let map = keybinds::load_map(&app.handle());
             app.manage(keybinds::KeybindStore(Mutex::new(map.clone())));
+            overlay::spawn_poller(&app.handle());
             if let Err(e) = build_tray(&app.handle()) {
                 eprintln!("tray init failed: {e}");
             }
@@ -236,6 +239,8 @@ pub fn run() {
             lyrics::get_lyrics,
             system::autostart_state,
             system::set_autostart,
+            overlay::set_overlay_mode,
+            overlay::set_overlay_regions,
             keybinds::get_keybinds,
             keybinds::set_keybind,
             keybinds::reset_keybinds,

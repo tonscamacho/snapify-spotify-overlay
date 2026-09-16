@@ -95,12 +95,14 @@ select:focus-visible,
   display: grid;
   place-items: center;
   padding: 24px;
+  pointer-events: none;
 }
 
 .gate-card {
   max-width: 360px;
   text-align: center;
   padding: 28px 28px 24px;
+  pointer-events: auto;
 }
 
 .gate-icon {
@@ -134,10 +136,12 @@ select:focus-visible,
 .stage {
   position: absolute;
   inset: 0;
+  pointer-events: none;
 }
 
 .pane {
   position: absolute;
+  pointer-events: auto;
   display: flex;
   flex-direction: column;
   background: var(--surface);
@@ -855,6 +859,7 @@ select:focus-visible,
   border-radius: 999px;
   box-shadow: var(--shadow-sm);
   z-index: 200;
+  pointer-events: auto;
 }
 
 .dock-sep {
@@ -902,6 +907,7 @@ select:focus-visible,
   padding: 8px 16px;
   cursor: pointer;
   z-index: 200;
+  pointer-events: auto;
 }
 
 .pane-op {
@@ -921,6 +927,7 @@ select:focus-visible,
   display: grid;
   place-items: center;
   z-index: 200;
+  pointer-events: none;
 }
 
 .modal {
@@ -934,6 +941,7 @@ select:focus-visible,
   border-radius: var(--r-lg);
   padding: 16px 18px 18px;
   box-shadow: var(--shadow);
+  pointer-events: auto;
 }
 
 .modal-head {

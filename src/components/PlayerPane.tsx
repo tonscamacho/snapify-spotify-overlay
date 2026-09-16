@@ -104,15 +104,14 @@ export default function PlayerPane(p: Props) {
   const toggleLike = async () => {
     if (!track) return;
     const isEpisodeKind = track.uri.startsWith("spotify:episode:");
-    const kind = isEpisodeKind ? "episode" : "track";
     const likeLabel = isEpisodeKind ? "New Episodes" : "Liked Songs";
     try {
       if (!liked) {
-        await api.librarySave(kind, [track.id]);
+        await api.librarySave([track.uri]);
         setLiked(true);
         p.onToast?.("success", `Added to ${likeLabel}`);
       } else {
-        await api.libraryRemove(kind, [track.id]);
+        await api.libraryRemove([track.uri]);
         setLiked(false);
         p.onToast?.("success", isEpisodeKind ? "Removed from New Episodes" : "Removed from Liked Songs");
       }

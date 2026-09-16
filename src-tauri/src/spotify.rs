@@ -828,100 +828,100 @@ pub async fn get_my_following(
     limit: i64,
     after: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let t = match kind.as_str() {
-        "show" | "episode" | "audiobook" => kind,
-        _ => "artist".to_string(),
-    };
+    // Feb 2026: Get Followed Artists only supports type=artist. Other kinds
+    // follow via PUT /me/library, so force artist here instead of sending
+    // an invalid type that Spotify rejects.
+    let _ = kind;
     let ls = limit.clamp(1, 50).to_string();
-    let mut q = vec![("type", t.as_str()), ("limit", ls.as_str())];
+    let mut q = vec![("type", "artist"), ("limit", ls.as_str())];
     if let Some(a) = &after {
         q.push(("after", a.as_str()));
     }
     call(&app, Method::GET, "/me/following", &q, None).await
 }
 
-#[tauri::command]
-pub async fn library_contains(
-    app: AppHandle,
-    kind: String,
-    ids: Vec<String>,
-) -> Result<serde_json::Value, String> {
-    // Batch `?ids=` up to 50 per call. One network call per chunk; a 429
-    // returns partial results plus the queued-retry error.
-    let path = match kind.as_str() {
-        "album" => "/me/albums/contains",
-        "episode" => "/me/episodes/contains",
-        "audiobook" => "/me/audiobooks/contains",
-        "show" => "/me/shows/contains",
-        _ => "/me/tracks/contains",
-    };
-    let mut out: Vec<bool> = Vec::with_capacity(ids.len().min(50));
-    for chunk in ids.chunks(50).take(1) {
-        if chunk.is_empty() {
-            break;
-        }
-        let joined = chunk.join(",");
-        let q = [("ids", joined.as_str())];
-        match call(&app, Method::GET, path, &q, None).await {
-            Ok(v) => {
-                let flags = v.as_array().map(|a| {
-                    a.iter().map(|x| x.as_bool().unwrap_or(false)).collect::<Vec<_>>()
-                }).unwrap_or_default();
-                if flags.len() == chunk.len() {
-                    out.extend(flags);
-                } else {
-                    return Err("spotify contains: short batch response".into());
-                }
-            }
-            Err(e) => return Err(e),
+fn library_uris_arg(uris: &[String]) -> Result<String, String> {
+    if uris.is_empty() {
+        return Err("no uris to check".into());
+    }
+    if uris.len() > 40 {
+        return Err("at most 40 uris per library call".into());
+    }
+    for u in uris {
+        let parts: Vec<&str> = u.split(':').collect();
+        if parts.len() != 3 || parts[0] != "spotify" || parts[1].is_empty() || parts[2].is_empty() {
+            return Err(format!("not a Spotify URI: {u}"));
         }
     }
-    Ok(serde_json::Value::Array(out.into_iter().map(serde_json::Value::Bool).collect()))
+    Ok(uris.join(","))
 }
 
 #[tauri::command]
-pub async fn library_save(
+pub async fn library_contains(
     app: AppHandle,
-    kind: String,
-    ids: Vec<String>,
+    uris: Vec<String>,
 ) -> Result<serde_json::Value, String> {
-    // Universal heart through PUT /me/library. Never save liked content locally.
-    let body = serde_json::json!({ "ids": ids, "kind": kind });
-    call(&app, Method::PUT, "/me/library", &[], Some(body)).await
+    // Feb 2026 generic check: GET /me/library/contains?uris=... (max 40).
+    // Replaces the removed per-type /me/{tracks,albums,...}/contains?ids=.
+    let joined = library_uris_arg(&uris)?;
+    let q = [("uris", joined.as_str())];
+    match call(&app, Method::GET, "/me/library/contains", &q, None).await {
+        Ok(v) => {
+            let flags = v
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .map(|x| x.as_bool().unwrap_or(false))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if flags.len() == uris.len() {
+                Ok(serde_json::Value::Array(
+                    flags.into_iter().map(serde_json::Value::Bool).collect(),
+                ))
+            } else {
+                Err("spotify contains: short batch response".into())
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+#[tauri::command]
+pub async fn library_save(app: AppHandle, uris: Vec<String>) -> Result<serde_json::Value, String> {
+    // Feb 2026 generic save: PUT /me/library?uris=... Accepts track, album,
+    // episode, show, audiobook, artist, user, and playlist URIs in one call.
+    // Never save liked content locally; the server is the source of truth.
+    let joined = library_uris_arg(&uris)?;
+    let q = [("uris", joined.as_str())];
+    call(&app, Method::PUT, "/me/library", &q, None).await
 }
 
 #[tauri::command]
 pub async fn library_remove(
     app: AppHandle,
-    kind: String,
-    ids: Vec<String>,
+    uris: Vec<String>,
 ) -> Result<serde_json::Value, String> {
-    let body = serde_json::json!({ "ids": ids, "kind": kind });
-    call(&app, Method::DELETE, "/me/library", &[], Some(body)).await
+    // Feb 2026 generic remove: DELETE /me/library?uris=...
+    let joined = library_uris_arg(&uris)?;
+    let q = [("uris", joined.as_str())];
+    call(&app, Method::DELETE, "/me/library", &q, None).await
 }
 
 #[tauri::command]
-pub async fn follow_put(
-    app: AppHandle,
-    kind: String,
-    ids: Vec<String>,
-) -> Result<serde_json::Value, String> {
-    let t = if kind == "show" || kind == "episode" { kind } else { "artist".to_string() };
-    let q = [("type", t.as_str())];
-    let body = serde_json::json!({ "ids": ids });
-    call(&app, Method::PUT, "/me/following", &q, Some(body)).await
+pub async fn follow_put(app: AppHandle, uris: Vec<String>) -> Result<serde_json::Value, String> {
+    // Feb 2026: follow/unfollow ride the generic library endpoints.
+    // Artist, user, and playlist follows all save via PUT /me/library.
+    let joined = library_uris_arg(&uris)?;
+    let q = [("uris", joined.as_str())];
+    call(&app, Method::PUT, "/me/library", &q, None).await
 }
 
 #[tauri::command]
-pub async fn follow_delete(
-    app: AppHandle,
-    kind: String,
-    ids: Vec<String>,
-) -> Result<serde_json::Value, String> {
-    let t = if kind == "show" || kind == "episode" { kind } else { "artist".to_string() };
-    let q = [("type", t.as_str())];
-    let body = serde_json::json!({ "ids": ids });
-    call(&app, Method::DELETE, "/me/following", &q, Some(body)).await
+pub async fn follow_delete(app: AppHandle, uris: Vec<String>) -> Result<serde_json::Value, String> {
+    let joined = library_uris_arg(&uris)?;
+    let q = [("uris", joined.as_str())];
+    call(&app, Method::DELETE, "/me/library", &q, None).await
 }
 
 #[tauri::command]
@@ -1267,8 +1267,22 @@ pub async fn play_uris(
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_ttl, classify_result, decide, inflight_key, parse_retry_after, playlist_items_fallback, playlist_items_primary, playlist_items_should_retry};
+    use super::{cache_ttl, classify_result, decide, inflight_key, library_uris_arg, parse_retry_after, playlist_items_fallback, playlist_items_primary, playlist_items_should_retry};
     use reqwest::{Method, StatusCode};
+
+    #[test]
+    fn library_uris_join_and_validate() {
+        // Feb 2026 generic library endpoints take comma-joined Spotify URIs.
+        let joined = library_uris_arg(&[
+            "spotify:track:abc".to_string(),
+            "spotify:album:def".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(joined, "spotify:track:abc,spotify:album:def");
+        assert!(library_uris_arg(&[]).is_err());
+        assert!(library_uris_arg(&["not-a-uri".to_string()]).is_err());
+        assert!(library_uris_arg(&["spotify:track:".to_string()]).is_err());
+    }
 
     #[test]
     fn playlist_track_reads_prefer_items_then_tracks() {

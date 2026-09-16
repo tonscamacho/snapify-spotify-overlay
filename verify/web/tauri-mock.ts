@@ -124,11 +124,13 @@ function buildInitScript(
     "      case 'get_my_audiobooks': return FIXTURES.savedAudiobooks;\n" +
     "      case 'get_followed_artists': return FIXTURES.followedArtists;\n" +
     "      case 'get_my_following': return emptyPage();\n" +
-    "      case 'library_contains': return (args.ids || []).map(function () { return true; });\n" +
+    "      case 'library_contains': { var list = args.uris || args.ids || []; return list.map(function () { return true; }); }\n" +
     "      case 'library_save': return null;\n" +
     "      case 'library_remove': return null;\n" +
     "      case 'follow_put': return null;\n" +
     "      case 'follow_delete': return null;\n" +
+    "      case 'set_overlay_mode': return null;\n" +
+    "      case 'set_overlay_regions': return null;\n" +
     "      case 'get_my_top': return emptyPage();\n" +
     "      case 'get_recently_played': return emptyPage();\n" +
     "      case 'get_playlist': return FIXTURES.playlistDetail;\n" +

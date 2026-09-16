@@ -180,16 +180,16 @@ export const api = {
     invoke<unknown>("get_followed_artists", { limit, after: after ?? null }),
   myFollowing: (kind: string, limit = 20, after?: string | null) =>
     invoke<unknown>("get_my_following", { kind, limit, after: after ?? null }),
-  libraryContains: (kind: string, ids: string[]) =>
-    invoke<boolean[]>("library_contains", { kind, ids }),
-  librarySave: (kind: string, ids: string[]) =>
-    invoke<unknown>("library_save", { kind, ids }),
-  libraryRemove: (kind: string, ids: string[]) =>
-    invoke<unknown>("library_remove", { kind, ids }),
-  followPut: (kind: string, ids: string[]) =>
-    invoke<unknown>("follow_put", { kind, ids }),
-  followDelete: (kind: string, ids: string[]) =>
-    invoke<unknown>("follow_delete", { kind, ids }),
+  libraryContains: (uris: string[]) =>
+    invoke<boolean[]>("library_contains", { uris }),
+  librarySave: (uris: string[]) =>
+    invoke<unknown>("library_save", { uris }),
+  libraryRemove: (uris: string[]) =>
+    invoke<unknown>("library_remove", { uris }),
+  followPut: (uris: string[]) =>
+    invoke<unknown>("follow_put", { uris }),
+  followDelete: (uris: string[]) =>
+    invoke<unknown>("follow_delete", { uris }),
   top: (kind: string, limit = 10, offset = 0) =>
     invoke<unknown>("get_my_top", { kind, limit, offset }),
   recent: (limit = 10) => invoke<unknown>("get_recently_played", { limit }),

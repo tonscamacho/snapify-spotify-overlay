@@ -23,6 +23,7 @@ import {
   XIcon,
 } from "./components/icons";
 import { api, parsePlayer } from "./lib/spotify";
+import { reportOverlayMode, reportOverlayRegions } from "./lib/overlay";
 import { ensurePlayer } from "./lib/player-sdk";
 import { initialBrowse } from "./lib/browse";
 import type { TransLang } from "./lib/translate";
@@ -521,12 +522,18 @@ export default function App() {
   }, [snap.track, fetchLyrics, fetchQueue]);
 
   // Passive display mode stays visible on top but passes every mouse event
-  // to the game or window below. Interactive mode takes input for presses,
-  // drags, and settings. Visibility (true hide/show) is a separate global
-  // action that hides the window entirely.
+  // to the game or window below. Interactive mode takes input only on real
+  // UI (panes, dock, dialog, toasts): the Rust poller keeps every other
+  // pixel click-through by comparing the global cursor against reported
+  // rects, so the game keeps focus and keeps moving on empty space.
+  // Visibility (true hide/show) is a separate global action that hides the
+  // window entirely.
   useEffect(() => {
-    const shouldIgnore = loggedIn && !interactive && !settingsOpen;
-    void getCurrentWindow().setIgnoreCursorEvents(shouldIgnore).catch(() => {});
+    const passive = loggedIn && !interactive && !editing && !settingsOpen;
+    void reportOverlayMode(!passive);
+    if (passive) {
+      void getCurrentWindow().setIgnoreCursorEvents(true).catch(() => {});
+    }
     try {
       localStorage.setItem("snapify-interact", interactive ? "1" : "0");
       localStorage.setItem("snapify-edit", editing ? "1" : "0");
@@ -534,6 +541,24 @@ export default function App() {
       // Private mode. Prefs last the session.
     }
   }, [loggedIn, interactive, settingsOpen, editing]);
+
+  // Hit regions follow the visible UI so empty stage pixels stay
+  // click-through even while interactive. Debounced: pane drags update
+  // layout at pointer rate, the Rust poller samples at 20 Hz anyway.
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      void reportOverlayRegions();
+    }, 80);
+    return () => window.clearTimeout(t);
+  }, [layout, preset, interactive, editing, settingsOpen, toasts, loggedIn, uiScale, visible]);
+
+  useEffect(() => {
+    const onResize = () => {
+      void reportOverlayRegions();
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   // In-app shortcuts. Global chords (play/pause, next, interact, edit,
   // visibility) arrive as Tauri events even while focused, so they are
