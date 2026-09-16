@@ -36,3 +36,20 @@ test("interactive mode keeps empty stage click-through", async ({ page }) => {
     })
     .toBeGreaterThan(0);
 });
+
+// Panes must not drift on their own: position reports are read-only and the
+// backend never moves the window, so two samples with no input are identical.
+test("panes hold still with no input", async ({ page }) => {
+  const pane = page.locator('section[data-pane="player"]');
+  await expect(pane).toBeVisible();
+  const first = await pane.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return [r.left, r.top, r.width, r.height].join(",");
+  });
+  await page.waitForTimeout(1500);
+  const second = await pane.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return [r.left, r.top, r.width, r.height].join(",");
+  });
+  expect(second).toBe(first);
+});

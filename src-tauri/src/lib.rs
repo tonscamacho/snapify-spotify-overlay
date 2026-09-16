@@ -172,7 +172,6 @@ pub fn run() {
             }
             let map = keybinds::load_map(&app.handle());
             app.manage(keybinds::KeybindStore(Mutex::new(map.clone())));
-            overlay::spawn_poller(&app.handle());
             if let Err(e) = build_tray(&app.handle()) {
                 eprintln!("tray init failed: {e}");
             }
