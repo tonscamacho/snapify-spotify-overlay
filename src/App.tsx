@@ -15,11 +15,15 @@ import BrowsePane from "./components/BrowsePane";
 const MemoBrowsePane = memo(BrowsePane);
 import SettingsModal from "./components/SettingsModal";
 import {
-  ListIcon,
-  LockIcon,
+  CursorIcon,
+  EyeIcon,
+  EyeOffIcon,
+  GearIcon,
+  GridIcon,
   NoteIcon,
-  SlidersIcon,
-  UnlockIcon,
+  PencilIcon,
+  ThroughIcon,
+  UndoIcon,
   XIcon,
 } from "./components/icons";
 import { api, parsePlayer } from "./lib/spotify";
@@ -41,24 +45,31 @@ import { getVersion } from "@tauri-apps/api/app";
 import {
   PRESETS,
   clampLayoutToArea,
+  clonePanes,
   defaultLayoutFor,
   getPaneMin,
   loadLayout,
+  pushLayoutUndo,
+  revealPaneType,
   saveLayout,
   snapMove,
   snapSize,
+  togglePaneVisibility,
 } from "./lib/layout";
 import type {
   BrowseEntry,
   BrowseState,
+  Corners,
   Density,
   DeviceInfo,
+  LayoutUndoEntry,
   LyricsState,
   PaneState,
   PaneType,
   PlayerSnapshot,
   QueueContext,
   QueueItem,
+  Surface,
 } from "./lib/types";
 import "./App.css";
 
@@ -129,6 +140,20 @@ export default function App() {
 
   const [layout, setLayout] = useState<PaneState[]>([]);
   const [preset, setPreset] = useState("full");
+  // Bounded layout-undo stack (cap LAYOUT_UNDO_DEPTH). Snapshots are pushed
+  // before geometry-changing ops; Ctrl+Z while editing pops the last.
+  const [undoStack, setUndoStack] = useState<LayoutUndoEntry[]>([]);
+  // Preset preview: selecting a preset in Settings only repaints. The
+  // pre-preview arrangement waits in previewBaseRef until Apply persists it
+  // or Revert (or closing Settings) restores it.
+  const [previewing, setPreviewing] = useState(false);
+  const [coachDismissed, setCoachDismissed] = useState(() => {
+    try {
+      return localStorage.getItem("snapify-coach-dismissed") === "1";
+    } catch {
+      return true;
+    }
+  });
   const [interactive, setInteractive] = useState(() => {
     try {
       return localStorage.getItem("snapify-interact") === "1";
@@ -188,6 +213,20 @@ export default function App() {
       return "default";
     }
   });
+  const [surface, setSurface] = useState<Surface>(() => {
+    try {
+      return localStorage.getItem("snapify-surface") === "glass" ? "glass" : "solid";
+    } catch {
+      return "solid";
+    }
+  });
+  const [corners, setCorners] = useState<Corners>(() => {
+    try {
+      return localStorage.getItem("snapify-corners") === "sharp" ? "sharp" : "rounded";
+    } catch {
+      return "rounded";
+    }
+  });
   const [autostart, setAutostart] = useState(false);
   const [keybinds, setKeybinds] = useState<KeybindMap>({ ...DEFAULT_KEYBINDS });
   const keybindsRef = useRef<KeybindMap>({ ...DEFAULT_KEYBINDS });
@@ -239,6 +278,62 @@ export default function App() {
     saveLayout({ version: 3, preset: name, panes });
   }, []);
 
+  // Synchronous mirrors so geometry callbacks and the global key listener
+  // read the live arrangement without re-subscribing. Refs update in the
+  // same effects block as their state below.
+  const layoutRef = useRef<PaneState[]>([]);
+  const presetRef = useRef("full");
+  const undoRef = useRef<LayoutUndoEntry[]>([]);
+  const previewBaseRef = useRef<{ panes: PaneState[]; preset: string } | null>(null);
+  useEffect(() => {
+    layoutRef.current = layout;
+  }, [layout]);
+  useEffect(() => {
+    presetRef.current = preset;
+  }, [preset]);
+  useEffect(() => {
+    undoRef.current = undoStack;
+  }, [undoStack]);
+
+  /** Snapshot the current arrangement onto the bounded undo stack. Call
+   *  before a geometry-changing op, never after. */
+  const pushUndoSnapshot = useCallback(() => {
+    const snap: LayoutUndoEntry = {
+      panes: clonePanes(layoutRef.current),
+      preset: presetRef.current,
+    };
+    setUndoStack((prev) => pushLayoutUndo(prev, snap));
+  }, []);
+
+  /** Restore the last undo entry and persist it. No-op on an empty stack. */
+  const undoLayout = useCallback(() => {
+    const stack = undoRef.current;
+    if (stack.length === 0) return;
+    const last = stack[stack.length - 1];
+    const rest = stack.slice(0, -1);
+    undoRef.current = rest;
+    setUndoStack(rest);
+    const panes = clonePanes(last.panes);
+    setLayout(panes);
+    setPreset(last.preset);
+    persist(panes, last.preset);
+    previewBaseRef.current = null;
+    setPreviewing(false);
+  }, [persist]);
+  const undoLayoutRef = useRef(() => {});
+  useEffect(() => {
+    undoLayoutRef.current = undoLayout;
+  }, [undoLayout]);
+
+  const dismissCoach = useCallback(() => {
+    setCoachDismissed(true);
+    try {
+      localStorage.setItem("snapify-coach-dismissed", "1");
+    } catch {
+      // Private mode. Dismissal lasts the session.
+    }
+  }, []);
+
   const dismissToast = useCallback((id: number) => {
     setToasts((t) => t.filter((x) => x.id !== id));
   }, []);
@@ -252,6 +347,15 @@ export default function App() {
   }, []);
 
   const closeSettings = useCallback(() => {
+    // Closing without Apply abandons the preview: the preview never
+    // persisted, so restoring the base snapshot is a pure state switch.
+    const base = previewBaseRef.current;
+    previewBaseRef.current = null;
+    if (base) {
+      setLayout(clonePanes(base.panes));
+      setPreset(base.preset);
+      setPreviewing(false);
+    }
     if (settingsTimer.current) window.clearTimeout(settingsTimer.current);
     setSettingsOpen(false);
     setSettingsClosing(false);
@@ -592,6 +696,19 @@ export default function App() {
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) {
         return;
       }
+      // Layout undo: Ctrl+Z (or Cmd+Z) while editing restores the last
+      // geometry snapshot. Guarded to edit mode so game-time chords pass.
+      if (
+        editingRef.current &&
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        !e.shiftKey &&
+        (e.key === "z" || e.key === "Z")
+      ) {
+        e.preventDefault();
+        undoLayoutRef.current();
+        return;
+      }
       const kb = keybindsRef.current;
       if (acceleratorMatchesEvent(kb.cyclePreset, e)) {
         e.preventDefault();
@@ -736,8 +853,6 @@ export default function App() {
     () => trackIdRef.current && void fetchLyrics(trackIdRef.current),
     [fetchLyrics],
   );
-  const applyPresetRef = useRef<(name: string) => void>(() => {});
-  const queueBrowseCb = useCallback(() => applyPresetRef.current("full"), []);
   const browsePlayContextCb = useCallback(
     (uri: string) => void run(() => api.playContext(uri, snap.deviceId ?? sdkDeviceId)),
     [snap.deviceId, sdkDeviceId, run],
@@ -776,6 +891,10 @@ export default function App() {
   }, [flashErr]);
 
   const cyclePreset = useCallback(() => {
+    // Explicit user action: snapshot for undo, persist, leave preview mode.
+    pushUndoSnapshot();
+    previewBaseRef.current = null;
+    setPreviewing(false);
     setPreset((cur) => {
       const i = PRESET_ORDER.indexOf(cur);
       const next = PRESET_ORDER[(i + 1 + PRESET_ORDER.length) % PRESET_ORDER.length];
@@ -784,25 +903,57 @@ export default function App() {
       persist(nl.panes, next);
       return next;
     });
-  }, [persist]);
+  }, [persist, pushUndoSnapshot]);
   useEffect(() => {
     cyclePresetRef.current = cyclePreset;
   }, [cyclePreset]);
 
-  const applyPreset = useCallback(
-    (name: string) => {
-      if (!PRESETS[name]) return;
-      const nl = PRESETS[name]();
-      const panes = clampLayoutToArea(nl, window.innerWidth, window.innerHeight, uiScaleRef.current).panes;
-      setLayout(panes);
-      setPreset(name);
-      persist(panes, name);
-    },
-    [persist],
-  );
-  useEffect(() => {
-    applyPresetRef.current = applyPreset;
-  }, [applyPreset]);
+  // Preset preview without persist: selecting a preset repaints the stage
+  // from the preset factory but writes nothing to snapify-layout-v3. The
+  // first preview snapshots the live arrangement; switching between presets
+  // keeps previewing from that same base until Apply or Revert.
+  const previewPreset = useCallback((name: string) => {
+    if (!PRESETS[name]) return;
+    if (!previewBaseRef.current) {
+      previewBaseRef.current = {
+        panes: clonePanes(layoutRef.current),
+        preset: presetRef.current,
+      };
+    }
+    const nl = PRESETS[name]();
+    const panes = clampLayoutToArea(
+      nl,
+      window.innerWidth,
+      window.innerHeight,
+      uiScaleRef.current,
+    ).panes;
+    setLayout(panes);
+    setPreset(name);
+    setPreviewing(true);
+  }, []);
+
+  // Explicit Apply: the pre-preview base becomes the undo step (one Ctrl+Z
+  // returns to the custom arrangement), then the preview persists.
+  const confirmPresetPreview = useCallback(() => {
+    const base = previewBaseRef.current;
+    previewBaseRef.current = null;
+    setPreviewing(false);
+    if (base) setUndoStack((prev) => pushLayoutUndo(prev, base));
+    setLayout((l) => {
+      persist(l, presetRef.current);
+      return l;
+    });
+  }, [persist]);
+
+  // Explicit Revert: drop the preview, restore the untouched base.
+  const cancelPresetPreview = useCallback(() => {
+    const base = previewBaseRef.current;
+    previewBaseRef.current = null;
+    setPreviewing(false);
+    if (!base) return;
+    setLayout(clonePanes(base.panes));
+    setPreset(base.preset);
+  }, []);
 
   // Opacity slider fires per tick: paint immediately, persist debounced.
   const opacityTimer = useRef(0);
@@ -828,36 +979,20 @@ export default function App() {
 
   const togglePaneType = useCallback(
     (type: PaneType) => {
+      // Geometry op: snapshot first. The helper flips one pane's visible
+      // flag (or appends it) and copies every other pane untouched, so
+      // toggling off and on restores the exact geometry.
+      pushUndoSnapshot();
+      previewBaseRef.current = null;
+      setPreviewing(false);
       setLayout((l) => {
-        const existing = l.find((x) => x.type === type);
-        let panes: PaneState[];
-        if (existing) {
-          panes = l.map((x) => (x.type === type ? { ...x, visible: !x.visible } : x));
-        } else {
-          const z = l.reduce((m, x) => Math.max(m, x.z), 0) + 1;
-          const n = l.length;
-          const min = getPaneMin(type);
-          panes = [
-            ...l,
-            {
-              id: `${type}-${Date.now() % 100000}`,
-              type,
-              x: 40 + n * 32,
-              y: 40 + n * 32,
-              w: Math.max(min.w, type === "lyrics" ? 420 : type === "browse" ? 380 : 340),
-              h: Math.max(min.h, type === "lyrics" ? 380 : type === "browse" ? 480 : 230),
-              opacity: 0.92,
-              visible: true,
-              z,
-            },
-          ];
-        }
+        const panes = togglePaneVisibility(l, type);
         persist(panes, "custom");
         return panes;
       });
       setPreset("custom");
     },
-    [persist],
+    [persist, pushUndoSnapshot],
   );
 
   // Queue "Next from" navigation: reveal the browse pane when hidden, then
@@ -869,6 +1004,23 @@ export default function App() {
     },
     [layout, togglePaneType],
   );
+
+  // Queue empty-state "Browse" button: non-destructive reveal of the browse
+  // pane. The old path applied the full preset, wiping custom geometry;
+  // this only flips/adds browse and leaves every other pane alone.
+  const queueBrowseCb = useCallback(() => {
+    if (layoutRef.current.some((p) => p.type === "browse" && p.visible)) return;
+    pushUndoSnapshot();
+    previewBaseRef.current = null;
+    setPreviewing(false);
+    setLayout((l) => {
+      const panes = revealPaneType(l, "browse");
+      if (panes === l) return l;
+      persist(panes, "custom");
+      return panes;
+    });
+    setPreset("custom");
+  }, [persist, pushUndoSnapshot]);
 
   const changeKeybind = useCallback(
     async (action: KeybindAction, accelerator: string) => {
@@ -1049,6 +1201,8 @@ export default function App() {
     e.stopPropagation();
     const pane = layout.find((x) => x.id === id);
     if (!pane) return;
+    // One undo step per grab: the snapshot predates the whole gesture.
+    pushUndoSnapshot();
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     // Bring to front on grab.
     const top = layout.reduce((m, x) => Math.max(m, x.z), 0);
@@ -1310,7 +1464,7 @@ export default function App() {
   };
 
   return (
-    <div className="app" data-theme={theme}>
+    <div className="app" data-theme={theme} data-surface={surface} data-corners={corners}>
       {!loggedIn ? (
         <div className="gate">
           <div className="pane gate-card">
@@ -1361,10 +1515,11 @@ export default function App() {
               else void win.show().then(() => setVisible(true));
             }}
             title={`Show / Hide window (${keybinds.toggleVisibility})`}
-            aria-label="Show or hide window"
+            aria-label={visible ? "Hide window" : "Show window"}
             aria-pressed={!visible}
           >
-            {visible ? <LockIcon size={15} /> : <UnlockIcon size={15} />}
+            {visible ? <EyeOffIcon size={15} /> : <EyeIcon size={15} />}
+            <span className="dock-label">{visible ? "Hide" : "Show"}</span>
           </button>
           <button
             className="tbtn"
@@ -1373,7 +1528,8 @@ export default function App() {
             aria-label="Toggle edit lock"
             aria-pressed={editing}
           >
-            <ListIcon size={15} />
+            <PencilIcon size={15} />
+            <span className="dock-label">{editing ? "Lock" : "Edit"}</span>
           </button>
           <button
             className="tbtn"
@@ -1382,7 +1538,18 @@ export default function App() {
             aria-label="Toggle interact"
             aria-pressed={interactive}
           >
-            <SlidersIcon size={15} />
+            <CursorIcon size={15} />
+            <span className="dock-label">{interactive ? "Pass" : "Interact"}</span>
+          </button>
+          <button
+            className="tbtn"
+            onClick={() => undoLayout()}
+            title="Undo layout change (Ctrl+Z in edit mode)"
+            aria-label="Undo layout change"
+            disabled={undoStack.length === 0}
+          >
+            <UndoIcon size={15} />
+            <span className="dock-label">Undo</span>
           </button>
           <span className="dock-sep" aria-hidden="true" />
           {PANE_TYPES.map((t) => {
@@ -1406,7 +1573,8 @@ export default function App() {
             title="Settings"
             aria-label="Open settings"
           >
-            <SlidersIcon size={15} />
+            <GearIcon size={15} />
+            <span className="dock-label">Settings</span>
           </button>
           <button
             className="tbtn"
@@ -1417,7 +1585,8 @@ export default function App() {
             title={`Pass through (${keybinds.toggleInteract}, Esc)`}
             aria-label="Pass through to game"
           >
-            <UnlockIcon size={15} />
+            <ThroughIcon size={15} />
+            <span className="dock-label">Done</span>
           </button>
           <button
             className="tbtn"
@@ -1425,7 +1594,8 @@ export default function App() {
             title={`Cycle preset (${keybinds.cyclePreset})`}
             aria-label="Cycle preset"
           >
-            <ListIcon size={15} />
+            <GridIcon size={15} />
+            <span className="dock-label">Preset</span>
           </button>
           <button
             className="tbtn"
@@ -1434,8 +1604,19 @@ export default function App() {
             aria-label="Close"
           >
             <XIcon size={15} />
+            <span className="dock-label">Close</span>
           </button>
         </div>
+      )}
+
+      {loggedIn && !coachDismissed && (
+        <button
+          className="hint-chip"
+          onClick={dismissCoach}
+          aria-label="Dismiss shortcut hint"
+        >
+          Shift+Tab to interact · Esc to pass through — click to dismiss
+        </button>
       )}
 
       <div className="toasts" role="status" aria-live="polite">
@@ -1499,12 +1680,17 @@ export default function App() {
         uiScale={uiScale}
         theme={theme}
         density={density}
+        surface={surface}
+        corners={corners}
         autostart={autostart}
         interactive={interactive}
         clickToSeek={clickToSeek}
         wordKaraoke={wordKaraoke}
         transLang={transLang}
-        onPreset={applyPreset}
+        previewing={previewing}
+        onPreset={previewPreset}
+        onApplyPreset={confirmPresetPreview}
+        onRevertPreset={cancelPresetPreview}
         onUiScale={setUiScale}
         onTheme={(v) => {
           setTheme(v);
@@ -1520,6 +1706,22 @@ export default function App() {
             localStorage.setItem("snapify-density", v);
           } catch {
             // Private mode. Density lasts the session.
+          }
+        }}
+        onSurface={(v) => {
+          setSurface(v);
+          try {
+            localStorage.setItem("snapify-surface", v);
+          } catch {
+            // Private mode. Surface lasts the session.
+          }
+        }}
+        onCorners={(v) => {
+          setCorners(v);
+          try {
+            localStorage.setItem("snapify-corners", v);
+          } catch {
+            // Private mode. Corners last the session.
           }
         }}
         onAutostart={(v) => {
@@ -1556,6 +1758,9 @@ export default function App() {
           }
         }}
         onResetLayout={() => {
+          pushUndoSnapshot();
+          previewBaseRef.current = null;
+          setPreviewing(false);
           const fresh = defaultLayoutFor(window.innerWidth, window.innerHeight);
           setLayout(fresh.panes);
           setPreset(fresh.preset);

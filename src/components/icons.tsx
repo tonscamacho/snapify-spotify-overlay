@@ -6,7 +6,9 @@ import type { ReactNode } from "react";
 // RepeatOneIcon<->repeat-1.svg, VolumeIcon<->volume.svg, ListIcon<->queue.svg,
 // MicIcon<->lyrics-mic.svg, SlidersIcon<->settings.svg, LockIcon<->lock.svg,
 // UnlockIcon<->unlock.svg, MinusIcon<->minimize.svg, XIcon<->close.svg,
-// NoteIcon<->note.svg, RefreshIcon<->refresh.svg. Keep paths in sync there.
+// NoteIcon<->note.svg, RefreshIcon<->refresh.svg. Dock-only glyphs with no
+// pack counterpart: EyeIcon, EyeOffIcon, PencilIcon, CursorIcon, GearIcon,
+// GridIcon, UndoIcon, ThroughIcon. Keep paths in sync there.
 
 interface IconProps {
   size?: number;
@@ -228,5 +230,74 @@ export const OpenIcon = (p: IconProps) => (
     <path d="M14 4h6v6" />
     <path d="M20 4 11 13" />
     <path d="M19 13.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5.5" />
+  </Base>
+);
+
+// Dock-only glyphs: one distinct silhouette per dock control so no two
+// buttons share an icon. Same 24-grid stroke language as above.
+
+export const EyeIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
+    <circle cx="12" cy="12" r="3" />
+  </Base>
+);
+
+export const EyeOffIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M4 4l16 16" />
+    <path d="M9.9 6A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17.4 17.4 0 0 1-3.4 4" />
+    <path d="M6 7.4A16.4 16.4 0 0 0 2.5 12S6 18.5 12 18.5c1.1 0 2.2-.2 3.1-.6" />
+  </Base>
+);
+
+export const PencilIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M4 20l1-4.2L16.6 4.2a2.12 2.12 0 0 1 3 3L8 18.8z" />
+    <path d="M14.6 6.2l3 3" />
+  </Base>
+);
+
+export const CursorIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M5.5 3.5 19 12l-7.2 1.4L8.4 20.5z" />
+  </Base>
+);
+
+export const GearIcon = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="12" cy="12" r="3.2" />
+    <path d="M12 2.8v2.6" />
+    <path d="M12 18.6v2.6" />
+    <path d="M2.8 12h2.6" />
+    <path d="M18.6 12h2.6" />
+    <path d="M5.5 5.5l1.8 1.8" />
+    <path d="M16.7 16.7l1.8 1.8" />
+    <path d="M18.5 5.5l-1.8 1.8" />
+    <path d="M7.3 16.7l-1.8 1.8" />
+  </Base>
+);
+
+export const GridIcon = (p: IconProps) => (
+  <Base {...p}>
+    <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
+    <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
+    <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
+    <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
+  </Base>
+);
+
+export const UndoIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M8.5 5.5 4 10l4.5 4.5" />
+    <path d="M4 10h10a6 6 0 0 1 0 12h-3" />
+  </Base>
+);
+
+export const ThroughIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M14 4H6a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h8" />
+    <path d="M11 12h9" />
+    <path d="m16.5 8.5 3.5 3.5-3.5 3.5" />
   </Base>
 );

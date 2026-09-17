@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { TRANS_LANGS, type TransLang } from "../lib/translate";
-import type { Density } from "../lib/types";
+import type { Density, Surface, Corners } from "../lib/types";
 import {
   KEYBIND_LABELS,
   KEYBIND_ORDER,
@@ -19,6 +19,8 @@ interface Props {
   uiScale: number;
   theme: "dark" | "light";
   density: Density;
+  surface: Surface;
+  corners: Corners;
   autostart: boolean;
   interactive: boolean;
   editing?: boolean;
@@ -30,9 +32,14 @@ interface Props {
   appVersion: string;
   update: UpdateStatus;
   onPreset: (name: string) => void;
+  onApplyPreset: () => void;
+  onRevertPreset: () => void;
+  previewing: boolean;
   onUiScale: (v: number) => void;
   onTheme: (v: "dark" | "light") => void;
   onDensity: (v: Density) => void;
+  onSurface: (v: Surface) => void;
+  onCorners: (v: Corners) => void;
   onAutostart: (v: boolean) => void;
   onInteractToggle: () => void;
   onEditToggle?: () => void;
@@ -237,6 +244,36 @@ export default function SettingsModal(p: Props) {
           </span>
         </div>
         <div className="row">
+          <span>Surface</span>
+          <span className="seg" role="group" aria-label="Surface">
+            {(["solid", "glass"] as const).map((n) => (
+              <button
+                key={n}
+                className={p.surface === n ? "seg-on" : ""}
+                onClick={() => p.onSurface(n)}
+                aria-pressed={p.surface === n}
+              >
+                {n}
+              </button>
+            ))}
+          </span>
+        </div>
+        <div className="row">
+          <span>Corners</span>
+          <span className="seg" role="group" aria-label="Corners">
+            {(["rounded", "sharp"] as const).map((n) => (
+              <button
+                key={n}
+                className={p.corners === n ? "seg-on" : ""}
+                onClick={() => p.onCorners(n)}
+                aria-pressed={p.corners === n}
+              >
+                {n}
+              </button>
+            ))}
+          </span>
+        </div>
+        <div className="row">
           <span>Preset</span>
           <span className="seg" role="group" aria-label="Preset">
             {(["minimal", "full", "lyrics", "spotlight"] as const).map((n) => (
@@ -251,6 +288,26 @@ export default function SettingsModal(p: Props) {
             ))}
           </span>
         </div>
+        {p.previewing && (
+          <>
+            <div className="row">
+              <span>Previewing preset</span>
+              <span style={{ display: "inline-flex", gap: 8 }}>
+                <button className="btn sm primary" onClick={p.onApplyPreset}>
+                  Apply
+                </button>
+                <button className="btn sm" onClick={p.onRevertPreset}>
+                  Revert
+                </button>
+              </span>
+            </div>
+            <div className="hint">
+              Selecting a preset only previews it — nothing is saved yet.
+              Apply keeps the preview, Revert (or closing Settings) restores
+              your previous arrangement.
+            </div>
+          </>
+        )}
         <div className="row">
           <span>UI scale</span>
           <input

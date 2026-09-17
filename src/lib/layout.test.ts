@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   clampLayoutToArea,
+  clonePanes,
   defaultLayoutFor,
   getPaneMin,
+  LAYOUT_UNDO_DEPTH,
+  newPaneForType,
   PANE_MIN,
+  pushLayoutUndo,
+  revealPaneType,
   snapMove,
   snapSize,
+  togglePaneVisibility,
 } from "./layout";
-import type { LayoutState, PaneState, PaneType } from "./types";
+import type { LayoutState, LayoutUndoEntry, PaneState, PaneType } from "./types";
 
 function pane(over: Partial<PaneState> = {}): PaneState {
   return {
@@ -264,5 +270,119 @@ describe("snapSize", () => {
   it("does nothing when no edges are dragged", () => {
     const r = snapSize(pane({ x: 2, y: 3, w: 300, h: 200 }), [], 800, 600, noEdges);
     expect(r).toEqual({ x: 2, y: 3, w: 300, h: 200, gv: [], gh: [] });
+  });
+});
+
+describe("clonePanes", () => {
+  it("deep-copies so snapshots never alias live panes", () => {
+    const live = [pane({ id: "a", x: 10 })];
+    const snap = clonePanes(live);
+    live[0].x = 999;
+    expect(snap[0].x).toBe(10);
+  });
+});
+
+describe("pushLayoutUndo", () => {
+  const entry = (id: string): LayoutUndoEntry => ({
+    panes: [pane({ id })],
+    preset: "custom",
+  });
+
+  it("appends entries in order", () => {
+    const out = pushLayoutUndo(pushLayoutUndo([], entry("a")), entry("b"));
+    expect(out.map((e) => e.panes[0].id)).toEqual(["a", "b"]);
+  });
+
+  it("caps the stack at LAYOUT_UNDO_DEPTH", () => {
+    expect(LAYOUT_UNDO_DEPTH).toBe(20);
+    let stack: LayoutUndoEntry[] = [];
+    for (let i = 0; i < 25; i++) stack = pushLayoutUndo(stack, entry(`p${i}`));
+    expect(stack).toHaveLength(20);
+    // Oldest dropped, newest kept.
+    expect(stack[0].panes[0].id).toBe("p5");
+    expect(stack[19].panes[0].id).toBe("p24");
+  });
+
+  it("copies entry panes so later mutation cannot corrupt history", () => {
+    const panes = [pane({ id: "a", x: 1 })];
+    const stack = pushLayoutUndo([], { panes, preset: "custom" });
+    panes[0].x = 777;
+    expect(stack[0].panes[0].x).toBe(1);
+  });
+
+  it("does not mutate the input stack", () => {
+    const base = pushLayoutUndo([], entry("a"));
+    pushLayoutUndo(base, entry("b"));
+    expect(base).toHaveLength(1);
+  });
+});
+
+describe("togglePaneVisibility", () => {
+  it("hides a visible pane without touching its geometry", () => {
+    const l = [pane({ id: "a", x: 111, y: 222, w: 300, h: 200 })];
+    const out = togglePaneVisibility(l, "player");
+    expect(out[0]).toMatchObject({ x: 111, y: 222, w: 300, h: 200, visible: false });
+  });
+
+  it("restores the exact geometry when toggled back on", () => {
+    const l = [pane({ id: "a", x: 111, y: 222, w: 300, h: 200 })];
+    const off = togglePaneVisibility(l, "player");
+    const on = togglePaneVisibility(off, "player");
+    expect(on[0]).toMatchObject({ x: 111, y: 222, w: 300, h: 200, visible: true });
+  });
+
+  it("leaves sibling panes untouched", () => {
+    const l = [
+      pane({ id: "a", type: "player", x: 10, y: 10 }),
+      pane({ id: "b", type: "queue", x: 400, y: 50, w: 300, h: 236 }),
+    ];
+    const out = togglePaneVisibility(l, "player");
+    expect(out[1]).toEqual(l[1]);
+    expect(out[0]).toMatchObject({ visible: false, x: 10, y: 10 });
+  });
+
+  it("appends a missing type with content-floor geometry", () => {
+    const out = togglePaneVisibility([pane({ id: "a" })], "browse");
+    expect(out).toHaveLength(2);
+    expect(out[1]).toMatchObject({ type: "browse", visible: true });
+    expect(out[1].w).toBeGreaterThanOrEqual(PANE_MIN.browse.w);
+    expect(out[1].h).toBeGreaterThanOrEqual(PANE_MIN.browse.h);
+  });
+});
+
+describe("revealPaneType", () => {
+  it("returns the input untouched when the pane is already visible", () => {
+    const l = [pane({ id: "a", x: 77, y: 88 })];
+    expect(revealPaneType(l, "player")).toBe(l);
+  });
+
+  it("reveals a hidden pane while preserving its geometry", () => {
+    const l = [pane({ id: "a", x: 77, y: 88, w: 300, h: 200, visible: false })];
+    const out = revealPaneType(l, "player");
+    expect(out[0]).toMatchObject({ x: 77, y: 88, w: 300, h: 200, visible: true });
+  });
+
+  it("never moves siblings when revealing", () => {
+    const l = [
+      pane({ id: "a", type: "player", x: 10, y: 10 }),
+      pane({ id: "b", type: "browse", x: 500, y: 60, w: 380, h: 480, visible: false }),
+    ];
+    const out = revealPaneType(l, "browse");
+    expect(out[0]).toEqual(l[0]);
+    expect(out[1]).toMatchObject({ x: 500, y: 60, visible: true });
+  });
+
+  it("appends the type when missing entirely", () => {
+    const out = revealPaneType([pane({ id: "a" })], "browse");
+    expect(out).toHaveLength(2);
+    expect(out[1]).toMatchObject({ type: "browse", visible: true });
+  });
+});
+
+describe("newPaneForType", () => {
+  it("cascades below existing panes and stacks z on top", () => {
+    const l = [pane({ id: "a", z: 4 }), pane({ id: "b", z: 7 })];
+    const n = newPaneForType(l, "queue", "queue-1");
+    expect(n).toMatchObject({ id: "queue-1", type: "queue", x: 104, y: 104, z: 8, visible: true });
   });
 });

@@ -4,6 +4,14 @@ export type PaneType = "player" | "lyrics" | "queue" | "visualizer" | "browse";
  *  panes, spacious airs out large ones. Orthogonal to pane size. */
 export type Density = "compact" | "default" | "spacious";
 
+/** Pane surface finish. Solid is the opaque default; glass is an
+ *  opt-in Apple Liquid Glass look (translucent + backdrop blur). */
+export type Surface = "solid" | "glass";
+
+/** Pane/control corner style. Rounded is the default; sharp zeroes
+ *  the radius vars (pill shapes like dock/chips keep 999px). */
+export type Corners = "rounded" | "sharp";
+
 export interface PaneState {
   id: string;
   type: PaneType;
@@ -21,6 +29,14 @@ export interface LayoutState {
   version: 3;
   preset: string;
   panes: PaneState[];
+}
+
+/** One layout-undo step: a deep snapshot of the panes plus the preset
+ *  label. The App keeps a bounded stack (see LAYOUT_UNDO_DEPTH in
+ *  layout.ts); Ctrl+Z in edit mode pops the last entry. */
+export interface LayoutUndoEntry {
+  panes: PaneState[];
+  preset: string;
 }
 
 export interface TrackInfo {

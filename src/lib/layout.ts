@@ -1,4 +1,4 @@
-import type { LayoutState, PaneState, PaneType } from "./types";
+import type { LayoutState, LayoutUndoEntry, PaneState, PaneType } from "./types";
 
 const KEY = "snapify-layout-v3";
 const LEGACY_KEYS = ["snapify-layout-v2", "nebula-layout-v1"];
@@ -60,6 +60,78 @@ export const PRESETS: Record<string, () => LayoutState> = {
     ],
   }),
 };
+
+/** Maximum layout-undo steps kept. Ctrl+Z in edit mode pops the last. */
+export const LAYOUT_UNDO_DEPTH = 20;
+
+/** Deep copy so undo snapshots never alias live pane objects. */
+export function clonePanes(panes: PaneState[]): PaneState[] {
+  return panes.map((p) => ({ ...p }));
+}
+
+/** Push a snapshot, dropping the oldest entries past the cap. Pure: the
+ *  input stack and entry panes are copied, never mutated or aliased. */
+export function pushLayoutUndo(
+  stack: LayoutUndoEntry[],
+  entry: LayoutUndoEntry,
+  cap: number = LAYOUT_UNDO_DEPTH,
+): LayoutUndoEntry[] {
+  const next = [...stack, { panes: clonePanes(entry.panes), preset: entry.preset }];
+  return next.length > cap ? next.slice(next.length - cap) : next;
+}
+
+/** Default geometry for a newly added pane of a type. Matches the cascade
+ *  the editor used historically so toggles keep their old placement. */
+export function newPaneForType(panes: PaneState[], type: PaneType, id?: string): PaneState {
+  const z = panes.reduce((m, x) => Math.max(m, x.z), 0) + 1;
+  const n = panes.length;
+  const min = getPaneMin(type);
+  return {
+    id: id ?? `${type}-${Date.now() % 100000}`,
+    type,
+    x: 40 + n * 32,
+    y: 40 + n * 32,
+    w: Math.max(min.w, type === "lyrics" ? 420 : type === "browse" ? 380 : 340),
+    h: Math.max(min.h, type === "lyrics" ? 380 : type === "browse" ? 480 : 230),
+    opacity: DEFAULT_OPACITY,
+    visible: true,
+    z,
+  };
+}
+
+/** Flip one pane type visible/hidden, appending it when missing. Every other
+ *  pane keeps its exact geometry, so toggle off/on always restores. Pure. */
+export function togglePaneVisibility(
+  panes: PaneState[],
+  type: PaneType,
+  id?: string,
+): PaneState[] {
+  const existing = panes.find((x) => x.type === type);
+  if (existing) {
+    return panes.map((x) =>
+      x.type === type ? { ...x, visible: !x.visible } : { ...x },
+    );
+  }
+  return [...panes.map((p) => ({ ...p })), newPaneForType(panes, type, id)];
+}
+
+/** Non-destructive reveal: make one pane type visible without touching any
+ *  other pane's geometry. Returns the input array untouched when the pane
+ *  is already visible so callers can skip persist/setState. Pure. */
+export function revealPaneType(
+  panes: PaneState[],
+  type: PaneType,
+  id?: string,
+): PaneState[] {
+  const existing = panes.find((x) => x.type === type);
+  if (existing) {
+    if (existing.visible) return panes;
+    return panes.map((x) =>
+      x.type === type ? { ...x, visible: true } : { ...x },
+    );
+  }
+  return [...panes.map((p) => ({ ...p })), newPaneForType(panes, type, id)];
+}
 
 export function defaultLayout(): LayoutState {
   return PRESETS.full();
