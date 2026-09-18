@@ -98,25 +98,42 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-fn register_shortcuts(app: &tauri::AppHandle, map: &HashMap<String, String>) {
+fn register_shortcuts(app: &tauri::AppHandle, map: &HashMap<String, String>) -> Vec<String> {
+    let mut failed: Vec<String> = Vec::new();
     for action in keybinds::GLOBAL_ACTIONS {
         let Some(acc) = map.get(*action) else { continue };
         let Ok(shortcut) = acc.parse::<tauri_plugin_global_shortcut::Shortcut>() else {
-            eprintln!("global shortcut {action} skipped: cannot parse \"{acc}\"");
+            let msg = format!("{action} (\"{acc}\"): cannot parse shortcut");
+            eprintln!("global shortcut {msg}");
+            failed.push(msg);
             continue;
         };
         match app.global_shortcut().register(shortcut) {
             Ok(()) => {}
-            Err(e) => eprintln!("global shortcut {action} (\"{acc}\") not registered: {e}"),
+            Err(e) => {
+                let msg = format!("{action} (\"{acc}\"): {e}");
+                eprintln!("global shortcut {action} (\"{acc}\") not registered: {e}");
+                failed.push(msg);
+            }
         }
     }
+    failed
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // A second launch focuses the live window instead of silently
+            // exiting. show() first so a hidden window never swallows the
+            // relaunch without a trace.
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![]),
@@ -141,6 +158,18 @@ pub fn run() {
                         }
                         Some(s) if s == keybinds::ACTION_NEXT => {
                             let _ = app.emit("shortcut-next", ());
+                        }
+                        Some(s) if s == keybinds::ACTION_MUTE => {
+                            let _ = app.emit("shortcut-mute", ());
+                        }
+                        Some(s) if s == keybinds::ACTION_LIKE => {
+                            let _ = app.emit("shortcut-like", ());
+                        }
+                        Some(s) if s == keybinds::ACTION_SEEK_BACK => {
+                            let _ = app.emit("shortcut-seek-back", ());
+                        }
+                        Some(s) if s == keybinds::ACTION_SEEK_FWD => {
+                            let _ = app.emit("shortcut-seek-forward", ());
                         }
                         Some(s) if s == keybinds::ACTION_INTERACT => {
                             toggle_interactive(app);
@@ -175,7 +204,8 @@ pub fn run() {
             if let Err(e) = build_tray(&app.handle()) {
                 eprintln!("tray init failed: {e}");
             }
-            register_shortcuts(&app.handle(), &map);
+            let shortcut_issues = register_shortcuts(&app.handle(), &map);
+            app.manage(keybinds::KeybindIssues(Mutex::new(shortcut_issues)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -241,6 +271,7 @@ pub fn run() {
             overlay::set_overlay_mode,
             overlay::set_overlay_regions,
             keybinds::get_keybinds,
+            keybinds::keybind_startup_errors,
             keybinds::set_keybind,
             keybinds::reset_keybinds,
         ])

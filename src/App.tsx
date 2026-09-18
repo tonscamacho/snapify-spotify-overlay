@@ -45,6 +45,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import {
   PRESETS,
   clampLayoutToArea,
+  clampPaneToArea,
   clonePanes,
   defaultLayoutFor,
   getPaneMin,
@@ -98,6 +99,32 @@ const PANE_TITLES: Record<PaneType, string> = {
   visualizer: "Visualizer",
   browse: "Browse",
 };
+
+const HANDLE_LABELS: Record<Handle, string> = {
+  n: "top edge",
+  s: "bottom edge",
+  e: "right edge",
+  w: "left edge",
+  ne: "top right corner",
+  nw: "top left corner",
+  se: "bottom right corner",
+  sw: "bottom left corner",
+};
+
+/** Arrow-key nudge step for keyboard move/resize, in logical px. */
+const KB_STEP = 8;
+
+/** Focused pane for keyboard geometry: the pane holding DOM focus, else
+ *  the topmost visible pane so Alt+Arrows always has a target. */
+function resolveKeyboardPane(panes: PaneState[]): PaneState | null {
+  const vis = panes.filter((p) => p.visible);
+  if (vis.length === 0) return null;
+  const el = document.activeElement as HTMLElement | null;
+  const id = el?.closest?.("section[data-pane-id]")?.getAttribute("data-pane-id");
+  const hit = id ? vis.find((p) => p.id === id) : undefined;
+  if (hit) return hit;
+  return vis.reduce((a, b) => (b.z > a.z ? b : a));
+}
 
 /** Display name for a queue context. One lookup per context, silent on
  *  failure so a throttled name never breaks the queue itself. */
@@ -230,6 +257,9 @@ export default function App() {
   const [autostart, setAutostart] = useState(false);
   const [keybinds, setKeybinds] = useState<KeybindMap>({ ...DEFAULT_KEYBINDS });
   const keybindsRef = useRef<KeybindMap>({ ...DEFAULT_KEYBINDS });
+  // Busy/conflicting global registrations from Rust startup, shown per-row
+  // in Settings. Empty when every chord grabbed cleanly.
+  const [keybindStartup, setKeybindStartup] = useState<string[]>([]);
   const [appVersion, setAppVersion] = useState("");
   const [update, setUpdate] = useState<UpdateStatus>({ kind: "idle" });
   const updateRef = useRef<Update | null>(null);
@@ -273,6 +303,16 @@ export default function App() {
     origW: number;
     origH: number;
   } | null>(null);
+  const guidesTimer = useRef(0);
+  // Keyboard-burst coalescing: the first Alt+Arrow snapshots for undo,
+  // repeats within a second share that step so a held key stays one Ctrl+Z.
+  const kbBurstRef = useRef(false);
+  const kbBurstTimer = useRef(0);
+  // Pre-mute level for the mute toggle; unmute restores it.
+  const mutePrevRef = useRef<number | null>(null);
+  // Resize-handle keyboard engagement: one undo snapshot per focus visit,
+  // like one snapshot per pointer grab.
+  const handleUndoElRef = useRef<unknown>(null);
 
   const persist = useCallback((panes: PaneState[], name: string) => {
     saveLayout({ version: 3, preset: name, panes });
@@ -324,6 +364,97 @@ export default function App() {
   useEffect(() => {
     undoLayoutRef.current = undoLayout;
   }, [undoLayout]);
+
+  /** Show snap guides briefly for keyboard geometry ops (no pointer-up). */
+  const flashGuides = useCallback((v: number[], h: number[]) => {
+    setGuides({ v, h });
+    if (guidesTimer.current) window.clearTimeout(guidesTimer.current);
+    guidesTimer.current = window.setTimeout(() => setGuides({ v: [], h: [] }), 600);
+  }, []);
+
+  /** Snapshot once per keyboard burst; repeats within a second coalesce. */
+  const pushUndoBurst = useCallback(() => {
+    if (!kbBurstRef.current) {
+      kbBurstRef.current = true;
+      pushUndoSnapshot();
+    }
+    if (kbBurstTimer.current) window.clearTimeout(kbBurstTimer.current);
+    kbBurstTimer.current = window.setTimeout(() => {
+      kbBurstRef.current = false;
+    }, 1000);
+  }, [pushUndoSnapshot]);
+
+  /** Keyboard move/resize of the focused pane. Same snap, clamp, persist,
+   *  and undo path as a pointer drag, anchored top-left for resize. */
+  const keyboardGeometry = useCallback(
+    (kind: "move" | "resize", key: string) => {
+      const panes = layoutRef.current.map((x) => ({ ...x }));
+      const m = resolveKeyboardPane(panes);
+      if (!m) return;
+      const k = uiScaleRef.current || 1;
+      const areaW = window.innerWidth / k;
+      const areaH = window.innerHeight / k;
+      const min = getPaneMin(m.type);
+      pushUndoBurst();
+      if (kind === "move") {
+        const dx = key === "ArrowLeft" ? -KB_STEP : key === "ArrowRight" ? KB_STEP : 0;
+        const dy = key === "ArrowUp" ? -KB_STEP : key === "ArrowDown" ? KB_STEP : 0;
+        const c = clampPaneToArea(
+          {
+            ...m,
+            x: Math.round(m.x + dx),
+            y: Math.round(m.y + dy),
+          },
+          areaW,
+          areaH,
+        );
+        m.x = c.x;
+        m.y = c.y;
+        m.w = c.w;
+        m.h = c.h;
+        const s = snapMove(m, panes, areaW, areaH);
+        m.x = s.x;
+        m.y = s.y;
+        // Snap only catches within its threshold; pin fully inside like a drag.
+        m.x = Math.min(m.x, Math.max(0, Math.round(areaW - m.w)));
+        m.y = Math.min(m.y, Math.max(0, Math.round(areaH - m.h)));
+        flashGuides(s.v, s.h);
+      } else {
+        if (key === "ArrowRight") m.w += KB_STEP;
+        else if (key === "ArrowLeft") m.w -= KB_STEP;
+        else if (key === "ArrowDown") m.h += KB_STEP;
+        else if (key === "ArrowUp") m.h -= KB_STEP;
+        const c = clampPaneToArea(
+          { ...m, w: Math.max(min.w, Math.round(m.w)), h: Math.max(min.h, Math.round(m.h)) },
+          areaW,
+          areaH,
+        );
+        m.x = c.x;
+        m.y = c.y;
+        m.w = c.w;
+        m.h = c.h;
+        const s = snapSize(
+          m,
+          panes,
+          areaW,
+          areaH,
+          { east: true, south: true, west: false, north: false },
+        );
+        m.x = Math.round(s.x);
+        m.y = Math.round(s.y);
+        m.w = Math.round(s.w);
+        m.h = Math.round(s.h);
+        flashGuides(s.gv, s.gh);
+      }
+      setLayout(panes);
+      persist(panes, presetRef.current);
+    },
+    [flashGuides, persist, pushUndoBurst],
+  );
+  const keyboardGeometryRef = useRef<(kind: "move" | "resize", key: string) => void>(() => {});
+  useEffect(() => {
+    keyboardGeometryRef.current = keyboardGeometry;
+  }, [keyboardGeometry]);
 
   const dismissCoach = useCallback(() => {
     setCoachDismissed(true);
@@ -538,6 +669,12 @@ export default function App() {
         setKeybinds(next);
       })
       .catch(() => {});
+    // Busy/conflicting globals from Rust startup (mock returns null: ignore).
+    invoke<unknown>("keybind_startup_errors")
+      .then((v) => {
+        if (Array.isArray(v)) setKeybindStartup(v.map(String));
+      })
+      .catch(() => {});
     getVersion().then(setAppVersion).catch(() => {});
     void refreshAuth().then((ok) => {
       if (ok) {
@@ -664,12 +801,13 @@ export default function App() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  // In-app shortcuts. Global chords (play/pause, next, interact, edit,
-  // visibility) arrive as Tauri events even while focused, so they are
-  // handled only there to avoid double-firing. This listener keeps Esc plus
-  // the focused-only chords, matched against the stored keybinds so remaps
-  // keep working. Subscribed once; state flows through refs so layout
-  // changes and drags never re-subscribe.
+  // In-app shortcuts. Global chords (play/pause, next, mute, like, seek,
+  // interact, edit, visibility) arrive as Tauri events even while focused, so
+  // they are handled only there to avoid double-firing. This listener keeps
+  // Esc, Alt+Arrow keyboard move/resize, plus the focused-only chords,
+  // matched against the stored keybinds so remaps keep working. Subscribed
+  // once; state flows through refs so layout changes and drags never
+  // re-subscribe.
   const settingsOpenRef = useRef(settingsOpen);
   const editingRef = useRef(editing);
   const interactiveRef = useRef(interactive);
@@ -694,6 +832,25 @@ export default function App() {
       }
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) {
+        return;
+      }
+      // Keyboard move/resize: Alt+Arrows nudges the focused pane (snap,
+      // guides, persist, undo — same path as a drag); Alt+Shift+Arrows
+      // resizes it. Needs an unlocked overlay (edit or interact); a
+      // pass-through window never has focus, so game keys are untouched.
+      if (
+        e.altKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        (e.key === "ArrowLeft" ||
+          e.key === "ArrowRight" ||
+          e.key === "ArrowUp" ||
+          e.key === "ArrowDown")
+      ) {
+        if (settingsOpenRef.current) return;
+        if (!editingRef.current && !interactiveRef.current) return;
+        e.preventDefault();
+        keyboardGeometryRef.current(e.shiftKey ? "resize" : "move", e.key);
         return;
       }
       // Layout undo: Ctrl+Z (or Cmd+Z) while editing restores the last
@@ -818,6 +975,40 @@ export default function App() {
       }),
     [snap.deviceId, sdkDeviceId, run],
   );
+  // Remappable ±10 s seek for the global chords. Interpolates the base like
+  // the progress tick so rapid presses walk forward instead of re-seeking
+  // the last polled position.
+  const seekByCb = useCallback(
+    (deltaMs: number) => {
+      const s = snapRef.current;
+      if (!s.track) return;
+      const base = s.isPlaying ? s.progressMs + (Date.now() - s.fetchedAt) : s.progressMs;
+      const far = Math.round(base + deltaMs);
+      const next =
+        s.track.durationMs > 0 ? Math.min(Math.max(0, far), s.track.durationMs) : Math.max(0, far);
+      seekCb(next);
+    },
+    [seekCb],
+  );
+  // Remappable like toggle. App-level library call: the PlayerPane heart
+  // owns its own local state per track, so this path toasts instead.
+  const toggleLikeCb = useCallback(async () => {
+    const track = snapRef.current.track;
+    if (!track) return;
+    const shelf = track.uri.startsWith("spotify:episode:") ? "New Episodes" : "Liked Songs";
+    try {
+      const [saved] = await api.libraryContains([track.uri]);
+      if (saved) {
+        await api.libraryRemove([track.uri]);
+        pushToast("success", `Removed from ${shelf}`);
+      } else {
+        await api.librarySave([track.uri]);
+        pushToast("success", `Added to ${shelf}`);
+      }
+    } catch (e) {
+      flashErrThrottledAware(e instanceof Error ? e.message : String(e));
+    }
+  }, [flashErrThrottledAware, pushToast]);
   const volumeCb = useCallback(
     (v: number) => {
       setSnap((s) => ({ ...s, volume: v }));
@@ -826,6 +1017,17 @@ export default function App() {
     },
     [snap.deviceId, sdkDeviceId, run],
   );
+  // Remappable mute toggle: remembers the pre-mute level so unmute restores
+  // it instead of guessing.
+  const toggleMuteCb = useCallback(() => {
+    const cur = snapRef.current.volume ?? 50;
+    if (cur > 0) {
+      mutePrevRef.current = cur;
+      volumeCb(0);
+    } else {
+      volumeCb(mutePrevRef.current ?? 50);
+    }
+  }, [volumeCb]);
   const shuffleCb = useCallback(
     () => void run(() => api.shuffle(!snap.shuffle, snap.deviceId ?? sdkDeviceId)),
     [snap.shuffle, snap.deviceId, sdkDeviceId, run],
@@ -1141,6 +1343,12 @@ export default function App() {
       if (!s.track) return;
       void run(() => api.next(s.deviceId), { transport: "next" });
     });
+    const offMute = listen("shortcut-mute", () => toggleMuteCb());
+    const offLike = listen("shortcut-like", () => {
+      void toggleLikeCb();
+    });
+    const offSeekBack = listen("shortcut-seek-back", () => seekByCb(-10000));
+    const offSeekFwd = listen("shortcut-seek-forward", () => seekByCb(10000));
     const offToggle = listen("overlay-toggle-active", () => setInteractive((v) => !v));
     const offEdit = listen("shortcut-edit", () => setEditing((v) => !v));
     const offTrayEdit = listen("tray-toggle-edit", () => setEditing((v) => !v));
@@ -1163,11 +1371,11 @@ export default function App() {
         pushToast("error", m);
       }
     });
-    const all = [offPlay, offNext, offToggle, offEdit, offTrayEdit, offTrayPreset, offTraySettings, offVis, offSdk, offSdkErr];
+    const all = [offPlay, offNext, offMute, offLike, offSeekBack, offSeekFwd, offToggle, offEdit, offTrayEdit, offTrayPreset, offTraySettings, offVis, offSdk, offSdkErr];
     return () => {
       for (const off of all) void off.then((f) => f());
     };
-  }, [run, cyclePreset, pushToast]);
+  }, [run, cyclePreset, pushToast, toggleMuteCb, toggleLikeCb, seekByCb]);
 
   // Headless SDK: create/resume the player inside a user gesture (autoplay
   // policy). Armed once per login; a hidden or suspended webview stops
@@ -1229,6 +1437,8 @@ export default function App() {
   useEffect(
     () => () => {
       if (dragRaf.current) window.cancelAnimationFrame(dragRaf.current);
+      if (guidesTimer.current) window.clearTimeout(guidesTimer.current);
+      if (kbBurstTimer.current) window.clearTimeout(kbBurstTimer.current);
     },
     [],
   );
@@ -1353,6 +1563,89 @@ export default function App() {
     }
   };
 
+  /** Keyboard resize for one resize handle. Arrows drive the handle's own
+   *  edge(s) by KB_STEP with the same snap/clamp/persist path as a drag;
+   *  one undo snapshot per focus engagement, like one per pointer grab. */
+  const handleKeyResize = (e: React.KeyboardEvent, id: string, handle: Handle) => {
+    if (
+      e.key !== "ArrowLeft" &&
+      e.key !== "ArrowRight" &&
+      e.key !== "ArrowUp" &&
+      e.key !== "ArrowDown"
+    ) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    if (handleUndoElRef.current !== e.currentTarget) {
+      handleUndoElRef.current = e.currentTarget;
+      pushUndoSnapshot();
+    }
+    const panes = layoutRef.current.map((x) => ({ ...x }));
+    const m = panes.find((x) => x.id === id);
+    if (!m || !m.visible) return;
+    const k = uiScaleRef.current || 1;
+    const areaW = window.innerWidth / k;
+    const areaH = window.innerHeight / k;
+    const min = getPaneMin(m.type);
+    const hasE = handle.includes("e");
+    const hasW = handle.includes("w");
+    const hasS = handle.includes("s");
+    const hasN = handle.includes("n");
+    const dw = e.key === "ArrowRight" ? KB_STEP : e.key === "ArrowLeft" ? -KB_STEP : 0;
+    const dh = e.key === "ArrowDown" ? KB_STEP : e.key === "ArrowUp" ? -KB_STEP : 0;
+    if (dw !== 0 && (hasE || hasW)) {
+      if (hasE) {
+        m.w += dw;
+      } else {
+        m.x += dw;
+        m.w -= dw;
+      }
+    }
+    if (dh !== 0 && (hasS || hasN)) {
+      if (hasS) {
+        m.h += dh;
+      } else {
+        m.y += dh;
+        m.h -= dh;
+      }
+    }
+    if (m.w < min.w) {
+      if (hasW && !hasE) m.x -= min.w - m.w;
+      m.w = min.w;
+    }
+    if (m.h < min.h) {
+      if (hasN && !hasS) m.y -= min.h - m.h;
+      m.h = min.h;
+    }
+    const c = clampPaneToArea(
+      { ...m, x: Math.round(m.x), y: Math.round(m.y), w: Math.round(m.w), h: Math.round(m.h) },
+      areaW,
+      areaH,
+    );
+    m.x = c.x;
+    m.y = c.y;
+    m.w = c.w;
+    m.h = c.h;
+    const s = snapSize(m, panes, areaW, areaH, {
+      east: hasE,
+      south: hasS,
+      west: hasW,
+      north: hasN,
+    });
+    m.x = Math.round(s.x);
+    m.y = Math.round(s.y);
+    m.w = Math.round(s.w);
+    m.h = Math.round(s.h);
+    flashGuides(s.gv, s.gh);
+    setLayout(panes);
+    persist(panes, presetRef.current);
+  };
+
+  const handleBlurReset = (e: React.FocusEvent) => {
+    if (handleUndoElRef.current === e.currentTarget) handleUndoElRef.current = null;
+  };
+
   const progressMs = (() => {
     if (!snap.track) return 0;
     const base = snap.isPlaying ? snap.progressMs + (now - snap.fetchedAt) : snap.progressMs;
@@ -1366,7 +1659,9 @@ export default function App() {
         key={`${preset}:${pane.id}`}
         className={`pane${editing ? " editing" : ""}`}
         data-pane={pane.type}
+        data-pane-id={pane.id}
         data-density={density}
+        tabIndex={-1}
         style={{ left: pane.x, top: pane.y, width: pane.w, height: pane.h, zIndex: pane.z, opacity: pane.opacity }}
         onPointerDown={(e) => {
           if (editing) e.stopPropagation();
@@ -1452,13 +1747,35 @@ export default function App() {
           )}
         </div>
         {editing &&
-          HANDLES.map((hh) => (
-            <div
-              key={hh}
-              className={`rz rz-${hh}`}
-              onPointerDown={(e) => beginDrag(e, pane.id, hh)}
-            />
-          ))}
+          HANDLES.map((hh) => {
+            const hmin = getPaneMin(pane.type);
+            // Edges expose their own dimension; corners expose width while
+            // the value text always announces both.
+            const horizontal = hh.includes("e") || hh.includes("w");
+            const edge = hh === "e" || hh === "w" || hh === "n" || hh === "s";
+            const k = uiScale || 1;
+            const vmax = Math.max(
+              horizontal ? hmin.w : hmin.h,
+              Math.round((horizontal ? window.innerWidth : window.innerHeight) / k),
+            );
+            return (
+              <div
+                key={hh}
+                className={`rz rz-${hh}`}
+                role="slider"
+                tabIndex={0}
+                aria-label={`${PANE_TITLES[pane.type]} resize ${HANDLE_LABELS[hh]}`}
+                aria-valuemin={horizontal ? hmin.w : hmin.h}
+                aria-valuemax={vmax}
+                aria-valuenow={Math.round(horizontal ? pane.w : pane.h)}
+                aria-valuetext={`${Math.round(pane.w)} by ${Math.round(pane.h)} pixels`}
+                aria-orientation={edge ? (horizontal ? "horizontal" : "vertical") : undefined}
+                onPointerDown={(e) => beginDrag(e, pane.id, hh)}
+                onKeyDown={(e) => handleKeyResize(e, pane.id, hh)}
+                onBlur={handleBlurReset}
+              />
+            );
+          })}
       </section>
     );
   };
@@ -1767,6 +2084,7 @@ export default function App() {
           persist(fresh.panes, fresh.preset);
         }}
         keybinds={keybinds}
+        startupErrors={keybindStartup}
         onKeybind={changeKeybind}
         onResetKeybinds={() => void resetKeybinds()}
         appVersion={appVersion}

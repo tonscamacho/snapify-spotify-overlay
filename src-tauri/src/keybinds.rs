@@ -8,6 +8,10 @@ use tauri_plugin_global_shortcut::Shortcut;
 
 pub const ACTION_PLAYPAUSE: &str = "playpause";
 pub const ACTION_NEXT: &str = "next";
+pub const ACTION_MUTE: &str = "mute";
+pub const ACTION_LIKE: &str = "toggleLike";
+pub const ACTION_SEEK_BACK: &str = "seekBack10";
+pub const ACTION_SEEK_FWD: &str = "seekForward10";
 pub const ACTION_INTERACT: &str = "toggleInteract";
 pub const ACTION_EDIT: &str = "toggleEdit";
 pub const ACTION_VISIBILITY: &str = "toggleVisibility";
@@ -17,6 +21,10 @@ pub const ACTION_LEGACY: &str = "legacyInteract";
 pub const DEFAULTS: &[(&str, &str)] = &[
     (ACTION_PLAYPAUSE, "Ctrl+Alt+P"),
     (ACTION_NEXT, "Ctrl+Alt+N"),
+    (ACTION_MUTE, "Ctrl+Alt+M"),
+    (ACTION_LIKE, "Ctrl+Alt+K"),
+    (ACTION_SEEK_BACK, "Ctrl+Alt+B"),
+    (ACTION_SEEK_FWD, "Ctrl+Alt+F"),
     (ACTION_INTERACT, "Shift+Tab"),
     (ACTION_EDIT, "Ctrl+Alt+E"),
     (ACTION_VISIBILITY, "Ctrl+Alt+H"),
@@ -27,12 +35,21 @@ pub const DEFAULTS: &[(&str, &str)] = &[
 pub const GLOBAL_ACTIONS: &[&str] = &[
     ACTION_PLAYPAUSE,
     ACTION_NEXT,
+    ACTION_MUTE,
+    ACTION_LIKE,
+    ACTION_SEEK_BACK,
+    ACTION_SEEK_FWD,
     ACTION_INTERACT,
     ACTION_EDIT,
     ACTION_VISIBILITY,
 ];
 
 pub struct KeybindStore(pub Mutex<HashMap<String, String>>);
+
+/// Startup registration failures (busy/conflicting globals) collected in
+/// `register_shortcuts` so Settings can surface them instead of only
+/// logging to stderr.
+pub struct KeybindIssues(pub Mutex<Vec<String>>);
 
 pub fn default_map() -> HashMap<String, String> {
     DEFAULTS
@@ -52,11 +69,15 @@ pub fn action_label(action: &str) -> &'static str {
     match action {
         s if s == ACTION_PLAYPAUSE => "Play / Pause",
         s if s == ACTION_NEXT => "Next track",
+        s if s == ACTION_MUTE => "Mute / Unmute",
+        s if s == ACTION_LIKE => "Like / Unlike track",
+        s if s == ACTION_SEEK_BACK => "Seek back 10 seconds",
+        s if s == ACTION_SEEK_FWD => "Seek forward 10 seconds",
         s if s == ACTION_INTERACT => "Interact / Pass through",
         s if s == ACTION_EDIT => "Edit lock",
         s if s == ACTION_VISIBILITY => "Show / Hide window",
-        s if s == ACTION_PRESET => "Cycle preset",
-        s if s == ACTION_LEGACY => "Interact toggle, legacy",
+        s if s == ACTION_PRESET => "Cycle preset (needs overlay focus)",
+        s if s == ACTION_LEGACY => "Interact toggle, legacy (needs overlay focus)",
         _ => "Shortcut",
     }
 }
@@ -173,6 +194,13 @@ pub fn get_keybinds(store: State<'_, KeybindStore>) -> HashMap<String, String> {
     store.0.lock().unwrap().clone()
 }
 
+/// Startup global-shortcut failures (busy/conflicting registrations) for
+/// the Settings keybind rows. Empty when every global chord grabbed cleanly.
+#[tauri::command]
+pub fn keybind_startup_errors(state: State<'_, KeybindIssues>) -> Vec<String> {
+    state.0.lock().unwrap().clone()
+}
+
 #[tauri::command]
 pub fn set_keybind(
     app: AppHandle,
@@ -282,7 +310,8 @@ pub fn reset_keybinds(
 mod tests {
     use super::{
         action_for_shortcut, default_map, normalize_id, reject_unsafe_accelerator, ACTION_EDIT,
-        ACTION_INTERACT, ACTION_NEXT, ACTION_PLAYPAUSE, ACTION_VISIBILITY, GLOBAL_ACTIONS,
+        ACTION_INTERACT, ACTION_LIKE, ACTION_MUTE, ACTION_NEXT, ACTION_PLAYPAUSE,
+        ACTION_SEEK_BACK, ACTION_SEEK_FWD, ACTION_VISIBILITY, GLOBAL_ACTIONS,
     };
 
     #[test]
@@ -291,7 +320,7 @@ mod tests {
         for action in GLOBAL_ACTIONS {
             assert!(map.contains_key(*action), "missing {action}");
         }
-        assert_eq!(map.len(), 7);
+        assert_eq!(map.len(), 11);
     }
 
     #[test]
@@ -312,12 +341,27 @@ mod tests {
         for key in [
             ACTION_PLAYPAUSE,
             ACTION_NEXT,
+            ACTION_MUTE,
+            ACTION_LIKE,
+            ACTION_SEEK_BACK,
+            ACTION_SEEK_FWD,
             ACTION_INTERACT,
             ACTION_EDIT,
             ACTION_VISIBILITY,
         ] {
             let map = default_map();
             map[key].parse::<tauri_plugin_global_shortcut::Shortcut>().unwrap();
+        }
+    }
+
+    #[test]
+    fn focused_actions_stay_out_of_global_dispatch() {
+        use super::{ACTION_LEGACY, ACTION_PRESET};
+        let map = default_map();
+        for key in [ACTION_PRESET, ACTION_LEGACY] {
+            let shortcut: tauri_plugin_global_shortcut::Shortcut =
+                map[key].parse().expect("focused default must parse");
+            assert_eq!(action_for_shortcut(&map, &shortcut), None);
         }
     }
 

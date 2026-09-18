@@ -29,6 +29,7 @@ interface Props {
   wordKaraoke: boolean;
   transLang: TransLang;
   keybinds: KeybindMap;
+  startupErrors?: string[] | null;
   appVersion: string;
   update: UpdateStatus;
   onPreset: (name: string) => void;
@@ -60,10 +61,12 @@ interface Props {
 function KeybindRow({
   action,
   current,
+  notice,
   onKeybind,
 }: {
   action: KeybindAction;
   current: string;
+  notice?: string | null;
   onKeybind: (action: KeybindAction, accelerator: string) => Promise<void>;
 }) {
   const [capturing, setCapturing] = useState(false);
@@ -116,6 +119,14 @@ function KeybindRow({
       <span>
         {KEYBIND_LABELS[action]}
         <span className="scope">{KEYBIND_SCOPES[action] === "global" ? "global" : "focused"}</span>
+        {action === "toggleInteract" && (
+          <span
+            className="scope"
+            title="This is the re-entry key: with pass-through on, only a shortcut brings the overlay back"
+          >
+            re-entry
+          </span>
+        )}
       </span>
       <button
         ref={btnRef}
@@ -129,7 +140,14 @@ function KeybindRow({
       >
         {saving ? "Saving…" : capturing ? "Press keys…" : current}
       </button>
+      {action === "toggleInteract" && (
+        <div className="hint" role="note">
+          Warning: remapping this re-entry key can strand you in pass-through —
+          only a shortcut brings the overlay back.
+        </div>
+      )}
       {error && <div className="key-err">{error}</div>}
+      {!error && notice && <div className="key-err">{notice}</div>}
     </div>
   );
 }
@@ -433,6 +451,7 @@ export default function SettingsModal(p: Props) {
               key={action}
               action={action}
               current={p.keybinds[action]}
+              notice={(p.startupErrors ?? []).find((m) => m.includes(action)) ?? null}
               onKeybind={p.onKeybind}
             />
           ))}

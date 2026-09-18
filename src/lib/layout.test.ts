@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clampLayoutToArea,
+  clampPaneToArea,
   clonePanes,
   defaultLayoutFor,
   getPaneMin,
@@ -384,5 +385,29 @@ describe("newPaneForType", () => {
     const l = [pane({ id: "a", z: 4 }), pane({ id: "b", z: 7 })];
     const n = newPaneForType(l, "queue", "queue-1");
     expect(n).toMatchObject({ id: "queue-1", type: "queue", x: 104, y: 104, z: 8, visible: true });
+  });
+});
+
+describe("clampPaneToArea", () => {
+  it("pins a keyboard-nudged pane fully inside the east and south edges", () => {
+    // One 8px Alt+Arrow past the edge: the pane keeps its size, position pins.
+    const out = clampPaneToArea(pane({ x: 1585, y: 815, w: 340, h: 230 }), 1920, 1040);
+    expect(out).toMatchObject({ x: 1580, y: 810, w: 340, h: 230 });
+  });
+
+  it("pulls a normal-size pane inside instead of shrinking it", () => {
+    const out = clampPaneToArea(pane({ x: 1600, y: 800, w: 400, h: 300 }), 1920, 1040);
+    expect(out).toMatchObject({ x: 1520, y: 740, w: 400, h: 300 });
+  });
+
+  it("never shrinks below the per-type content floor", () => {
+    const out = clampPaneToArea(pane({ x: 0, y: 0, w: 100, h: 50 }), 1920, 1040);
+    expect(out).toMatchObject({ w: 280, h: 190 });
+  });
+
+  it("does not mutate the input pane", () => {
+    const p = pane({ x: 2000, y: 1500, w: 2000, h: 1500 });
+    clampPaneToArea(p, 800, 600);
+    expect(p.x).toBe(2000);
   });
 });

@@ -1,6 +1,10 @@
 export type KeybindAction =
   | "playpause"
   | "next"
+  | "mute"
+  | "toggleLike"
+  | "seekBack10"
+  | "seekForward10"
   | "toggleInteract"
   | "toggleEdit"
   | "toggleVisibility"
@@ -12,6 +16,10 @@ export type KeybindMap = Record<KeybindAction, string>;
 export const DEFAULT_KEYBINDS: KeybindMap = {
   playpause: "Ctrl+Alt+P",
   next: "Ctrl+Alt+N",
+  mute: "Ctrl+Alt+M",
+  toggleLike: "Ctrl+Alt+K",
+  seekBack10: "Ctrl+Alt+B",
+  seekForward10: "Ctrl+Alt+F",
   toggleInteract: "Shift+Tab",
   toggleEdit: "Ctrl+Alt+E",
   toggleVisibility: "Ctrl+Alt+H",
@@ -22,6 +30,10 @@ export const DEFAULT_KEYBINDS: KeybindMap = {
 export const KEYBIND_ORDER: KeybindAction[] = [
   "playpause",
   "next",
+  "mute",
+  "toggleLike",
+  "seekBack10",
+  "seekForward10",
   "toggleInteract",
   "toggleEdit",
   "toggleVisibility",
@@ -32,16 +44,24 @@ export const KEYBIND_ORDER: KeybindAction[] = [
 export const KEYBIND_LABELS: Record<KeybindAction, string> = {
   playpause: "Play / Pause",
   next: "Next track",
+  mute: "Mute / Unmute",
+  toggleLike: "Like / Unlike track",
+  seekBack10: "Seek back 10 seconds",
+  seekForward10: "Seek forward 10 seconds",
   toggleInteract: "Interact / Pass through",
   toggleEdit: "Edit lock",
   toggleVisibility: "Show / Hide window",
-  cyclePreset: "Cycle preset",
-  legacyInteract: "Interact toggle, legacy",
+  cyclePreset: "Cycle preset (needs overlay focus)",
+  legacyInteract: "Interact toggle, legacy (needs overlay focus)",
 };
 
 export const KEYBIND_SCOPES: Record<KeybindAction, "global" | "focused"> = {
   playpause: "global",
   next: "global",
+  mute: "global",
+  toggleLike: "global",
+  seekBack10: "global",
+  seekForward10: "global",
   toggleInteract: "global",
   toggleEdit: "global",
   toggleVisibility: "global",
