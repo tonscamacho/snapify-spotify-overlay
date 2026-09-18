@@ -42,6 +42,7 @@ type LibTab = "playlists" | "albums" | "tracks" | "artists" | "shows" | "episode
 interface Props {
   state: BrowseState;
   deviceId: string | null;
+  queuedCount?: number;
   onChange: (s: BrowseState) => void;
   onPlayContext: (uri: string) => void;
   onPlayUris: (uris: string[]) => void;
@@ -699,6 +700,13 @@ export default function BrowsePane(p: Props) {
     const label = top.name ?? top.id;
     return (
       <>
+        {p.queuedCount != null && p.queuedCount > 0 && (
+          <div className="throttled-note" role="status">
+            <span>
+              Queued — will send after cooldown{p.queuedCount > 1 ? ` (${p.queuedCount})` : ""}.
+            </span>
+          </div>
+        )}
         <div className="pane-subhead">
           <button className="icon-btn sm" onClick={back} title="Back" aria-label="Back">
             ←
@@ -863,6 +871,13 @@ export default function BrowsePane(p: Props) {
 
   return (
     <>
+      {p.queuedCount != null && p.queuedCount > 0 && (
+        <div className="throttled-note" role="status">
+          <span>
+            Queued — will send after cooldown{p.queuedCount > 1 ? ` (${p.queuedCount})` : ""}.
+          </span>
+        </div>
+      )}
       <div className="browse-tabs" role="tablist" aria-label="Browse">
         <SpotifyMark variant="full" size={18} />
         {views.map((v, i) => (

@@ -63,9 +63,18 @@ export interface PlayerSnapshot {
   repeat: string;
 }
 
+export interface LyricWord {
+  t: number;
+  text: string;
+}
+
 export interface LyricCue {
   t: number;
   text: string;
+  /** True word timing when the provider ships it (LRCLIB enhanced /
+   *  inline word tags). Absent means the renderer falls back to linear
+   *  interpolation across the line. */
+  words?: LyricWord[];
 }
 
 export interface LyricsData {

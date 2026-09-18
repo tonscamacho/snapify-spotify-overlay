@@ -28,6 +28,7 @@ interface Props {
   busy: boolean;
   tier?: "premium" | "free";
   sdkDeviceId?: string | null;
+  queuedCount?: number;
   onPlay: () => void;
   onPause: () => void;
   onNext: () => void;
@@ -148,6 +149,13 @@ export default function PlayerPane(p: Props) {
 
   return (
     <div className="pane-fill">
+      {p.queuedCount != null && p.queuedCount > 0 && (
+        <div className="throttled-note" role="status">
+          <span>
+            Queued — will send after cooldown{p.queuedCount > 1 ? ` (${p.queuedCount})` : ""}.
+          </span>
+        </div>
+      )}
       <div className="track-row">
         {track.image ? (
           <img className="cover" src={track.image} alt="" draggable={false} />

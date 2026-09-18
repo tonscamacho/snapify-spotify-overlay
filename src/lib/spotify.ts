@@ -137,6 +137,83 @@ export function parseQueue(raw: unknown): { current: QueueItem | null; upcoming:
   return out;
 }
 
+export type ThrottleKind = "throttled" | "quota";
+
+/** Typed throttle error surfaced from Rust 429s. `retryAfterSec` is the
+ *  numeric `Retry-After` value when the backend sent a parseable integer,
+ *  otherwise null (callers fall back to their own cooldown default). */
+export interface ThrottleInfo {
+  kind: ThrottleKind;
+  retryAfterSec: number | null;
+  message: string;
+}
+
+function messageOf(input: unknown): string {
+  if (input instanceof Error) return input.message;
+  if (typeof input === "string") return input;
+  if (input && typeof input === "object") {
+    const o = input as Record<string, unknown>;
+    if (typeof o["message"] === "string") return o["message"] as string;
+  }
+  return String(input ?? "");
+}
+
+/** Extract the numeric `retry after {n}s` from a Rust throttle string. */
+export function parseRetryAfterSec(input: unknown): number | null {
+  const m = /retry after (\d+)\s*s/i.exec(messageOf(input));
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Single routing point for all 429 detection. Returns the typed throttle
+ *  info, or null when the error is not a throttle/quota signal. */
+export function toThrottleError(input: unknown): ThrottleInfo | null {
+  if (input && typeof input === "object") {
+    const o = input as Record<string, unknown>;
+    if (o["kind"] === "throttled" || o["kind"] === "quota") {
+      const raw = o["retryAfterSec"];
+      const retryAfterSec =
+        typeof raw === "number" && Number.isFinite(raw) ? raw : parseRetryAfterSec(o["message"] ?? "");
+      return {
+        kind: o["kind"] as ThrottleKind,
+        retryAfterSec,
+        message: messageOf(o["message"] ?? input),
+      };
+    }
+  }
+  const message = messageOf(input);
+  const s = message.toLowerCase();
+  const quota = s.includes("quota-exceeded") || (s.includes("quota") && (s.includes("429") || s.includes("retry after") || s.includes("back off")));
+  if (quota) {
+    return { kind: "quota", retryAfterSec: parseRetryAfterSec(message), message };
+  }
+  if (
+    s.includes("rate-limited") ||
+    s.includes("429") ||
+    s.includes("cooling down") ||
+    s.includes("retry after")
+  ) {
+    return { kind: "throttled", retryAfterSec: parseRetryAfterSec(message), message };
+  }
+  return null;
+}
+
+/** Back-compat predicate: true for any throttled or quota error. */
+export function isThrottledError(input: unknown): boolean {
+  return toThrottleError(input) !== null;
+}
+
+/** True only for quota-exceeded (long cooldown) errors. */
+export function isQuotaError(input: unknown): boolean {
+  return toThrottleError(input)?.kind === "quota";
+}
+
+/** Numeric Retry-After seconds, or null when absent/unparseable. */
+export function getRetryAfterSec(input: unknown): number | null {
+  return toThrottleError(input)?.retryAfterSec ?? null;
+}
+
 export const api = {
   authStatus: () => invoke<{ logged_in: boolean; awaiting_callback: boolean }>("auth_status"),
   startLogin: () => invoke<string>("start_login"),
@@ -239,7 +316,7 @@ export const api = {
     }>("request_log_counts"),
   requestLogRecent: (limit = 50) =>
     invoke<
-      Array<{ method: string; path: string; result: string; retry_after: string | null }>
+      Array<{ method: string; path: string; result: string; retry_after: number | null }>
     >("request_log_recent", { limit }),
   lyrics: (p: {
     track_id: string;

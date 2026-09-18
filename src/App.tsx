@@ -26,7 +26,8 @@ import {
   UndoIcon,
   XIcon,
 } from "./components/icons";
-import { api, parsePlayer } from "./lib/spotify";
+import { api, parsePlayer, toThrottleError } from "./lib/spotify";
+import { PendingQueue, flushDelayMs } from "./lib/pendingQueue";
 import { reportOverlayMode, reportOverlayRegions } from "./lib/overlay";
 import { ensurePlayer, setSdkVolume } from "./lib/player-sdk";
 import { initialBrowse } from "./lib/browse";
@@ -503,22 +504,15 @@ export default function App() {
 
   // Throttled UX: stale content stays on screen; the live region hears one
   // degrade note and one recovery note per episode, never per retry.
+  // All throttle routing goes through the typed helper in lib/spotify
+  // (parsed Retry-After + quota vs rate kind); no local string matching.
   const degradedRef = useRef(false);
-  const isThrottledMsg = (m: string) => {
-    const s = m.toLowerCase();
-    return (
-      s.includes("rate-limited") ||
-      s.includes("quota-exceeded") ||
-      s.includes("429") ||
-      s.includes("cooling down") ||
-      s.includes("retry after")
-    );
-  };
+  const isThrottledMsg = (m: unknown) => toThrottleError(m) !== null;
   const noteDegraded = useCallback(
     (m: string) => {
       if (degradedRef.current) return;
       degradedRef.current = true;
-      const quota = /quota-exceeded/i.test(m);
+      const quota = toThrottleError(m)?.kind === "quota";
       pushToast(
         "info",
         quota
@@ -712,6 +706,12 @@ export default function App() {
   const snapSeq = useRef(0);
   const transportRef = useRef(false);
   const pendingSeekRef = useRef<(() => Promise<unknown>) | null>(null);
+  // PR3 pending write queue: throttled writes park here, coalesced by key,
+  // and flush once on cooldown end. Count drives the queued chip.
+  const pendingQueueRef = useRef<PendingQueue | null>(null);
+  if (!pendingQueueRef.current) pendingQueueRef.current = new PendingQueue();
+  const [pendingCount, setPendingCount] = useState(0);
+  const pendingFlushTimer = useRef(0);
   const queueVisibleRef = useRef(false);
   const queueContextSeq = useRef(0);
   const queueContextCache = useRef<{ uri: string; name: string } | null>(null);
@@ -885,6 +885,23 @@ export default function App() {
   // Serialized transport: one in-flight slot. A second next/prev while one
   // is pending is ignored; a seek queues the latest position only. The
   // trailing fetchPlayer was removed: the next scheduled poll confirms.
+  // PR3: throttled writes park in the pending queue (coalesced by key) and
+  // flush once on cooldown end. The flush runner lives after `run` and is
+  // reached indirectly through this ref to avoid a callback cycle.
+  const flushPendingRef = useRef<() => void>(() => {});
+  const schedulePendingFlush = useCallback((retryAfterSec: number | null) => {
+    if (pendingFlushTimer.current) window.clearTimeout(pendingFlushTimer.current);
+    pendingFlushTimer.current = window.setTimeout(() => {
+      pendingFlushTimer.current = 0;
+      flushPendingRef.current();
+    }, flushDelayMs(retryAfterSec));
+  }, []);
+  useEffect(
+    () => () => {
+      if (pendingFlushTimer.current) window.clearTimeout(pendingFlushTimer.current);
+    },
+    [],
+  );
   const run = useCallback(
     async (
       fn: () => Promise<unknown>,
@@ -893,6 +910,8 @@ export default function App() {
         transport?: "play" | "pause" | "next" | "prev" | "seek" | "other";
         optimistic?: () => void;
         needsRefresh?: boolean;
+        queueKey?: string;
+        queueLabel?: string;
       },
     ) => {
       const kind = opts?.transport ?? "other";
@@ -921,19 +940,80 @@ export default function App() {
           }
         }
       } catch (e) {
-        flashErrThrottledAware(e instanceof Error ? e.message : String(e));
+        const msg = e instanceof Error ? e.message : String(e);
+        const throttle = toThrottleError(msg);
+        if (throttle) {
+          // Throttled writes park instead of dropping: coalesced by key so
+          // a double-pressed play flushes once after the cooldown.
+          const q = pendingQueueRef.current;
+          if (q) {
+            const key = opts?.queueKey ?? kind;
+            const label = opts?.queueLabel ?? key;
+            const retryFn = fn;
+            const retryAfter = opts?.after;
+            const retryTransport = opts?.transport;
+            const retryRefresh = opts?.needsRefresh;
+            const retryKey = opts?.queueKey;
+            const retryLabel = opts?.queueLabel;
+            q.enqueue(
+              key,
+              () =>
+                run(retryFn, {
+                  after: retryAfter,
+                  transport: retryTransport,
+                  needsRefresh: retryRefresh,
+                  queueKey: retryKey,
+                  queueLabel: retryLabel,
+                }),
+              label,
+            );
+            setPendingCount(q.size());
+            noteDegraded(msg);
+            schedulePendingFlush(throttle.retryAfterSec);
+          } else {
+            flashErrThrottledAware(msg);
+          }
+        } else {
+          flashErrThrottledAware(msg);
+        }
       } finally {
         if (isTransport) transportRef.current = false;
         setBusy(false);
         if (!transportRef.current && pendingSeekRef.current) {
           const queued = pendingSeekRef.current;
           pendingSeekRef.current = null;
-          void run(queued, { transport: "seek" });
+          void run(queued, { transport: "seek", queueKey: "seek", queueLabel: "seek" });
         }
       }
     },
-    [fetchPlayer, flashErrThrottledAware, snap.deviceId, sdkDeviceId, fetchDevices, pushToast],
+    [
+      fetchPlayer,
+      flashErrThrottledAware,
+      noteDegraded,
+      schedulePendingFlush,
+      snap.deviceId,
+      sdkDeviceId,
+      fetchDevices,
+      pushToast,
+    ],
   );
+
+  // Flush parked writes once on cooldown end. The queue snapshot clears
+  // before firing, so a timer re-fire cannot double-fire; a still-throttled
+  // item re-parks through `run` for the next cooldown.
+  const flushPending = useCallback(async () => {
+    const q = pendingQueueRef.current;
+    if (!q || q.size() === 0) {
+      setPendingCount(0);
+      return;
+    }
+    const results = await q.flush((entry) => entry.run());
+    setPendingCount(q.size());
+    if (results.some((r) => r.ok)) noteRecovered();
+  }, [noteRecovered]);
+  useEffect(() => {
+    flushPendingRef.current = flushPending;
+  }, [flushPending]);
 
   // Hoisted pane callbacks: stable across the 2Hz progress tick so memoized
   // panes skip re-renders. Deps stay on primitives, never the snap object.
@@ -946,6 +1026,8 @@ export default function App() {
         setSdkVolume(seed);
         await run(() => api.play(target), {
           transport: "play",
+          queueKey: "play",
+          queueLabel: "Play",
           optimistic: () => setSnap((prev) => ({ ...prev, isPlaying: true })),
         });
       })(),
@@ -955,22 +1037,36 @@ export default function App() {
     () =>
       void run(() => api.pause(snap.deviceId ?? sdkDeviceId), {
         transport: "pause",
+        queueKey: "pause",
+        queueLabel: "Pause",
         optimistic: () => setSnap((prev) => ({ ...prev, isPlaying: false })),
       }),
     [snap.deviceId, sdkDeviceId, run],
   );
   const nextCb = useCallback(
-    () => void run(() => api.next(snap.deviceId ?? sdkDeviceId), { transport: "next" }),
+    () =>
+      void run(() => api.next(snap.deviceId ?? sdkDeviceId), {
+        transport: "next",
+        queueKey: "next",
+        queueLabel: "Next",
+      }),
     [snap.deviceId, sdkDeviceId, run],
   );
   const prevCb = useCallback(
-    () => void run(() => api.prev(snap.deviceId ?? sdkDeviceId), { transport: "prev" }),
+    () =>
+      void run(() => api.prev(snap.deviceId ?? sdkDeviceId), {
+        transport: "prev",
+        queueKey: "prev",
+        queueLabel: "Previous",
+      }),
     [snap.deviceId, sdkDeviceId, run],
   );
   const seekCb = useCallback(
     (ms: number) =>
       void run(() => api.seek(ms, snap.deviceId ?? sdkDeviceId), {
         transport: "seek",
+        queueKey: "seek",
+        queueLabel: "Seek",
         optimistic: () => setSnap((prev) => ({ ...prev, progressMs: ms, fetchedAt: Date.now() })),
       }),
     [snap.deviceId, sdkDeviceId, run],
@@ -1013,7 +1109,10 @@ export default function App() {
     (v: number) => {
       setSnap((s) => ({ ...s, volume: v }));
       setSdkVolume(v / 100);
-      void run(() => api.volume(v, snap.deviceId ?? sdkDeviceId));
+      void run(() => api.volume(v, snap.deviceId ?? sdkDeviceId), {
+        queueKey: "volume",
+        queueLabel: "Volume",
+      });
     },
     [snap.deviceId, sdkDeviceId, run],
   );
@@ -1029,7 +1128,11 @@ export default function App() {
     }
   }, [volumeCb]);
   const shuffleCb = useCallback(
-    () => void run(() => api.shuffle(!snap.shuffle, snap.deviceId ?? sdkDeviceId)),
+    () =>
+      void run(() => api.shuffle(!snap.shuffle, snap.deviceId ?? sdkDeviceId), {
+        queueKey: "shuffle",
+        queueLabel: "Shuffle",
+      }),
     [snap.shuffle, snap.deviceId, sdkDeviceId, run],
   );
   const repeatNextCb = useMemo(
@@ -1037,12 +1140,18 @@ export default function App() {
     [snap.repeat],
   );
   const repeatCb = useCallback(
-    () => void run(() => api.repeat(repeatNextCb, snap.deviceId ?? sdkDeviceId)),
+    () =>
+      void run(() => api.repeat(repeatNextCb, snap.deviceId ?? sdkDeviceId), {
+        queueKey: "repeat",
+        queueLabel: "Repeat",
+      }),
     [repeatNextCb, snap.deviceId, sdkDeviceId, run],
   );
   const transferCb = useCallback(
     (id: string) =>
       void run(() => api.transfer(id, false), {
+        queueKey: `transfer:${id}`,
+        queueLabel: "Transfer",
         after: () => {
           void fetchDevices();
           setSdkVolume((snapRef.current.volume ?? 50) / 100);
@@ -1056,16 +1165,26 @@ export default function App() {
     [fetchLyrics],
   );
   const browsePlayContextCb = useCallback(
-    (uri: string) => void run(() => api.playContext(uri, snap.deviceId ?? sdkDeviceId)),
+    (uri: string) =>
+      void run(() => api.playContext(uri, snap.deviceId ?? sdkDeviceId), {
+        queueKey: `playContext:${uri}`,
+        queueLabel: "Play",
+      }),
     [snap.deviceId, sdkDeviceId, run],
   );
   const browsePlayUrisCb = useCallback(
-    (uris: string[]) => void run(() => api.playUris(uris, snap.deviceId ?? sdkDeviceId)),
+    (uris: string[]) =>
+      void run(() => api.playUris(uris, snap.deviceId ?? sdkDeviceId), {
+        queueKey: `playUris:${uris.join(",")}`,
+        queueLabel: "Play",
+      }),
     [snap.deviceId, sdkDeviceId, run],
   );
   const browseQueueAddCb = useCallback(
     (uri: string) =>
       void run(() => api.queueAdd(uri, snap.deviceId ?? sdkDeviceId), {
+        queueKey: `queueAdd:${uri}`,
+        queueLabel: "Queue",
         after: () => {
           if (queueVisibleRef.current) void fetchQueue();
         },
@@ -1696,6 +1815,7 @@ export default function App() {
               busy={busy}
               tier={tier}
               sdkDeviceId={sdkDeviceId}
+              queuedCount={pendingCount}
               onPlay={playCb}
               onPause={pauseCb}
               onNext={nextCb}
@@ -1726,6 +1846,7 @@ export default function App() {
               upcoming={queue.upcoming}
               loading={queueLoading}
               context={queueContext}
+              queuedCount={pendingCount}
               onRefresh={fetchQueue}
               onBrowse={queueBrowseCb}
               onOpenContext={openQueueContext}
@@ -1738,6 +1859,7 @@ export default function App() {
             <MemoBrowsePane
               state={browse}
               deviceId={snap.deviceId ?? sdkDeviceId}
+              queuedCount={pendingCount}
               onChange={setBrowse}
               onPlayContext={browsePlayContextCb}
               onPlayUris={browsePlayUrisCb}

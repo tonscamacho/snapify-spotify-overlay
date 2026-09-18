@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { isThrottledError as isThrottleErrorTyped } from "./spotify";
 
 export interface Page<T, C> {
   items: T[];
@@ -10,15 +11,9 @@ export interface Page<T, C> {
  *  cursor=number; keyset paging (followed artists) as cursor=string.
  *  One IntersectionObserver sentinel per list; renders only fire on
  *  threshold crossings and page arrivals, never per scroll pixel. */
-export function isThrottledError(m: string): boolean {
-  const s = m.toLowerCase();
-  return (
-    s.includes("rate-limited") ||
-    s.includes("quota-exceeded") ||
-    s.includes("429") ||
-    s.includes("cooling down") ||
-    s.includes("retry after")
-  );
+/** Single routing point: all throttle detection goes through spotify.ts. */
+export function isThrottledError(m: unknown): boolean {
+  return isThrottleErrorTyped(m);
 }
 
 const MAX_ITEMS_DEFAULT = 200;
@@ -36,6 +31,13 @@ export function usePagedList<T, C>(
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const cursorRef = useRef<C | null>(null);
   const loadingRef = useRef(false);
+  // Exhausted guard: once a page arrives with next:null the cursor stays
+  // null, so a sentinel re-fire must not re-fetch the same page and append
+  // duplicates. State alone is async; the ref gates synchronously.
+  // exhaustedRef distinguishes a terminal next:null (retry is a no-op) from
+  // a terminal error (manual retry re-arms one attempt).
+  const hasMoreRef = useRef(true);
+  const exhaustedRef = useRef(false);
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
   const errorRef = useRef(opts.onError);
@@ -43,6 +45,7 @@ export function usePagedList<T, C>(
 
   const loadMore = useCallback(async () => {
     if (loadingRef.current) return;
+    if (!hasMoreRef.current) return;
     loadingRef.current = true;
     setLoading(true);
     try {
@@ -52,15 +55,22 @@ export function usePagedList<T, C>(
         const merged = [...prev, ...page.items];
         return merged.length > maxItems ? merged.slice(merged.length - maxItems) : merged;
       });
-      setHasMore(page.next !== null);
+      const more = page.next !== null;
+      hasMoreRef.current = more;
+      exhaustedRef.current = !more;
+      setHasMore(more);
       setThrottled(null);
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
       if (isThrottledError(m)) {
         setThrottled(m);
+        hasMoreRef.current = true;
+        exhaustedRef.current = false;
         setHasMore(true);
       } else {
         errorRef.current?.(m);
+        hasMoreRef.current = false;
+        exhaustedRef.current = false;
         setHasMore(false);
       }
     } finally {
@@ -70,12 +80,20 @@ export function usePagedList<T, C>(
   }, [pageSize, maxItems]);
 
   const retry = useCallback(() => {
+    // Exhausted lists have nothing to retry; keep the guard shut so a
+    // stray retry cannot re-fetch page one and duplicate keys.
+    if (exhaustedRef.current) return;
     setThrottled(null);
+    // Terminal errors park hasMore false; a manual retry re-arms one attempt.
+    hasMoreRef.current = true;
+    setHasMore(true);
     void loadMore();
   }, [loadMore]);
 
   useEffect(() => {
     cursorRef.current = null;
+    hasMoreRef.current = true;
+    exhaustedRef.current = false;
     setItems([]);
     setHasMore(true);
     setThrottled(null);

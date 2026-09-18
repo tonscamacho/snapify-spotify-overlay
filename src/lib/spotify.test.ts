@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-import { parseDevices, parsePlayer, parseQueue, parseQueueContext } from "./spotify";
+import { parseDevices, parsePlayer, parseQueue, parseQueueContext, toThrottleError, isThrottledError, getRetryAfterSec, parseRetryAfterSec, isQuotaError } from "./spotify";
 
 const fullTrack = {
   id: "t1",
@@ -226,5 +226,46 @@ describe("parseDevices", () => {
       isActive: false,
       volume: null,
     });
+  });
+});
+
+describe("typed throttle error", () => {
+  it("routes rate-limited strings to throttled with numeric retryAfter", () => {
+    const t = toThrottleError("rate-limited: retry after 7s");
+    expect(t).toMatchObject({ kind: "throttled", retryAfterSec: 7 });
+    expect(isThrottledError("rate-limited: retry after 7s")).toBe(true);
+    expect(getRetryAfterSec("rate-limited: retry after 7s")).toBe(7);
+    expect(parseRetryAfterSec("rate-limited: retry after 7s")).toBe(7);
+  });
+
+  it("routes quota strings to quota kind", () => {
+    const msg = "quota-exceeded: developer quota hit, back off and retry after 30s. Detail reads run on demand only.";
+    const t = toThrottleError(msg);
+    expect(t).toMatchObject({ kind: "quota", retryAfterSec: 30 });
+    expect(isQuotaError(msg)).toBe(true);
+    expect(isThrottledError(msg)).toBe(true);
+  });
+
+  it("handles Error objects and 429/cooling-down variants", () => {
+    expect(toThrottleError(new Error("spotify 429 Too Many Requests"))?.kind).toBe("throttled");
+    expect(toThrottleError("cooling down, retry soon")?.kind).toBe("throttled");
+    expect(toThrottleError("Spotify throttled — retry after 2s")?.kind).toBe("throttled");
+  });
+
+  it("returns null retryAfter when the header value is missing", () => {
+    expect(getRetryAfterSec("rate-limited: retry after Xs")).toBeNull();
+    expect(toThrottleError("rate-limited: hiccup")?.retryAfterSec).toBeNull();
+  });
+
+  it("rejects non-throttle errors", () => {
+    expect(toThrottleError("spotify 403 Forbidden")).toBeNull();
+    expect(isThrottledError("spotify 403 Forbidden")).toBe(false);
+    expect(isThrottledError("unauthorized: token rejected")).toBe(false);
+    expect(toThrottleError(null)).toBeNull();
+  });
+
+  it("passes through already-typed throttle objects", () => {
+    const t = toThrottleError({ kind: "quota", retryAfterSec: 12, message: "q" });
+    expect(t).toMatchObject({ kind: "quota", retryAfterSec: 12 });
   });
 });

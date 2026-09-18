@@ -12,7 +12,7 @@ struct RequestEntry {
     method: String,
     path: String,
     result: &'static str,
-    retry_after: Option<String>,
+    retry_after: Option<u64>,
 }
 
 const REQUEST_LOG_CAP: usize = 500;
@@ -45,7 +45,7 @@ fn record_request(
     method: &Method,
     path: &str,
     result: &'static str,
-    retry_after: Option<&str>,
+    retry_after: Option<u64>,
 ) {
     if let Ok(mut log) = request_log().lock() {
         if log.len() >= REQUEST_LOG_CAP {
@@ -55,7 +55,7 @@ fn record_request(
             method: method.to_string(),
             path: path.to_string(),
             result,
-            retry_after: retry_after.map(|s| s.to_string()),
+            retry_after,
         });
     }
 }
@@ -114,8 +114,18 @@ fn inflight_key(method: &Method, path: &str, query: &[(&str, &str)]) -> String {
     key
 }
 
+/// Typed numeric parse of the `Retry-After` header. Returns the raw
+/// seconds when the header is a plain integer, otherwise None. The
+/// cooldown fallback policy lives in [`parse_retry_after`]; this helper is
+/// the typed value surfaced through `request_log_recent` and the
+/// `rate-limited` / `quota-exceeded` error strings so the frontend can
+/// route on a number instead of string-matching.
+fn retry_after_secs(raw: Option<&str>) -> Option<u64> {
+    raw.and_then(|s| s.trim().parse::<u64>().ok())
+}
+
 fn parse_retry_after(raw: Option<&str>, is_quota: bool) -> Duration {
-    let secs: u64 = raw.and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+    let secs: u64 = retry_after_secs(raw).unwrap_or(0);
     if is_quota {
         Duration::from_secs(secs.max(30).min(300))
     } else if secs == 0 {
@@ -192,6 +202,11 @@ fn response_cache(
 }
 
 fn cache_ttl(path: &str) -> Option<Duration> {
+    // Recently-played is a stable shelf, not live transport state: cache it
+    // 60 s even though it lives under the uncached /me/player prefix.
+    if path.starts_with("/me/player/recently-played") {
+        return Some(Duration::from_secs(60));
+    }
     if path.starts_with("/me/player") || path.starts_with("/search") {
         return None;
     }
@@ -199,6 +214,11 @@ fn cache_ttl(path: &str) -> Option<Duration> {
         return None;
     }
     if path == "/me" {
+        return Some(Duration::from_secs(60));
+    }
+    // Top tracks/artists change slowly; keep them 60 s while the rest of
+    // the library shelves stay at 30 s.
+    if path.starts_with("/me/top") {
         return Some(Duration::from_secs(60));
     }
     for prefix in [
@@ -216,7 +236,6 @@ fn cache_ttl(path: &str) -> Option<Duration> {
         "/me/episodes",
         "/me/audiobooks",
         "/me/following",
-        "/me/top",
         "/me/playlists",
     ] {
         if path.starts_with(prefix) {
@@ -347,7 +366,7 @@ async fn call_inner(
                 &method,
                 path,
                 classify_result(status, &response_body),
-                retry_raw.as_deref(),
+                retry_after_secs(retry_raw.as_deref()),
             );
             if is_quota {
                 set_quota_cooldown(base).await;
@@ -453,7 +472,7 @@ async fn interpret(
         method,
         path,
         classify_result(status, &body),
-        retry_after.as_deref(),
+        retry_after_secs(retry_after.as_deref()),
     );
     decide(method, status, retry_after.as_deref(), &body)
 }
@@ -1267,7 +1286,7 @@ pub async fn play_uris(
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_ttl, classify_result, decide, inflight_key, library_uris_arg, parse_retry_after, playlist_items_fallback, playlist_items_primary, playlist_items_should_retry};
+    use super::{cache_ttl, classify_result, decide, inflight_key, library_uris_arg, parse_retry_after, playlist_items_fallback, playlist_items_primary, playlist_items_should_retry, retry_after_secs};
     use reqwest::{Method, StatusCode};
 
     #[test]
@@ -1454,9 +1473,38 @@ mod tests {
     #[test]
     fn player_and_search_bypass_the_cache() {
         assert!(cache_ttl("/me/player").is_none());
+        assert!(cache_ttl("/me/player/queue").is_none());
         assert!(cache_ttl("/search").is_none());
         assert!(cache_ttl("/playlists/abc").is_some());
         assert!(cache_ttl("/me/tracks").is_some());
+    }
+
+    #[test]
+    fn top_and_recently_played_cache_sixty_seconds() {
+        // PR3: top + recently-played extend to 60 s; live player + search stay uncached.
+        assert_eq!(
+            cache_ttl("/me/top/tracks"),
+            Some(std::time::Duration::from_secs(60))
+        );
+        assert_eq!(
+            cache_ttl("/me/top/artists"),
+            Some(std::time::Duration::from_secs(60))
+        );
+        assert_eq!(
+            cache_ttl("/me/player/recently-played"),
+            Some(std::time::Duration::from_secs(60))
+        );
+        assert!(cache_ttl("/me/player").is_none());
+        assert!(cache_ttl("/search").is_none());
+    }
+
+    #[test]
+    fn retry_after_secs_parses_typed_value() {
+        assert_eq!(retry_after_secs(Some("7")), Some(7));
+        assert_eq!(retry_after_secs(Some(" 30 ")), Some(30));
+        assert_eq!(retry_after_secs(None), None);
+        assert_eq!(retry_after_secs(Some("bogus")), None);
+        assert_eq!(retry_after_secs(Some("")), None);
     }
 
     #[test]

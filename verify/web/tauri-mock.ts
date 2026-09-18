@@ -82,9 +82,18 @@ function buildInitScript(
     "  var player = JSON.parse(JSON.stringify(FIXTURES.player));\n" +
     "  var keybinds = Object.assign({}, FIXTURES.keybinds);\n" +
     "  function emptyPage() { return { items: [], total: 0 }; }\n" +
+    "  var mockFaults = {};\n" +
+    "  window.__MOCK_FAIL_NEXT__ = function (cmd, error, times) {\n" +
+    "    mockFaults[cmd] = { error: error, remaining: times || 1 };\n" +
+    "  };\n" +
     "  async function invoke(cmd, args) {\n" +
     "    args = args || {};\n" +
     "    window.__INVOKED__.push({ cmd: cmd, args: args });\n" +
+    "    var fault = mockFaults[cmd];\n" +
+    "    if (fault && fault.remaining > 0) {\n" +
+    "      fault.remaining -= 1;\n" +
+    "      throw new Error(fault.error);\n" +
+    "    }\n" +
     "    switch (cmd) {\n" +
     "      case 'auth_status': return { logged_in: true, awaiting_callback: false };\n" +
     "      case 'start_login': return 'https://example.invalid/authorize';\n" +
@@ -121,7 +130,13 @@ function buildInitScript(
     "      case 'play_uris': return null;\n" +
     "      case 'get_lyrics': return FIXTURES.lyrics;\n" +
     "      case 'get_me': return FIXTURES.me;\n" +
-    "      case 'get_my_playlists': return FIXTURES.playlists;\n" +
+    "      case 'get_my_playlists': {\n" +
+    "        var plItems = (FIXTURES.playlists && FIXTURES.playlists.items) || [];\n" +
+    "        var plTotal = (FIXTURES.playlists && typeof FIXTURES.playlists.total === 'number') ? FIXTURES.playlists.total : plItems.length;\n" +
+    "        var plLim = Number(args.limit) || 20; if (plLim < 1) plLim = 20; if (plLim > 50) plLim = 50;\n" +
+    "        var plOff = Number(args.offset) || 0; if (plOff < 0) plOff = 0;\n" +
+    "        return { items: plItems.slice(plOff, plOff + plLim), total: plTotal };\n" +
+    "      }\n" +
     "      case 'create_playlist': return { id: 'pl-new', uri: 'spotify:playlist:pl-new' };\n" +
     "      case 'get_my_tracks': return FIXTURES.savedTracks;\n" +
     "      case 'get_my_albums': return FIXTURES.savedAlbums;\n" +
@@ -253,4 +268,18 @@ export async function invokedCommands(page: Page): Promise<InvokedCall[]> {
 export async function commandsNamed(page: Page, cmd: string): Promise<Record<string, unknown>[]> {
   const all = await invokedCommands(page);
   return all.filter((c) => c.cmd === cmd).map((c) => c.args ?? {});
+}
+
+/** Fail the next N invocations of one command with a throttle-style error.
+ *  Used for 429 fixtures: the mock throws, the app queues, then flushes. */
+export async function failNext(page: Page, cmd: string, error: string, times = 1): Promise<void> {
+  await page.evaluate(
+    ([c, e, n]) => {
+      const w = window as unknown as {
+        __MOCK_FAIL_NEXT__?: (cmd: string, error: string, times: number) => void;
+      };
+      w.__MOCK_FAIL_NEXT__?.(c as string, e as string, n as number);
+    },
+    [cmd, error, times] as unknown as [string, string, number],
+  );
 }
