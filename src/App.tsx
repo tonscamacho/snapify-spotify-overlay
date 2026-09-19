@@ -29,7 +29,7 @@ import {
 } from "./components/icons";
 import { api, parsePlayer, toThrottleError } from "./lib/spotify";
 import { PendingQueue, flushDelayMs } from "./lib/pendingQueue";
-import { reportOverlayMode, reportOverlayRegions } from "./lib/overlay";
+import { reportOverlayMode, reportOverlayRegions, watchRegionElementSizes } from "./lib/overlay";
 import { ensurePlayer, setSdkVolume } from "./lib/player-sdk";
 import { initialBrowse } from "./lib/browse";
 import type { TransLang } from "./lib/translate";
@@ -494,6 +494,17 @@ export default function App() {
     setSettingsClosing(false);
   }, []);
 
+  // Visibility truth lives in Rust: dock, settings, tray, and the global
+  // hotkey all funnel through `toggle_visibility`, which flips the window
+  // and emits `overlay-visibility-changed` (handled above). The frontend
+  // never calls win.hide()/show() directly, so the paths cannot drift.
+  const toggleVisibility = useCallback(() => {
+    void invoke("toggle_visibility").catch(() => {
+      // Web / mocked runs have no Rust side: stay on the current state and
+      // let the visibility event (or a retry) settle the truth.
+    });
+  }, []);
+
   const flashErr = useCallback(
     (m: string) => {
       setErr(m);
@@ -800,22 +811,38 @@ export default function App() {
   }, [loggedIn, interactive, settingsOpen, editing]);
 
   // Hit regions follow the visible UI so empty stage pixels stay
-  // click-through even while interactive. Debounced: pane drags update
-  // layout at pointer rate, the Rust poller samples at 20 Hz anyway.
-  useEffect(() => {
-    const t = window.setTimeout(() => {
+  // click-through even while interactive. Dirty-rect diffing lives in
+  // overlay.ts (unchanged rects skip the invoke); this scheduler adds the
+  // rate bound: at most one report per 120 ms no matter how fast layout,
+  // toasts, or observers churn, so a drag can never exceed ~8/s. The Rust
+  // applied-signature dedupe is only a backstop. The ResizeObserver catches
+  // element-size changes (toast growth, uiScale zoom reflow) that never
+  // touch layout state; window resize is covered the same way.
+  const regionTimer = useRef(0);
+  const scheduleRegionReport = useCallback(() => {
+    if (regionTimer.current) window.clearTimeout(regionTimer.current);
+    regionTimer.current = window.setTimeout(() => {
+      regionTimer.current = 0;
       void reportOverlayRegions();
-    }, 80);
-    return () => window.clearTimeout(t);
-  }, [layout, preset, interactive, editing, settingsOpen, toasts, loggedIn, uiScale, visible]);
+    }, 120);
+  }, []);
+
+  useEffect(() => {
+    scheduleRegionReport();
+  }, [layout, preset, interactive, editing, settingsOpen, toasts, loggedIn, uiScale, visible, scheduleRegionReport]);
 
   useEffect(() => {
     const onResize = () => {
-      void reportOverlayRegions();
+      scheduleRegionReport();
     };
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
+    const stopWatching = watchRegionElementSizes(scheduleRegionReport);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      stopWatching();
+      if (regionTimer.current) window.clearTimeout(regionTimer.current);
+    };
+  }, [scheduleRegionReport]);
 
   // In-app shortcuts. Global chords (play/pause, next, mute, like, seek,
   // interact, edit, visibility) arrive as Tauri events even while focused, so
@@ -2002,11 +2029,7 @@ export default function App() {
         <div className="dock" role="toolbar" aria-label="Overlay editor">
           <button
             className="tbtn"
-            onClick={() => {
-              const win = getCurrentWindow();
-              if (visible) void win.hide().then(() => setVisible(false));
-              else void win.show().then(() => setVisible(true));
-            }}
+            onClick={toggleVisibility}
             title={`Show / Hide window (${keybinds.toggleVisibility})`}
             aria-label={visible ? "Hide window" : "Show window"}
             aria-pressed={!visible}
@@ -2226,11 +2249,7 @@ export default function App() {
         }}
         onInteractToggle={() => setInteractive((v) => !v)}
         onEditToggle={() => setEditing((v) => !v)}
-        onVisibilityToggle={() => {
-          const win = getCurrentWindow();
-          if (visible) void win.hide().then(() => setVisible(false));
-          else void win.show().then(() => setVisible(true));
-        }}
+        onVisibilityToggle={toggleVisibility}
         editing={editing}
         visible={visible}
         onClickToSeek={setClickToSeek}

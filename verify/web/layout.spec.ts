@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { stubTauri } from "./tauri-mock";
+import { stubTauri, commandsNamed } from "./tauri-mock";
 import { MINIMAL_LAYOUT, buildFixtures } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
@@ -252,6 +252,55 @@ test("first-run coach pill shows the keys, then dismisses forever", async ({ pag
   expect(await page.evaluate(() => localStorage.getItem("snapify-coach-dismissed"))).toBe("1");
   await page.reload();
   await expect(page.getByRole("button", { name: "Dismiss shortcut hint" })).toHaveCount(0);
+});
+
+// Coach-pill region gap (PR1 fold-in): the pill is in the interactive-mode
+// regions, so it is clickable when visible. Passive click-through is intact
+// by construction (Rust ignores regions unless interactive + the window
+// starts with ignoreCursorEvents), and the empty-stage spec in
+// overlay-passthrough covers the passthrough geometry.
+test("coach pill is topmost under its center and covered by reported regions", async ({
+  page,
+}) => {
+  const pill = page.getByRole("button", { name: "Dismiss shortcut hint" });
+  await expect(pill).toBeVisible();
+
+  const box = await pill.boundingBox();
+  if (!box) throw new Error("coach pill has no box");
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+
+  // Interactive mode (seeded): the pill itself wins hit-testing at its center.
+  const hit = await page.evaluate(
+    ({ x, y }) => {
+      const el = document.elementFromPoint(x, y) as HTMLElement | null;
+      if (!el) return "none";
+      return el.closest(".hint-chip")
+        ? "pill"
+        : `${el.tagName}.${String(el.className ?? "")}`;
+    },
+    { x: cx, y: cy },
+  );
+  expect(hit).toBe("pill");
+
+  // And the reported hit-regions cover the pill, so Rust makes it clickable.
+  await expect
+    .poll(async () => (await commandsNamed(page, "set_overlay_regions")).length, {
+      timeout: 10000,
+    })
+    .toBeGreaterThan(0);
+  const reports = await commandsNamed(page, "set_overlay_regions");
+  const last = reports[reports.length - 1] as unknown as {
+    regions: Array<{ x: number; y: number; w: number; h: number }>;
+  };
+  const covers = (last.regions ?? []).some(
+    (rg) =>
+      rg.x <= box.x + 2 &&
+      rg.y <= box.y + 2 &&
+      rg.x + rg.w >= box.x + box.width - 2 &&
+      rg.y + rg.h >= box.y + box.height - 2,
+  );
+  expect(covers).toBe(true);
 });
 
 test("Alt+Arrows moves the focused pane, persists, flashes guides, undoes", async ({ page }) => {

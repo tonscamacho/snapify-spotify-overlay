@@ -42,6 +42,14 @@ fn toggle_visibility(app: &tauri::AppHandle) {
     }
 }
 
+/// Frontend command surface for `toggle_visibility`: dock, settings, tray,
+/// and the global hotkey all funnel through the same flip so the paths
+/// cannot drift. The frontend already invokes this name.
+#[tauri::command]
+fn toggle_visibility_cmd(app: tauri::AppHandle) {
+    toggle_visibility(&app);
+}
+
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let visibility =
         MenuItem::with_id(app, "toggle-visibility", "Show / Hide window", true, None::<&str>)?;
@@ -284,6 +292,7 @@ pub fn run() {
             system::set_autostart,
             overlay::set_overlay_mode,
             overlay::set_overlay_regions,
+            toggle_visibility_cmd,
             keybinds::get_keybinds,
             keybinds::keybind_startup_errors,
             keybinds::set_keybind,

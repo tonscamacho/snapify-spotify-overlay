@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { stubTauri, commandsNamed } from "./tauri-mock";
+import { stubTauri, commandsNamed, invokedCommands } from "./tauri-mock";
 import { MINIMAL_LAYOUT } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
@@ -84,8 +84,10 @@ test("empty-stage clicks hit nothing interactive, even with the coach pill up", 
   await expect(page.locator('section[data-pane="player"]')).toBeVisible();
 });
 
-// Region reports stay under 10/s during a live drag: the 80 ms debounce in
-// App coalesces per-frame layout writes into a trailing report.
+// Region reports stay under 10/s during a live drag: the 120 ms trailing
+// scheduler in App coalesces per-frame layout writes, and the overlay.ts
+// dirty-rect diff skips unchanged resolves, so a drag reports at most
+// ~8/s by construction (1 per 120 ms window).
 test("region reports stay under 10 per second during a drag", async ({ page }) => {
   await stubTauri(page, { layout: MINIMAL_LAYOUT });
   await page.goto("/");
@@ -115,4 +117,109 @@ test("region reports stay under 10 per second during a drag", async ({ page }) =
   // eslint-disable-next-line no-console
   console.log(`region reports during drag: ${after - before} in ${elapsedS.toFixed(2)}s = ${rate.toFixed(2)}/s`);
   expect(rate).toBeLessThan(10);
+});
+
+// Visibility truth lives in Rust: dock hide/show and settings hide/show
+// must both invoke `toggle_visibility` (tray + global hotkey already do)
+// and must never call win.hide()/show() directly (`plugin:window|hide`
+// / `plugin:window|show`), so the three paths cannot drift.
+test("dock + settings hide/show route through toggle_visibility", async ({ page }) => {
+  await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
+
+  const directCount = async () =>
+    (await invokedCommands(page)).filter(
+      (c) => c.cmd === "plugin:window|hide" || c.cmd === "plugin:window|show",
+    ).length;
+  expect(await directCount()).toBe(0);
+
+  // Dock path.
+  await page.getByRole("button", { name: "Hide window" }).click();
+  await expect
+    .poll(async () => (await commandsNamed(page, "toggle_visibility")).length, {
+      timeout: 5000,
+    })
+    .toBeGreaterThan(0);
+
+  // Settings path.
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog).toBeVisible();
+  const seen = (await commandsNamed(page, "toggle_visibility")).length;
+  await dialog.getByRole("button", { name: "Hide", exact: true }).click();
+  await expect
+    .poll(async () => (await commandsNamed(page, "toggle_visibility")).length, {
+      timeout: 5000,
+    })
+    .toBeGreaterThan(seen);
+
+  // Neither path bypassed Rust truth with a direct hide/show.
+  expect(await directCount()).toBe(0);
+});
+
+// Startup timing, frontend half of the Rust note_boot/note_first_report
+// pair: the snapify-boot mark lands at module load and the first-report
+// mark + console line land on the first successful region report.
+test("boot timing mark is present through first region report", async ({ page }) => {
+  await expect
+    .poll(async () => (await commandsNamed(page, "set_overlay_regions")).length, {
+      timeout: 10000,
+    })
+    .toBeGreaterThan(0);
+  const marks = await page.evaluate(() => ({
+    boot: performance.getEntriesByName("snapify-boot").length,
+    first: performance.getEntriesByName("snapify-first-region-report").length,
+  }));
+  expect(marks.boot).toBeGreaterThan(0);
+  expect(marks.first).toBeGreaterThan(0);
+});
+
+// Zoom-drift check (cheap path: keep `zoom`, prove regions still match).
+// At 130% UI scale the reported regions must still align with the panes
+// (both derive from getBoundingClientRect, so zoom cannot drift them).
+// Measured 2026-09-19: pane {"x":31,"y":31,"w":442,"h":307} == region
+// {"x":31,"y":31,"w":442,"h":307} (exact, <=1px tolerance) — zoom kept.
+test("130% UI scale keeps reported regions aligned with panes", async ({ page }) => {
+  await stubTauri(page, { layout: MINIMAL_LAYOUT });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
+
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog).toBeVisible();
+  const scale = dialog.getByLabel("UI scale");
+  const before = (await commandsNamed(page, "set_overlay_regions")).length;
+  await scale.focus();
+  await page.keyboard.press("End");
+  await expect(scale).toHaveAttribute("aria-valuetext", "130 percent");
+
+  // The zoom reflow changes resolved rects, so the diff must re-report.
+  await expect
+    .poll(async () => (await commandsNamed(page, "set_overlay_regions")).length, {
+      timeout: 10000,
+    })
+    .toBeGreaterThan(before);
+
+  const reports = await commandsNamed(page, "set_overlay_regions");
+  const last = reports[reports.length - 1] as unknown as {
+    regions: Array<{ x: number; y: number; w: number; h: number }>;
+  };
+  const pane = await page.locator('section[data-pane="player"]').evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return {
+      x: Math.round(r.left),
+      y: Math.round(r.top),
+      w: Math.round(r.width),
+      h: Math.round(r.height),
+    };
+  });
+  // eslint-disable-next-line no-console
+  console.log(`130% zoom: pane ${JSON.stringify(pane)} vs regions ${JSON.stringify(last.regions)}`);
+  const match = (last.regions ?? []).some(
+    (rg) =>
+      Math.abs(rg.x - pane.x) <= 1 &&
+      Math.abs(rg.y - pane.y) <= 1 &&
+      Math.abs(rg.w - pane.w) <= 1 &&
+      Math.abs(rg.h - pane.h) <= 1,
+  );
+  expect(match).toBe(true);
 });
