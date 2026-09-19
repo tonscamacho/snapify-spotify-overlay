@@ -122,7 +122,13 @@ export function parseQueueContext(raw: unknown): Omit<QueueContext, "name"> | nu
   return { kind: type as QueueContextKind, id: parts[2], uri };
 }
 
-export function parseQueue(raw: unknown): { current: QueueItem | null; upcoming: QueueItem[] } {
+/** Queue parser. Uncapped by default so long queues scroll in full; pass an
+ *  explicit cap (10) as the degraded fallback when the endpoint is
+ *  throttled and the UI pins to the last-known short list. */
+export function parseQueue(
+  raw: unknown,
+  cap: number = Number.POSITIVE_INFINITY,
+): { current: QueueItem | null; upcoming: QueueItem[] } {
   const out = { current: null as QueueItem | null, upcoming: [] as QueueItem[] };
   if (!raw || typeof raw !== "object") return out;
   const o = raw as Record<string, unknown>;
@@ -130,8 +136,9 @@ export function parseQueue(raw: unknown): { current: QueueItem | null; upcoming:
     out.current = parseTrackLite(o["currently_playing"] as Record<string, unknown>);
   }
   if (Array.isArray(o["queue"])) {
+    const limit = Number.isFinite(cap) ? Math.max(0, Math.floor(cap)) : Number.MAX_SAFE_INTEGER;
     out.upcoming = (o["queue"] as Array<Record<string, unknown>>)
-      .slice(0, 10)
+      .slice(0, limit)
       .map(parseTrackLite);
   }
   return out;

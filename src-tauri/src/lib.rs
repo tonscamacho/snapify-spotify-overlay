@@ -122,6 +122,10 @@ fn register_shortcuts(app: &tauri::AppHandle, map: &HashMap<String, String>) -> 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Boot instant for the boot-to-first-overlay-report timing log (the
+    // elapsed time prints from `overlay::set_overlay_mode/regions` on the
+    // first frontend report).
+    overlay::note_boot();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -136,7 +140,10 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec![]),
+            // Autostart relaunches with `--minimized`; `setup` hides the
+            // window below so boot never flashes over a game. The tray
+            // icon restores it.
+            Some(vec!["--minimized"]),
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -206,6 +213,13 @@ pub fn run() {
             }
             let shortcut_issues = register_shortcuts(&app.handle(), &map);
             app.manage(keybinds::KeybindIssues(Mutex::new(shortcut_issues)));
+            // `--minimized` (autostart or manual) starts hidden: no boot
+            // flash over a game, tray restores on demand.
+            if std::env::args().any(|a| a == "--minimized") {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.hide();
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

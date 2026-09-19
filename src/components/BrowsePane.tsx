@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/spotify";
 import {
@@ -22,6 +22,7 @@ import {
   parseUserProfile,
   scopeHint,
   toLibraryItem,
+  SEARCH_PAGE,
 } from "../lib/browse";
 import { usePagedList } from "../lib/usePagedList";
 import type {
@@ -124,21 +125,41 @@ function TrackRow({
   index,
   onPlay,
   onQueue,
+  onOpen,
 }: {
   t: QueueItem;
   index?: number;
   onPlay?: () => void;
   onQueue?: () => void;
+  /** Open the track/episode detail (Save + show notes). Absent keeps the
+   *  plain label for lists where detail adds nothing. */
+  onOpen?: () => void;
 }) {
+  const label = (
+    <>
+      {t.name}
+      <small>{t.artists}</small>
+    </>
+  );
   return (
     <li className="q">
       {typeof index === "number" && (
         <span className="q-index">{String(index + 1).padStart(2, "0")}</span>
       )}
-      <span className="q-name" title={`${t.name} — ${t.artists}`}>
-        {t.name}
-        <small>{t.artists}</small>
-      </span>
+      {onOpen ? (
+        <button
+          className="q-name browse-name"
+          title={`${t.name} — ${t.artists}`}
+          aria-label={`Open ${t.name}`}
+          onClick={onOpen}
+        >
+          {label}
+        </button>
+      ) : (
+        <span className="q-name" title={`${t.name} — ${t.artists}`}>
+          {label}
+        </span>
+      )}
       <span className="q-time">{formatMs(t.durationMs)}</span>
       {onPlay && (
         <button
@@ -193,6 +214,27 @@ function MoreSentinel({
   );
 }
 
+/** Detail entry for a playable uri, so track/episode rows can open their
+ *  Save + show-notes detail instead of dead-ending. Null for junk. */
+function entryForUri(uri: string, name?: string): BrowseEntry | null {
+  const parts = uri.split(":");
+  if (parts.length !== 3 || parts[0] !== "spotify" || !parts[2]) return null;
+  const kind = parts[1];
+  if (
+    kind === "track" ||
+    kind === "episode" ||
+    kind === "chapter" ||
+    kind === "show" ||
+    kind === "album" ||
+    kind === "playlist" ||
+    kind === "artist" ||
+    kind === "audiobook"
+  ) {
+    return { kind, id: parts[2], name } as BrowseEntry;
+  }
+  return null;
+}
+
 function ThrottledNote({ message, onRetry }: { message: string; onRetry: () => void }) {
   const quota = /quota-exceeded/i.test(message);
   return (
@@ -203,6 +245,363 @@ function ThrottledNote({ message, onRetry }: { message: string; onRetry: () => v
       </button>
     </div>
   );
+}
+
+/** Recent searches: local only, never leaves the machine. Capped at 8,
+ *  most recent first, deduped. */
+const SEARCH_RECENTS_KEY = "snapify-search-recents";
+const SEARCH_RECENTS_MAX = 8;
+
+function loadRecents(): string[] {
+  try {
+    const raw = localStorage.getItem(SEARCH_RECENTS_KEY);
+    if (!raw) return [];
+    const v = JSON.parse(raw) as unknown;
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").slice(0, SEARCH_RECENTS_MAX) : [];
+  } catch {
+    return [];
+  }
+}
+
+function emptyResults(): SearchResults {
+  return { tracks: [], artists: [], playlists: [], albums: [], shows: [], episodes: [], audiobooks: [] };
+}
+
+/** Merge paged search windows, deduping by uri/id so an overlapping backend
+ *  page never duplicates rows (or React keys). */
+function mergeSearch(pages: SearchResults[]): SearchResults {
+  const out = emptyResults();
+  const seen = new Set<string>();
+  const takeTracks = (list: QueueItem[]) => {
+    for (const t of list) {
+      const k = `u:${t.uri}`;
+      if (t.uri && seen.has(k)) continue;
+      seen.add(k);
+      out.tracks.push(t);
+    }
+  };
+  const takeLib = (into: LibraryItem[], list: LibraryItem[]) => {
+    for (const it of list) {
+      const k = `l:${it.id}`;
+      if (it.id && seen.has(k)) continue;
+      seen.add(k);
+      into.push(it);
+    }
+  };
+  for (const pg of pages) {
+    takeTracks(pg.tracks);
+    takeTracks(pg.episodes);
+    // Episodes share the tracks dedupe pool on purpose: the same uri must
+    // never render twice even across buckets. Re-split below.
+    takeLib(out.artists, pg.artists);
+    takeLib(out.playlists, pg.playlists);
+    takeLib(out.albums, pg.albums);
+    takeLib(out.shows, pg.shows);
+    takeLib(out.audiobooks, pg.audiobooks);
+  }
+  // Un-split episodes back out of the tracks pool.
+  const eps = out.tracks.filter((t) => t.uri.startsWith("spotify:episode:"));
+  out.tracks = out.tracks.filter((t) => !t.uri.startsWith("spotify:episode:"));
+  out.episodes = eps;
+  return out;
+}
+
+/** Paged search: one usePagedList sentinel pages offset windows of
+ *  SEARCH_PAGE (10) per bucket through the existing limit/offset backend.
+ *  Stops when no bucket fills the window, or when a page adds nothing new
+ *  (mock-safe duplicate guard). */
+function PagedSearch({
+  query,
+  resetKey,
+  onOpen,
+  onPlayContext,
+  onPlayUris,
+  onQueueAdd,
+  onError,
+  onFirstLoad,
+}: {
+  query: string;
+  resetKey: string;
+  onOpen: (e: BrowseEntry) => void;
+  onPlayContext: (uri: string) => void;
+  onPlayUris: (uris: string[]) => void;
+  onQueueAdd: (uri: string) => void;
+  onError: (m: string) => void;
+  onFirstLoad: () => void;
+}) {
+  const err = useCallback((m: string) => onError(scopeHint(m) ?? m), [onError]);
+  // URIs already rendered for this query: a repeated page (same fixture
+  // twice, overlapping backend windows) ends paging instead of looping.
+  const seenRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    seenRef.current = new Set();
+  }, [query]);
+  const firstLoadRef = useRef(true);
+  useEffect(() => {
+    firstLoadRef.current = true;
+  }, [query]);
+  const list = usePagedList<SearchResults, number>(
+    async (limit, cursor) => {
+      const off = cursor ?? 0;
+      const parsed = parseSearch(await api.searchRaw(query, limit, off), 0);
+      const buckets: Array<{ len: number; uris: string[] }> = [
+        { len: parsed.tracks.length, uris: parsed.tracks.map((t) => t.uri) },
+        { len: parsed.artists.length, uris: parsed.artists.map((a) => a.id) },
+        { len: parsed.playlists.length, uris: parsed.playlists.map((x) => x.id) },
+        { len: parsed.albums.length, uris: parsed.albums.map((x) => x.id) },
+        { len: parsed.shows.length, uris: parsed.shows.map((x) => x.id) },
+        { len: parsed.episodes.length, uris: parsed.episodes.map((t) => t.uri) },
+        { len: parsed.audiobooks.length, uris: parsed.audiobooks.map((x) => x.id) },
+      ];
+      const fresh = buckets.flatMap((b) => b.uris).filter((u) => u && !seenRef.current.has(u));
+      for (const u of buckets.flatMap((b) => b.uris)) seenRef.current.add(u);
+      if (firstLoadRef.current) {
+        firstLoadRef.current = false;
+        onFirstLoad();
+      }
+      const full = buckets.some((b) => b.len >= limit);
+      return { items: [parsed], next: full && fresh.length > 0 ? off + limit : null };
+    },
+    { pageSize: SEARCH_PAGE, resetKey: `search:${resetKey}:${query}`, onError: err },
+  );
+  const merged = useMemo(() => mergeSearch(list.items), [list.items]);
+  const empty =
+    !list.loading &&
+    list.items.length > 0 &&
+    merged.tracks.length === 0 &&
+    merged.artists.length === 0 &&
+    merged.playlists.length === 0 &&
+    merged.albums.length === 0 &&
+    merged.shows.length === 0 &&
+    merged.episodes.length === 0 &&
+    merged.audiobooks.length === 0;
+
+  if (list.loading && list.items.length === 0) return <Skeletons />;
+  return (
+    <>
+      {list.throttled && <ThrottledNote message={list.throttled} onRetry={list.retry} />}
+      {empty && (
+        <div className="empty">
+          <div className="empty-title">No results</div>
+          <div className="empty-sub">Try a different query.</div>
+        </div>
+      )}
+      {merged.tracks.length > 0 && (
+        <>
+          <div className="pane-subhead">Songs</div>
+          <ol className="queue">
+            {merged.tracks.map((t, i) => (
+              <TrackRow
+                key={`s-t-${t.uri}-${i}`}
+                t={t}
+                onPlay={() => onPlayUris([t.uri])}
+                onQueue={() => onQueueAdd(t.uri)}
+                onOpen={(() => {
+                  const e = entryForUri(t.uri, t.name);
+                  return e ? () => onOpen(e) : undefined;
+                })()}
+              />
+            ))}
+          </ol>
+        </>
+      )}
+      {merged.artists.length > 0 && (
+        <>
+          <div className="pane-subhead">Artists</div>
+          <ol className="queue">
+            {merged.artists.map((it) => (
+              <Row
+                key={`s-a-${it.id}`}
+                title={it.name}
+                sub="Artist"
+                image={it.image}
+                onOpen={() => onOpen({ kind: "artist", id: it.id, name: it.name })}
+              />
+            ))}
+          </ol>
+        </>
+      )}
+      {merged.playlists.length > 0 && (
+        <>
+          <div className="pane-subhead">Playlists</div>
+          <ol className="queue">
+            {merged.playlists.map((it) => (
+              <Row
+                key={`s-p-${it.id}`}
+                title={it.name}
+                sub={it.subtitle || "Playlist"}
+                image={it.image}
+                onOpen={() => onOpen({ kind: "playlist", id: it.id, name: it.name })}
+                onPlay={() => onPlayContext(it.uri)}
+              />
+            ))}
+          </ol>
+        </>
+      )}
+      {merged.albums.length > 0 && (
+        <>
+          <div className="pane-subhead">Albums</div>
+          <ol className="queue">
+            {merged.albums.map((it) => (
+              <Row
+                key={`s-al-${it.id}`}
+                title={it.name}
+                sub={it.subtitle || "Album"}
+                image={it.image}
+                onOpen={() => onOpen({ kind: "album", id: it.id, name: it.name })}
+                onPlay={() => onPlayContext(it.uri)}
+              />
+            ))}
+          </ol>
+        </>
+      )}
+      {merged.shows.length > 0 && (
+        <>
+          <div className="pane-subhead">Shows</div>
+          <ol className="queue">
+            {merged.shows.map((it) => (
+              <Row
+                key={`s-sh-${it.id}`}
+                title={it.name}
+                sub={it.subtitle || "Show"}
+                image={it.image}
+                onOpen={() => onOpen({ kind: "show", id: it.id, name: it.name })}
+                onPlay={() => onPlayContext(it.uri)}
+              />
+            ))}
+          </ol>
+        </>
+      )}
+      {merged.episodes.length > 0 && (
+        <>
+          <div className="pane-subhead">Episodes</div>
+          <ol className="queue">
+            {merged.episodes.map((t, i) => (
+              <TrackRow
+                key={`s-e-${t.uri}-${i}`}
+                t={t}
+                onPlay={() => onPlayUris([t.uri])}
+                onQueue={() => onQueueAdd(t.uri)}
+                onOpen={(() => {
+                  const e = entryForUri(t.uri, t.name);
+                  return e ? () => onOpen(e) : undefined;
+                })()}
+              />
+            ))}
+          </ol>
+        </>
+      )}
+      {merged.audiobooks.length > 0 && (
+        <>
+          <div className="pane-subhead">Audiobooks</div>
+          <ol className="queue">
+            {merged.audiobooks.map((it) => (
+              <Row
+                key={`s-ab-${it.id}`}
+                title={it.name}
+                sub={it.subtitle || "Audiobook"}
+                image={it.image}
+                onOpen={() => onOpen({ kind: "audiobook", id: it.id, name: it.name })}
+                onPlay={() => onPlayContext(it.uri)}
+              />
+            ))}
+          </ol>
+        </>
+      )}
+      {(merged.tracks.length > 0 ||
+        merged.artists.length > 0 ||
+        merged.playlists.length > 0 ||
+        merged.albums.length > 0 ||
+        merged.shows.length > 0 ||
+        merged.episodes.length > 0 ||
+        merged.audiobooks.length > 0) && (
+        <ol className="queue">
+          <MoreSentinel list={list} />
+        </ol>
+      )}
+      <div className="empty">
+        <div className="empty-title">Categories · Genres · Markets</div>
+        <div className="empty-sub">
+          Removed or deprecated in 2026 for new client IDs. Open the Spotify app to browse categories.
+        </div>
+        <button className="btn sm" onClick={() => void openUrl("https://open.spotify.com/browse")}>
+          OPEN SPOTIFY
+        </button>
+      </div>
+    </>
+  );
+}
+
+/** Optimistic library save with library_contains reconcile. Rolls back on a
+ *  failed write or a disagreeing server; keeps the optimistic state when the
+ *  check itself cannot run. */
+function useLibrarySaved(uri: string | null, onError: (m: string) => void) {
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setSaved(false);
+    if (!uri) return;
+    let live = true;
+    void api
+      .libraryContains([uri])
+      .then((r) => {
+        if (live) setSaved(r[0] === true);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [uri]);
+  const toggle = useCallback(async () => {
+    if (!uri || busy) return;
+    const next = !saved;
+    setSaved(next);
+    setBusy(true);
+    try {
+      if (next) await api.librarySave([uri]);
+      else await api.libraryRemove([uri]);
+      try {
+        const [s] = await api.libraryContains([uri]);
+        if (s !== next) {
+          setSaved(s);
+          onError(s ? "Already in your library" : "Not saved — the change didn't stick");
+          return;
+        }
+      } catch {
+        // Keep the optimistic state when the check itself fails.
+      }
+    } catch (e) {
+      setSaved(!next);
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [uri, saved, busy, onError]);
+  return { saved, busy, toggle };
+}
+
+/** Optimistic follow. No server reconcile: the check-follow page shape is a
+ *  full list read, so a toggle that fails rolls back and a toggle that
+ *  succeeds stands. */
+function useFollowed(onError: (m: string) => void) {
+  const [following, setFollowing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const toggle = useCallback(async (uri: string) => {
+    if (!uri || busy) return;
+    const next = !following;
+    setFollowing(next);
+    setBusy(true);
+    try {
+      if (next) await api.followPut([uri]);
+      else await api.followDelete([uri]);
+    } catch (e) {
+      setFollowing(!next);
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [following, busy, onError]);
+  return { following, busy, toggle };
 }
 
 /** Paged library: playlists, albums, liked songs, followed artists.
@@ -306,16 +705,22 @@ function LibraryList({
     <>
       {list.throttled && <ThrottledNote message={list.throttled} onRetry={list.retry} />}
       <ol className="queue">
-        {list.items.map((it, i) =>
-          "durationMs" in it ? (
-            <TrackRow
-              key={`${(it as QueueItem).uri}-${i}`}
-              t={it as QueueItem}
-              index={i}
-              onPlay={() => onPlayUris([(it as QueueItem).uri])}
-              onQueue={() => onQueueAdd((it as QueueItem).uri)}
-            />
-          ) : (
+        {list.items.map((it, i) => {
+          if ("durationMs" in it) {
+            const t = it as QueueItem;
+            const entry = entryForUri(t.uri, t.name);
+            return (
+              <TrackRow
+                key={`${t.uri}-${i}`}
+                t={t}
+                index={i}
+                onPlay={() => onPlayUris([t.uri])}
+                onQueue={() => onQueueAdd(t.uri)}
+                onOpen={entry ? () => onOpen(entry) : undefined}
+              />
+            );
+          }
+          return (
             <Row
               key={`${tab}-${(it as LibraryItem).id}`}
               title={(it as LibraryItem).name}
@@ -333,8 +738,8 @@ function LibraryList({
               }}
               onPlay={(it as LibraryItem).uri ? () => onPlayContext((it as LibraryItem).uri) : undefined}
             />
-          ),
-        )}
+          );
+        })}
         <MoreSentinel list={list} />
       </ol>
     </>
@@ -354,6 +759,7 @@ function PlaylistTracks({
   onPlayUris,
   onPlayContext,
   onQueueAdd,
+  onOpen,
   onError,
 }: {
   id: string;
@@ -365,6 +771,7 @@ function PlaylistTracks({
   onPlayUris: (uris: string[]) => void;
   onPlayContext: (uri: string) => void;
   onQueueAdd: (uri: string) => void;
+  onOpen: (e: BrowseEntry) => void;
   onError: (m: string) => void;
 }) {
   const err = useCallback((m: string) => onError(scopeHint(m) ?? m), [onError]);
@@ -465,15 +872,19 @@ function PlaylistTracks({
     <>
       {list.throttled && <ThrottledNote message={list.throttled} onRetry={list.retry} />}
       <ol className="queue">
-        {list.items.map((t, i) => (
-          <TrackRow
-            key={`${t.uri}-${i}`}
-            t={t}
-            index={i}
-            onPlay={() => onPlayUris([t.uri])}
-            onQueue={() => onQueueAdd(t.uri)}
-          />
-        ))}
+        {list.items.map((t, i) => {
+          const entry = entryForUri(t.uri, t.name);
+          return (
+            <TrackRow
+              key={`${t.uri}-${i}`}
+              t={t}
+              index={i}
+              onPlay={() => onPlayUris([t.uri])}
+              onQueue={() => onQueueAdd(t.uri)}
+              onOpen={entry ? () => onOpen(entry) : undefined}
+            />
+          );
+        })}
         <MoreSentinel list={list} />
       </ol>
     </>
@@ -484,15 +895,40 @@ export default function BrowsePane(p: Props) {
   const [libTab, setLibTab] = useState<LibTab>("playlists");
   const [detail, setDetail] = useState<DetailData | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [results, setResults] = useState<SearchResults | null>(null);
-  const [searching, setSearching] = useState(false);
   const [me, setMe] = useState<UserProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [topArtists, setTopArtists] = useState<LibraryItem[]>([]);
   const [topTracks, setTopTracks] = useState<QueueItem[]>([]);
   const [recent, setRecent] = useState<QueueItem[]>([]);
   const [gen, setGen] = useState(0);
+  // Debounced search input: `committed` is what PagedSearch pages. Recents
+  // record the committed query once per distinct search, local only.
+  const [committed, setCommitted] = useState("");
+  const [recents, setRecents] = useState<string[]>(() => loadRecents());
   const searchTimer = useRef<number | null>(null);
+
+  const recordRecent = useCallback((q: string) => {
+    const query = q.trim();
+    if (!query) return;
+    setRecents((prev) => {
+      const next = [query, ...prev.filter((r) => r !== query)].slice(0, SEARCH_RECENTS_MAX);
+      try {
+        localStorage.setItem(SEARCH_RECENTS_KEY, JSON.stringify(next));
+      } catch {
+        // Private mode. Recents last the session.
+      }
+      return next;
+    });
+  }, []);
+
+  const clearRecents = useCallback(() => {
+    setRecents([]);
+    try {
+      localStorage.removeItem(SEARCH_RECENTS_KEY);
+    } catch {
+      // Private mode. Nothing persisted anyway.
+    }
+  }, []);
 
   const top = p.state.stack[p.state.stack.length - 1] ?? null;
 
@@ -540,15 +976,33 @@ export default function BrowsePane(p: Props) {
             setDetail(base);
           }
         } else if (entry.kind === "artist") {
-          // Dropped GET /artists/{id}/top-tracks. Replaced with albums
-          // strip + related artists; search is the fallback strip.
+          // Dropped GET /artists/{id}/top-tracks. Albums strip + related
+          // artists load first so the page paints; then one search on the
+          // artist's own name backfills the top-songs strip. The strip is
+          // labeled "from search" where it renders. A failed search keeps
+          // the honestly-empty state instead of blocking the page.
           const [a, al, rel] = await Promise.all([
             api.artist(entry.id),
             api.artistAlbums(entry.id, 10, 0),
             api.relatedArtists(entry.id).catch(() => null),
           ]);
           if (stale()) return;
-          setDetail(parseArtistDetail(a, al, rel));
+          const base = parseArtistDetail(a, al, rel);
+          setDetail(base);
+          try {
+            const node = a as Record<string, unknown> | null;
+            const name =
+              node && typeof node["name"] === "string" ? (node["name"] as string) : "";
+            if (base && base.kind === "artist" && name.trim()) {
+              const found = parseSearch(await api.searchRaw(name.trim(), 5, 0), 0);
+              if (stale()) return;
+              if (found.tracks.length > 0) {
+                setDetail({ ...base, topTracks: found.tracks.slice(0, 10) });
+              }
+            }
+          } catch {
+            // Keep the base detail; the strip stays empty with its hint.
+          }
         } else if (entry.kind === "show") {
           const [s, ep] = await Promise.all([
             api.show(entry.id),
@@ -593,38 +1047,14 @@ export default function BrowsePane(p: Props) {
     if (!top) setDetail(null);
   }, [top?.kind, top && "id" in top ? (top as { id: string }).id : null]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const searchGen = useRef(0);
-  const runSearch = useCallback(async (q: string) => {
-    const query = q.trim();
-    if (!query) {
-      setResults(null);
-      return;
-    }
-    const id = ++searchGen.current;
-    setSearching(true);
-    try {
-      // Search capped: limit max 10, paginate by offset.
-      const res = parseSearch(await api.searchRaw(query, 10, 0));
-      if (id !== searchGen.current) return;
-      setResults(res);
-    } catch (e) {
-      if (id !== searchGen.current) return;
-      const m = e instanceof Error ? e.message : String(e);
-      p.onError(scopeHint(m) ?? m);
-    } finally {
-      if (id === searchGen.current) setSearching(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   useEffect(() => {
     if (p.state.view !== "search") return;
     if (searchTimer.current) window.clearTimeout(searchTimer.current);
-    searchTimer.current = window.setTimeout(() => void runSearch(p.state.query), 450);
+    searchTimer.current = window.setTimeout(() => setCommitted(p.state.query), 450);
     return () => {
       if (searchTimer.current) window.clearTimeout(searchTimer.current);
     };
-  }, [p.state.query, p.state.view, runSearch]);
+  }, [p.state.query, p.state.view]);
 
   const fetchProfile = useCallback(async () => {
     setProfileLoading(true);
@@ -693,8 +1123,20 @@ export default function BrowsePane(p: Props) {
   const refresh = () => {
     if (p.state.view === "library") setGen((g) => g + 1);
     else if (p.state.view === "profile") void fetchProfile();
-    else void runSearch(p.state.query);
+    else setGen((g) => g + 1);
   };
+  const errInline = useCallback(
+    (m: string) => p.onError(scopeHint(m) ?? m),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const lib = useLibrarySaved(
+    top && (top.kind === "track" || top.kind === "episode" || top.kind === "chapter")
+      ? (detail && "uri" in detail ? detail.uri : null)
+      : null,
+    errInline,
+  );
+  const follow = useFollowed(errInline);
 
   if (top) {
     const label = top.name ?? top.id;
@@ -739,7 +1181,38 @@ export default function BrowsePane(p: Props) {
                   <button className="btn sm primary" onClick={() => p.onPlayContext(detail.uri)}>
                     Play
                   </button>
-                )}
+                )}{" "}
+                {(detail.kind === "track" ||
+                  detail.kind === "episode" ||
+                  detail.kind === "chapter") &&
+                  detail.uri && (
+                    <button
+                      className="btn sm"
+                      onClick={() => void lib.toggle()}
+                      disabled={lib.busy}
+                      aria-pressed={lib.saved}
+                      title={lib.saved ? "Remove from your library" : "Save to your library"}
+                      aria-label={lib.saved ? "Remove from your library" : "Save to your library"}
+                    >
+                      {lib.saved ? "Saved ✓" : "Save"}
+                    </button>
+                  )}
+                {(detail.kind === "playlist" ||
+                  detail.kind === "artist" ||
+                  detail.kind === "show" ||
+                  detail.kind === "audiobook") &&
+                  detail.uri && (
+                    <button
+                      className="btn sm"
+                      onClick={() => void follow.toggle(detail.uri)}
+                      disabled={follow.busy}
+                      aria-pressed={follow.following}
+                      title={follow.following ? "Unfollow" : "Follow"}
+                      aria-label={follow.following ? "Unfollow" : "Follow"}
+                    >
+                      {follow.following ? "Following ✓" : "Follow"}
+                    </button>
+                  )}
               </div>
             </div>
             {detail.kind === "playlist" && top.kind === "playlist" ? (
@@ -754,22 +1227,35 @@ export default function BrowsePane(p: Props) {
                 onPlayUris={p.onPlayUris}
                 onPlayContext={p.onPlayContext}
                 onQueueAdd={p.onQueueAdd}
+                onOpen={open}
                 onError={p.onError}
               />
             ) : detail.kind === "artist" ? (
               <>
                 {detail.topTracks.length > 0 && (
-                  <ol className="queue">
-                    {detail.topTracks.slice(0, 20).map((t, i) => (
-                      <TrackRow
-                        key={`${t.uri}-${i}`}
-                        t={t}
-                        index={i}
-                        onPlay={() => p.onPlayUris([t.uri])}
-                        onQueue={() => p.onQueueAdd(t.uri)}
-                      />
-                    ))}
-                  </ol>
+                  <>
+                    <div
+                      className="pane-subhead"
+                      title="Spotify removed the artist top-tracks endpoint in 2026 — these songs come from search."
+                    >
+                      Top songs · from search
+                    </div>
+                    <ol className="queue">
+                      {detail.topTracks.slice(0, 10).map((t, i) => (
+                        <TrackRow
+                          key={`${t.uri}-${i}`}
+                          t={t}
+                          index={i}
+                          onPlay={() => p.onPlayUris([t.uri])}
+                          onQueue={() => p.onQueueAdd(t.uri)}
+                          onOpen={(() => {
+                            const e = entryForUri(t.uri, t.name);
+                            return e ? () => open(e) : undefined;
+                          })()}
+                        />
+                      ))}
+                    </ol>
+                  </>
                 )}
                 {detail.albums.length > 0 && (
                   <>
@@ -805,6 +1291,10 @@ export default function BrowsePane(p: Props) {
                     index={i}
                     onPlay={() => p.onPlayUris([t.uri])}
                     onQueue={() => p.onQueueAdd(t.uri)}
+                    onOpen={(() => {
+                      const e = entryForUri(t.uri, t.name);
+                      return e ? () => open(e) : undefined;
+                    })()}
                   />
                 ))}
               </ol>
@@ -817,22 +1307,42 @@ export default function BrowsePane(p: Props) {
                     index={i}
                     onPlay={() => p.onPlayUris([t.uri])}
                     onQueue={() => p.onQueueAdd(t.uri)}
+                    onOpen={(() => {
+                      const e = entryForUri(t.uri, t.name);
+                      return e ? () => open(e) : undefined;
+                    })()}
                   />
                 ))}
               </ol>
             ) : detail.kind === "episode" || detail.kind === "chapter" || detail.kind === "track" ? (
-              <ol className="queue">
-                <TrackRow
-                  t={{
-                    name: detail.name,
-                    artists: detail.kind === "episode" ? detail.show : detail.kind === "chapter" ? detail.book : detail.artists,
-                    durationMs: detail.durationMs,
-                    uri: detail.uri,
-                  }}
-                  onPlay={() => p.onPlayUris([detail.uri])}
-                  onQueue={() => p.onQueueAdd(detail.uri)}
-                />
-              </ol>
+              <>
+                {(detail.kind === "episode" || detail.kind === "chapter") && (
+                  <div className="detail-notes" style={{ margin: "6px 0" }}>
+                    <button
+                      className="btn sm"
+                      onClick={() =>
+                        void openUrl(`https://open.spotify.com/${detail.uriType}/${top.id}`)
+                      }
+                      title="Open show notes in Spotify"
+                      aria-label="Open show notes in Spotify"
+                    >
+                      Show notes
+                    </button>
+                  </div>
+                )}
+                <ol className="queue">
+                  <TrackRow
+                    t={{
+                      name: detail.name,
+                      artists: detail.kind === "episode" ? detail.show : detail.kind === "chapter" ? detail.book : detail.artists,
+                      durationMs: detail.durationMs,
+                      uri: detail.uri,
+                    }}
+                    onPlay={() => p.onPlayUris([detail.uri])}
+                    onQueue={() => p.onQueueAdd(detail.uri)}
+                  />
+                </ol>
+              </>
             ) : (
               <ol className="queue">
                 {detail.tracks.slice(0, 20).map((t, i) => (
@@ -842,6 +1352,10 @@ export default function BrowsePane(p: Props) {
                     index={i}
                     onPlay={() => p.onPlayUris([t.uri])}
                     onQueue={() => p.onQueueAdd(t.uri)}
+                    onOpen={(() => {
+                      const e = entryForUri(t.uri, t.name);
+                      return e ? () => open(e) : undefined;
+                    })()}
                   />
                 ))}
               </ol>
@@ -962,152 +1476,45 @@ export default function BrowsePane(p: Props) {
             </button>
           )}
           </div>
-          {searching && !results ? (
-            <Skeletons />
-          ) : !results ? (
+          {recents.length > 0 && (
+            <div className="recents" aria-label="Recent searches">
+              <span className="dim">Recent: </span>
+              {recents.map((r) => (
+                <button
+                  key={r}
+                  className="chip"
+                  title={`Search ${r} again`}
+                  aria-label={`Search ${r} again`}
+                  onClick={() => p.onChange({ ...p.state, query: r })}
+                >
+                  {r}
+                </button>
+              ))}
+              <button
+                className="btn sm"
+                aria-label="Clear recent searches"
+                onClick={clearRecents}
+              >
+                Clear
+              </button>
+            </div>
+          )}
+          {!committed.trim() ? (
             <div className="empty">
               <div className="empty-title">Search Spotify</div>
               <div className="empty-sub">Results open playlists, artists, albums, shows, episodes, and audiobooks.</div>
             </div>
           ) : (
-            <>
-              {results.tracks.length > 0 && (
-                <>
-                  <div className="pane-subhead">Songs</div>
-                  <ol className="queue">
-                    {results.tracks.slice(0, 20).map((t, i) => (
-                      <TrackRow
-                        key={`s-t-${t.uri}-${i}`}
-                        t={t}
-                        onPlay={() => p.onPlayUris([t.uri])}
-                        onQueue={() => p.onQueueAdd(t.uri)}
-                      />
-                    ))}
-                  </ol>
-                </>
-              )}
-              {results.artists.length > 0 && (
-                <>
-                  <div className="pane-subhead">Artists</div>
-                  <ol className="queue">
-                    {results.artists.slice(0, 20).map((it) => (
-                      <Row
-                        key={`s-a-${it.id}`}
-                        title={it.name}
-                        sub="Artist"
-                        image={it.image}
-                        onOpen={() => open({ kind: "artist", id: it.id, name: it.name })}
-                      />
-                    ))}
-                  </ol>
-                </>
-              )}
-              {results.playlists.length > 0 && (
-                <>
-                  <div className="pane-subhead">Playlists</div>
-                  <ol className="queue">
-                    {results.playlists.slice(0, 20).map((it) => (
-                      <Row
-                        key={`s-p-${it.id}`}
-                        title={it.name}
-                        sub={it.subtitle || "Playlist"}
-                        image={it.image}
-                        onOpen={() => open({ kind: "playlist", id: it.id, name: it.name })}
-                        onPlay={() => p.onPlayContext(it.uri)}
-                      />
-                    ))}
-                  </ol>
-                </>
-              )}
-              {results.albums.length > 0 && (
-                <>
-                  <div className="pane-subhead">Albums</div>
-                  <ol className="queue">
-                    {results.albums.slice(0, 20).map((it) => (
-                      <Row
-                        key={`s-al-${it.id}`}
-                        title={it.name}
-                        sub={it.subtitle || "Album"}
-                        image={it.image}
-                        onOpen={() => open({ kind: "album", id: it.id, name: it.name })}
-                        onPlay={() => p.onPlayContext(it.uri)}
-                      />
-                    ))}
-                  </ol>
-                </>
-              )}
-              {results.shows.length > 0 && (
-                <>
-                  <div className="pane-subhead">Shows</div>
-                  <ol className="queue">
-                    {results.shows.slice(0, 20).map((it) => (
-                      <Row
-                        key={`s-sh-${it.id}`}
-                        title={it.name}
-                        sub={it.subtitle || "Show"}
-                        image={it.image}
-                        onOpen={() => open({ kind: "show", id: it.id, name: it.name })}
-                        onPlay={() => p.onPlayContext(it.uri)}
-                      />
-                    ))}
-                  </ol>
-                </>
-              )}
-              {results.episodes.length > 0 && (
-                <>
-                  <div className="pane-subhead">Episodes</div>
-                  <ol className="queue">
-                    {results.episodes.slice(0, 20).map((t, i) => (
-                      <TrackRow
-                        key={`s-e-${t.uri}-${i}`}
-                        t={t}
-                        onPlay={() => p.onPlayUris([t.uri])}
-                        onQueue={() => p.onQueueAdd(t.uri)}
-                      />
-                    ))}
-                  </ol>
-                </>
-              )}
-              {results.audiobooks.length > 0 && (
-                <>
-                  <div className="pane-subhead">Audiobooks</div>
-                  <ol className="queue">
-                    {results.audiobooks.slice(0, 20).map((it) => (
-                      <Row
-                        key={`s-ab-${it.id}`}
-                        title={it.name}
-                        sub={it.subtitle || "Audiobook"}
-                        image={it.image}
-                        onOpen={() => open({ kind: "audiobook", id: it.id, name: it.name })}
-                        onPlay={() => p.onPlayContext(it.uri)}
-                      />
-                    ))}
-                  </ol>
-                </>
-              )}
-              {results.tracks.length === 0 &&
-                results.artists.length === 0 &&
-                results.playlists.length === 0 &&
-                results.albums.length === 0 &&
-                results.shows.length === 0 &&
-                results.episodes.length === 0 &&
-                results.audiobooks.length === 0 && (
-                  <div className="empty">
-                    <div className="empty-title">No results</div>
-                    <div className="empty-sub">Try a different query.</div>
-                    <button className="btn sm" onClick={() => p.onChange({ ...p.state, query: "" })}>Clear</button>
-                  </div>
-                )}
-              <div className="empty">
-                <div className="empty-title">Categories · Genres · Markets</div>
-                <div className="empty-sub">
-                  Removed or deprecated in 2026 for new client IDs. Open the Spotify app to browse categories.
-                </div>
-                <button className="btn sm" onClick={() => void openUrl("https://open.spotify.com/browse")}>
-                  OPEN SPOTIFY
-                </button>
-              </div>
-            </>
+            <PagedSearch
+              query={committed.trim()}
+              resetKey={String(gen)}
+              onOpen={open}
+              onPlayContext={p.onPlayContext}
+              onPlayUris={p.onPlayUris}
+              onQueueAdd={p.onQueueAdd}
+              onError={p.onError}
+              onFirstLoad={() => recordRecent(committed.trim())}
+            />
           )}
         </div>
       )}

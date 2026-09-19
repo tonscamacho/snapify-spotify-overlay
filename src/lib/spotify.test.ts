@@ -134,14 +134,28 @@ describe("parseQueue", () => {
     });
   });
 
-  it("caps the upcoming list at 10", () => {
-    const items = Array.from({ length: 12 }, (_, i) => ({
+  it("returns the full upcoming list by default (no hard cap)", () => {
+    const items = Array.from({ length: 25 }, (_, i) => ({
       name: `T${i}`,
       artists: [],
       duration_ms: i,
       uri: `u:${i}`,
     }));
     const q = parseQueue({ queue: items });
+    expect(q.upcoming).toHaveLength(25);
+    expect(q.upcoming[0].name).toBe("T0");
+    expect(q.upcoming[24].name).toBe("T24");
+    expect(q.current).toBeNull();
+  });
+
+  it("caps the upcoming list at the explicit degraded fallback", () => {
+    const items = Array.from({ length: 12 }, (_, i) => ({
+      name: `T${i}`,
+      artists: [],
+      duration_ms: i,
+      uri: `u:${i}`,
+    }));
+    const q = parseQueue({ queue: items }, 10);
     expect(q.upcoming).toHaveLength(10);
     expect(q.upcoming[0].name).toBe("T0");
     expect(q.upcoming[9].name).toBe("T9");

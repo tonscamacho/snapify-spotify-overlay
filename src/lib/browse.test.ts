@@ -498,6 +498,37 @@ describe("parseArtistDetail", () => {
     expect(d?.kind === "artist" && d.albums).toHaveLength(1);
   });
 
+  it("stays honestly empty without a search backfill", () => {
+    const d = parseArtistDetail(
+      {
+        id: "ar1",
+        name: "Art",
+        images: [{ url: "pic" }, { url: "pic2" }],
+        genres: ["rock", "pop", "jazz", "extra"],
+        uri: "u:ar",
+      },
+      { items: [{ id: "al1", name: "A" }] },
+      {},
+    );
+    expect(d?.kind === "artist" && d.topTracks).toEqual([]);
+  });
+
+  it("backfills top tracks from search-derived data when supplied", () => {
+    const d = parseArtistDetail(
+      { id: "ar1", name: "Art", images: [], genres: [], uri: "u:ar" },
+      { items: [] },
+      {},
+      [
+        { name: "Hit One", artists: "Art", durationMs: 200, uri: "u:h1" },
+        { name: "Hit Two", artists: "Art", durationMs: 210, uri: "u:h2" },
+      ],
+    );
+    expect(d?.kind === "artist" && d.topTracks).toEqual([
+      { name: "Hit One", artists: "Art", durationMs: 200, uri: "u:h1" },
+      { name: "Hit Two", artists: "Art", durationMs: 210, uri: "u:h2" },
+    ]);
+  });
+
   it("returns null without an artist id", () => {
     expect(parseArtistDetail(null, null, null)).toBeNull();
     expect(parseArtistDetail({}, {}, {})).toBeNull();
@@ -517,14 +548,17 @@ describe("parseSearch", () => {
     });
   });
 
-  it("caps tracks at five", () => {
+  it("windows tracks at ten per page and pages with offset", () => {
     const mk = (i: number) => ({ name: `T${i}`, uri: `u:${i}` });
-    const out = parseSearch({
-      tracks: { items: [mk(0), mk(1), mk(2), mk(3), mk(4), mk(5), mk(6)] },
-    });
-    expect(out.tracks).toHaveLength(5);
-    expect(out.tracks[0].name).toBe("T0");
-    expect(out.tracks[4].name).toBe("T4");
+    const items = Array.from({ length: 12 }, (_, i) => mk(i));
+    const page0 = parseSearch({ tracks: { items } });
+    expect(page0.tracks).toHaveLength(10);
+    expect(page0.tracks[0].name).toBe("T0");
+    expect(page0.tracks[9].name).toBe("T9");
+    const page1 = parseSearch({ tracks: { items } }, 10);
+    expect(page1.tracks).toHaveLength(2);
+    expect(page1.tracks[0].name).toBe("T10");
+    expect(parseSearch({ tracks: { items } }, 20).tracks).toHaveLength(0);
   });
 
   it("filters playlists without ids and episodes without uris", () => {

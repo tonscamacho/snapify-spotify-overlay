@@ -39,3 +39,15 @@ test("other sdk errors keep the plain toast without reconnect", async ({ page })
   await expect(toast).toContainText("went offline");
   await expect(toast.getByRole("button", { name: "Reconnect" })).toHaveCount(0);
 });
+
+test("account_error drops the tier to free without touching login", async ({ page }) => {
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText("Fixture Anthem")).toBeVisible();
+
+  await emitSdkError(page, "account_error: Spotify Premium is required for headless playback.");
+
+  await expect(player.getByRole("button", { name: "GET SPOTIFY FREE" })).toBeVisible({
+    timeout: 10000,
+  });
+  await expect(page.locator(".gate")).toHaveCount(0);
+});

@@ -18,6 +18,8 @@
     "core:window:allow-set-focus",
     "updater:default",
     "process:default",
-    "opener:default"
+    "opener:default",
+    "autostart:default",
+    "global-shortcut:default"
   ]
 }

@@ -89,3 +89,52 @@ test("throttled play queues, shows chip, and flushes once", async ({ page }) => 
   await page.waitForTimeout(1500);
   expect((await commandsNamed(page, "play")).length).toBe(2);
 });
+
+test("device panel names where sound plays", async ({ page }) => {
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME)).toBeVisible();
+  const panel = player.getByRole("group", { name: "Playback device" });
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("Sound plays on:");
+  await expect(panel).toContainText("Verify Speaker");
+  await expect(panel.getByRole("button", { name: "Play here via this overlay" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Keep playback there" })).toBeVisible();
+  await page.screenshot({ path: "verify/web/test-results/player-device.png" });
+});
+
+test("Play here moves sound onto the overlay and remembers it", async ({ page }) => {
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME)).toBeVisible();
+  const panel = player.getByRole("group", { name: "Playback device" });
+
+  await panel.getByRole("button", { name: "Play here via this overlay" }).click();
+  await expect
+    .poll(async () => (await commandsNamed(page, "transfer_playback")).length, { timeout: 10000 })
+    .toBeGreaterThan(0);
+  const calls = await commandsNamed(page, "transfer_playback");
+  expect(JSON.stringify(calls[calls.length - 1])).toContain("sdk-device-1");
+
+  const stored = await page.evaluate(() => localStorage.getItem("snapify-device-choice"));
+  expect(stored).toContain('"sdk"');
+
+  await page.reload();
+  const panel2 = page.locator('section[data-pane="player"]').getByRole("group", { name: "Playback device" });
+  await expect(panel2).toContainText("remembered: this overlay");
+});
+
+test("Keep there transfers to the chosen device and remembers it", async ({ page }) => {
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME)).toBeVisible();
+  const panel = player.getByRole("group", { name: "Playback device" });
+
+  await panel.getByRole("button", { name: "Keep playback there" }).click();
+  await expect
+    .poll(async () => (await commandsNamed(page, "transfer_playback")).length, { timeout: 10000 })
+    .toBeGreaterThan(0);
+  const stored = await page.evaluate(() => localStorage.getItem("snapify-device-choice"));
+  expect(stored).toContain("dev-verify-1");
+
+  await page.reload();
+  const panel2 = page.locator('section[data-pane="player"]').getByRole("group", { name: "Playback device" });
+  await expect(panel2).toContainText("remembered");
+});

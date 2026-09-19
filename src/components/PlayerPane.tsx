@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { DeviceInfo, PlayerSnapshot } from "../lib/types";
 import { formatMs } from "../lib/lrc";
@@ -38,8 +38,86 @@ interface Props {
   onShuffle: () => void;
   onRepeat: () => void;
   onTransfer: (id: string) => void;
+  /** Build the headless SDK player and move playback onto it. */
+  onPlayHere: () => void;
   onRefreshDevices: () => void;
   onToast?: (kind: "success" | "info" | "error", text: string) => void;
+}
+
+/** Remembered playback destination, per device list. The SDK device id is
+ *  ephemeral per session, so "sdk" remembers the *kind*; a Connect choice
+ *  remembers the concrete device id and only restores when that id is still
+ *  present. Restored as the panel selection on boot, never as a silent
+ *  transfer. */
+export interface DeviceChoice {
+  kind: "sdk" | "connect";
+  deviceId?: string;
+}
+
+const DEVICE_CHOICE_KEY = "snapify-device-choice";
+
+export function readDeviceChoice(): DeviceChoice | null {
+  try {
+    const raw = localStorage.getItem(DEVICE_CHOICE_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as Partial<DeviceChoice>;
+    if (v.kind === "sdk") return { kind: "sdk" };
+    if (v.kind === "connect" && typeof v.deviceId === "string" && v.deviceId) {
+      return { kind: "connect", deviceId: v.deviceId };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeDeviceChoice(c: DeviceChoice): void {
+  try {
+    localStorage.setItem(DEVICE_CHOICE_KEY, JSON.stringify(c));
+  } catch {
+    // Private mode. Choice lasts the session.
+  }
+}
+
+/** Local per-episode resume store. Spotify keeps server-side progress for
+ *  shows, but a local stamp survives account switches and offline gaps, and
+ *  costs one tiny JSON blob. Keyed by episode (or chapter) id. */
+const EPISODE_RESUME_KEY = "snapify-episode-resume";
+const RESUME_SAVE_EVERY_MS = 5000;
+
+function readResumeStore(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(EPISODE_RESUME_KEY);
+    if (!raw) return {};
+    const v = JSON.parse(raw) as Record<string, unknown>;
+    if (!v || typeof v !== "object") return {};
+    const out: Record<string, number> = {};
+    for (const [k, ms] of Object.entries(v)) {
+      if (typeof ms === "number" && Number.isFinite(ms) && ms > 0) out[k] = Math.floor(ms);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function readEpisodeResume(episodeId: string): number | null {
+  const ms = readResumeStore()[episodeId];
+  return typeof ms === "number" ? ms : null;
+}
+
+export function writeEpisodeResume(episodeId: string, ms: number): void {
+  try {
+    const store = readResumeStore();
+    if (ms > 5000) store[episodeId] = Math.floor(ms);
+    else delete store[episodeId];
+    const keys = Object.keys(store).slice(-50);
+    const trimmed: Record<string, number> = {};
+    for (const k of keys) trimmed[k] = store[k];
+    localStorage.setItem(EPISODE_RESUME_KEY, JSON.stringify(trimmed));
+  } catch {
+    // Private mode. Resume lasts the session.
+  }
 }
 
 const UPGRADE_TEXT =
@@ -65,16 +143,99 @@ function uriIsEpisodic(uri: string): boolean {
 export default function PlayerPane(p: Props) {
   const [vol, setVol] = useState<number | null>(null);
   const [liked, setLiked] = useState(false);
+  // Like in flight: the heart is disabled until the write settles so a
+  // double-click cannot interleave save/remove out of order.
+  const [likeBusy, setLikeBusy] = useState(false);
+  const [choice, setChoice] = useState<DeviceChoice | null>(() => readDeviceChoice());
+  const [selectedId, setSelectedId] = useState<string>("");
+  const [resumeMs, setResumeMs] = useState<number | null>(null);
   const s = p.snapshot;
   const track = s.track;
   const shownVol = vol ?? s.volume ?? 50;
   const tier = p.tier ?? "premium";
   const isFree = tier === "free";
   const isEpisodic = track ? uriIsEpisodic(track.uri) : false;
+  const progressRef = useRef(p.progressMs);
+  progressRef.current = p.progressMs;
+
+  // Reconcile the heart against server truth on every track change, so a
+  // stale optimistic state never renders. Toggles below stay optimistic and
+  // roll back on failure or disagreement.
+  useEffect(() => {
+    let live = true;
+    setLiked(false);
+    setLikeBusy(false);
+    const uri = track?.uri;
+    if (!uri) return;
+    void api
+      .libraryContains([uri])
+      .then((r) => {
+        if (live) setLiked(r[0] === true);
+      })
+      .catch(() => {
+        // Offline: keep the heart off rather than guessing.
+      });
+    return () => {
+      live = false;
+    };
+  }, [track?.id]);
+
+  // Resume stamp: load on episode change, persist every few seconds while
+  // playing. Pristine starts (<5 s) clear the stamp.
+  useEffect(() => {
+    setResumeMs(null);
+    if (!isEpisodic || !track) return;
+    const saved = readEpisodeResume(track.id);
+    if (saved != null && track.durationMs > 0 && saved < track.durationMs - 5000) {
+      setResumeMs(saved);
+    }
+  }, [track?.id]);
 
   useEffect(() => {
-    setLiked(false);
-  }, [track?.id]);
+    if (!isEpisodic || !track || !s.isPlaying) return;
+    const id = track.id;
+    const t = window.setInterval(() => {
+      writeEpisodeResume(id, progressRef.current);
+    }, RESUME_SAVE_EVERY_MS);
+    return () => window.clearInterval(t);
+  }, [isEpisodic, track?.id, s.isPlaying]);
+
+  // Restore the remembered destination as the panel selection when the
+  // device list arrives. Selection only: no silent transfer on boot.
+  // Without a memory, the active device is the starting selection so Keep
+  // there is a one-click confirm, not a hunt through the dropdown.
+  useEffect(() => {
+    if (selectedId) return;
+    if (
+      choice?.kind === "connect" &&
+      choice.deviceId &&
+      p.devices.some((d) => d.id === choice.deviceId)
+    ) {
+      setSelectedId(choice.deviceId);
+    } else if (s.deviceId) {
+      setSelectedId(s.deviceId);
+    }
+  }, [p.devices, s.deviceId, choice, selectedId]);
+
+  const activeName =
+    s.deviceName ??
+    (p.sdkDeviceId && s.deviceId === p.sdkDeviceId ? "Snapify Overlay" : null) ??
+    (p.devices.length === 0 ? "No devices — open Spotify" : "Choose a device");
+
+  const playHere = () => {
+    const next: DeviceChoice = { kind: "sdk" };
+    setChoice(next);
+    writeDeviceChoice(next);
+    p.onPlayHere();
+  };
+
+  const keepThere = () => {
+    if (!selectedId) return;
+    const next: DeviceChoice = { kind: "connect", deviceId: selectedId };
+    setChoice(next);
+    writeDeviceChoice(next);
+    p.onTransfer(selectedId);
+  };
 
   const commitSeek = (e: React.MouseEvent<HTMLDivElement>) => {
     if (isFree) return;
@@ -103,21 +264,39 @@ export default function PlayerPane(p: Props) {
   };
 
   const toggleLike = async () => {
-    if (!track) return;
+    if (!track || likeBusy) return;
     const isEpisodeKind = track.uri.startsWith("spotify:episode:");
     const likeLabel = isEpisodeKind ? "New Episodes" : "Liked Songs";
+    const next = !liked;
+    setLiked(next);
+    setLikeBusy(true);
     try {
-      if (!liked) {
-        await api.librarySave([track.uri]);
-        setLiked(true);
-        p.onToast?.("success", `Added to ${likeLabel}`);
-      } else {
-        await api.libraryRemove([track.uri]);
-        setLiked(false);
-        p.onToast?.("success", isEpisodeKind ? "Removed from New Episodes" : "Removed from Liked Songs");
+      if (next) await api.librarySave([track.uri]);
+      else await api.libraryRemove([track.uri]);
+      // Reconcile against server truth. A disagreement rolls back so the
+      // heart never lies; a reconcile failure keeps the optimistic state.
+      try {
+        const [saved] = await api.libraryContains([track.uri]);
+        if (saved !== next) {
+          setLiked(saved);
+          p.onToast?.(
+            "info",
+            saved ? "Already in your library" : "Not saved — the change didn't stick",
+          );
+          return;
+        }
+      } catch {
+        // Keep the optimistic state when the check itself fails.
       }
+      p.onToast?.(
+        "success",
+        next ? `Added to ${likeLabel}` : isEpisodeKind ? "Removed from New Episodes" : "Removed from Liked Songs",
+      );
     } catch (e) {
+      setLiked(!next);
       p.onToast?.("error", e instanceof Error ? e.message : String(e));
+    } finally {
+      setLikeBusy(false);
     }
   };
 
@@ -146,6 +325,11 @@ export default function PlayerPane(p: Props) {
 
   const displayTitle = truncate(track.name, 23);
   const displayArtist = truncate(track.artists, 18);
+  const showResume =
+    isEpisodic &&
+    resumeMs != null &&
+    Math.abs(resumeMs - p.progressMs) > 10000 &&
+    resumeMs < track.durationMs - 5000;
 
   return (
     <div className="pane-fill">
@@ -193,6 +377,7 @@ export default function PlayerPane(p: Props) {
         <button
           className={`icon-btn${liked ? " is-on" : ""}`}
           onClick={() => void toggleLike()}
+          disabled={likeBusy}
           title={liked ? "Remove from library" : "Add to library"}
           aria-label={liked ? "Remove from library" : "Save to library"}
           aria-pressed={liked}
@@ -332,6 +517,49 @@ export default function PlayerPane(p: Props) {
         )}
       </div>
 
+      {isEpisodic && (
+        <div className="episode-row" role="group" aria-label="Episode extras">
+          {showResume && (
+            <button
+              className="btn sm"
+              onClick={() => {
+                p.onSeek(resumeMs);
+                setResumeMs(null);
+              }}
+              title={`Resume from ${formatMs(resumeMs)}`}
+              aria-label={`Resume from ${formatMs(resumeMs)}`}
+            >
+              Resume {formatMs(resumeMs)}
+            </button>
+          )}
+          <button
+            className="btn sm"
+            onClick={() => void openUrl(openSpotifyUrl(track.uri, track.id))}
+            title="Open show notes in Spotify"
+            aria-label="Open show notes in Spotify"
+          >
+            Show notes
+          </button>
+          <label className="speed-label" htmlFor="ep-speed">
+            Speed
+          </label>
+          <select
+            id="ep-speed"
+            className="device"
+            value="1"
+            disabled
+            aria-disabled="true"
+            title="Speed isn't exposed by the Spotify playback SDK, so this stays off on purpose."
+            onChange={() => {}}
+          >
+            <option value="1">1×</option>
+          </select>
+          <span className="dim" title="The Web Playback SDK has no playback-rate control.">
+            N/A via SDK
+          </span>
+        </div>
+      )}
+
       <div className="device-row">
         <VolumeIcon size={14} />
         <input
@@ -358,27 +586,6 @@ export default function PlayerPane(p: Props) {
             }
           }}
         />
-        <select
-          className="device"
-          value={s.deviceId ?? ""}
-          aria-label="Playback device"
-          onChange={(e) => e.target.value && p.onTransfer(e.target.value)}
-        >
-          <option value="" disabled>
-            {s.deviceName ?? (p.devices.length === 0 ? "No devices — open Spotify" : "Device")}
-          </option>
-          {p.sdkDeviceId && (
-            <option value={p.sdkDeviceId}>
-              Snapify Overlay{p.sdkDeviceId === s.deviceId ? " — active" : ""}
-            </option>
-          )}
-          {p.devices.map((d) => (
-            <option key={d.id} value={d.id}>
-              {d.name}
-              {d.isActive ? " — active" : ""}
-            </option>
-          ))}
-        </select>
         <button
           className="icon-btn sm"
           onClick={p.onRefreshDevices}
@@ -395,6 +602,64 @@ export default function PlayerPane(p: Props) {
         >
           <OpenIcon size={14} />
         </button>
+      </div>
+      <div
+        className="device-panel"
+        role="group"
+        aria-label="Playback device"
+        style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}
+      >
+        <div className="device-where">
+          Sound plays on: <strong>{activeName}</strong>
+          {choice?.kind === "sdk" && <span className="dim"> (remembered: this overlay)</span>}
+          {choice?.kind === "connect" && choice.deviceId && (
+            <span className="dim"> (remembered)</span>
+          )}
+        </div>
+        <div className="device-actions" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button
+            className="btn sm primary"
+            onClick={playHere}
+            title="Play through this overlay (Spotify headless SDK)"
+            aria-label="Play here via this overlay"
+          >
+            Play here
+          </button>
+          <select
+            className="device"
+            value={selectedId}
+            aria-label="Choose a Spotify device to keep playback on"
+            onChange={(e) => setSelectedId(e.target.value)}
+            style={{ flex: 1, minWidth: 0 }}
+          >
+            <option value="" disabled>
+              {p.devices.length === 0 ? "No devices — open Spotify" : "Choose a device"}
+            </option>
+            {p.sdkDeviceId && (
+              <option value={p.sdkDeviceId}>
+                Snapify Overlay{p.sdkDeviceId === s.deviceId ? " — active" : ""}
+              </option>
+            )}
+            {p.devices.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+                {d.isActive ? " — active" : ""}
+              </option>
+            ))}
+          </select>
+          <button
+            className="btn sm"
+            onClick={keepThere}
+            disabled={!selectedId}
+            title="Keep playback on the chosen Spotify device (Connect)"
+            aria-label="Keep playback there"
+          >
+            Keep there
+          </button>
+        </div>
+        <div className="dim">
+          Play here: sound from this overlay. Keep there: stay on the chosen device.
+        </div>
       </div>
       <div className="player-foot">
         <SpotifyMark variant="icon" size={21} />

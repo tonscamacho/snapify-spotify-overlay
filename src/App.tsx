@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import PlayerPane from "./components/PlayerPane";
+import { writeDeviceChoice } from "./components/PlayerPane";
 const MemoPlayerPane = memo(PlayerPane);
 import LyricsPane from "./components/LyricsPane";
 const MemoLyricsPane = memo(LyricsPane);
@@ -507,11 +508,15 @@ export default function App() {
   // All throttle routing goes through the typed helper in lib/spotify
   // (parsed Retry-After + quota vs rate kind); no local string matching.
   const degradedRef = useRef(false);
+  // Render mirror of the throttle episode so panes can pin degraded UI
+  // (queue keep-10 fallback, capped notice) until recovery.
+  const [degradedUi, setDegradedUi] = useState(false);
   const isThrottledMsg = (m: unknown) => toThrottleError(m) !== null;
   const noteDegraded = useCallback(
     (m: string) => {
       if (degradedRef.current) return;
       degradedRef.current = true;
+      setDegradedUi(true);
       const quota = toThrottleError(m)?.kind === "quota";
       pushToast(
         "info",
@@ -525,6 +530,7 @@ export default function App() {
   const noteRecovered = useCallback(() => {
     if (!degradedRef.current) return;
     degradedRef.current = false;
+    setDegradedUi(false);
     pushToast("info", "Spotify recovered — content is fresh.");
   }, [pushToast]);
   const flashErrThrottledAware = useCallback(
@@ -571,7 +577,10 @@ export default function App() {
     const seq = ++queueContextSeq.current;
     try {
       const q = await api.queue();
-      setQueue({ current: q.current, upcoming: q.upcoming });
+      // Degraded fallback: while throttled, pin to the first 10 instead of
+      // swapping in a long list the endpoint may have truncated mid-page.
+      const upcoming = degradedRef.current ? q.upcoming.slice(0, 10) : q.upcoming;
+      setQueue({ current: q.current, upcoming });
       const c = q.context;
       if (!c) {
         queueContextCache.current = null;
@@ -592,12 +601,19 @@ export default function App() {
       } else {
         setQueueContext({ ...c, name: null });
       }
-    } catch {
-      // Leave previous queue in place.
+    } catch (e) {
+      // A throttled queue read degrades instead of dropping: one note per
+      // episode, and the visible list pins to the first 10.
+      const m = e instanceof Error ? e.message : String(e);
+      if (toThrottleError(m)) {
+        noteDegraded(m);
+        setQueue((prev) => ({ current: prev.current, upcoming: prev.upcoming.slice(0, 10) }));
+      }
+      // Otherwise leave the previous queue in place.
     } finally {
       setQueueLoading(false);
     }
-  }, []);
+  }, [noteDegraded]);
 
   const fetchDevices = useCallback(async () => {
     try {
@@ -1159,6 +1175,41 @@ export default function App() {
         needsRefresh: true,
       }),
     [run, fetchDevices],
+  );
+  // Explicit "Play here": build the headless SDK player inside this user
+  // gesture (autoplay policy), then move sound onto it, keeping the current
+  // play state. Device priority stays SDK, then active device, then none.
+  const playHereCb = useCallback(
+    () =>
+      void (async () => {
+        const seed = (snapRef.current.volume ?? 50) / 100;
+        const id = sdkDeviceId ?? (await ensurePlayer(seed));
+        if (!id) {
+          pushToast("error", "Built-in playback unavailable here — keeping your current device.");
+          return;
+        }
+        setSdkDeviceId((cur) => cur ?? id);
+        setSdkVolume(seed);
+        writeDeviceChoice({ kind: "sdk" });
+        await run(() => api.transfer(id, snapRef.current.isPlaying), {
+          queueKey: "transfer:sdk",
+          queueLabel: "Transfer",
+          after: () => {
+            void fetchDevices();
+          },
+          needsRefresh: true,
+        });
+      })(),
+    [sdkDeviceId, run, fetchDevices, pushToast],
+  );
+  // Queue row play: one row plays now on the priority device.
+  const queuePlayUriCb = useCallback(
+    (uri: string) =>
+      void run(() => api.playUris([uri], snap.deviceId ?? sdkDeviceId), {
+        queueKey: `playQueue:${uri}`,
+        queueLabel: "Play",
+      }),
+    [snap.deviceId, sdkDeviceId, run],
   );
   const lyricsRetryCb = useCallback(
     () => trackIdRef.current && void fetchLyrics(trackIdRef.current),
@@ -1825,6 +1876,7 @@ export default function App() {
               onShuffle={shuffleCb}
               onRepeat={repeatCb}
               onTransfer={transferCb}
+              onPlayHere={playHereCb}
               onRefreshDevices={fetchDevices}
               onToast={pushToast}
             />
@@ -1847,9 +1899,11 @@ export default function App() {
               loading={queueLoading}
               context={queueContext}
               queuedCount={pendingCount}
+              capped={degradedUi && queue.upcoming.length > 0}
               onRefresh={fetchQueue}
               onBrowse={queueBrowseCb}
               onOpenContext={openQueueContext}
+              onPlayUri={queuePlayUriCb}
             />
           )}
           {pane.type === "visualizer" && (

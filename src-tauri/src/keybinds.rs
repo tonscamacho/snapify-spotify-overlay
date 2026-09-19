@@ -1,10 +1,11 @@
 use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_global_shortcut::Shortcut;
+
+use crate::overlay::{atomic_write_json, read_json_guarded};
 
 pub const ACTION_PLAYPAUSE: &str = "playpause";
 pub const ACTION_NEXT: &str = "next";
@@ -132,10 +133,14 @@ pub fn load_map(app: &AppHandle) -> HashMap<String, String> {
         Some(p) => p,
         None => return map,
     };
-    let text = fs::read_to_string(path).unwrap_or_default();
-    if text.is_empty() {
-        return map;
-    }
+    // Corrupt primaries heal from the `.bak` copy inside
+    // `read_json_guarded`; doubly-corrupt falls back to defaults.
+    let text = match read_json_guarded(&path, |t| {
+        serde_json::from_str::<HashMap<String, String>>(t).is_ok()
+    }) {
+        Some(t) => t,
+        None => return map,
+    };
     let parsed: HashMap<String, String> = serde_json::from_str(&text).unwrap_or_default();
     for (action, _) in DEFAULTS {
         if let Some(v) = parsed.get(*action) {
@@ -165,11 +170,10 @@ pub fn load_map(app: &AppHandle) -> HashMap<String, String> {
 
 fn save_map(app: &AppHandle, map: &HashMap<String, String>) {
     if let Some(path) = keybinds_path(app) {
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
         if let Ok(text) = serde_json::to_string(map) {
-            let _ = fs::write(path, text);
+            // Temp-file plus rename with one `.bak`; readers never see a
+            // half-written store even on kill mid-write.
+            let _ = atomic_write_json(&path, &text);
         }
     }
 }

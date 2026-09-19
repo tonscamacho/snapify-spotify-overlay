@@ -18,6 +18,64 @@ const SCOPES: &str =
 const KEYRING_SERVICE: &str = "spotify-overlay";
 const KEYRING_USER: &str = "refresh-token";
 
+/// PKCE verifier survives a restart inside its 120 s window so a mid-login
+/// reboot resumes instead of dying with "Login session expired".
+/// Stored as a temp-file JSON `{ verifier, created_unix }`, NOT in the OS
+/// keychain: the keychain helper in this file is for the long-lived refresh
+/// token, and a short-lived verifier must never linger there past its TTL.
+const VERIFIER_TTL_SECS: i64 = 120;
+
+fn verifier_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("snapify-pkce-verifier.json")
+}
+
+fn verifier_is_fresh(created_unix: i64) -> bool {
+    now_unix() - created_unix < VERIFIER_TTL_SECS
+}
+
+/// Path-parameterized cores so tests can use a scratch file instead of the
+/// shared temp-dir slot. The thin `*_verifier_disk` wrappers below are the
+/// only production entry points.
+fn save_verifier_at(path: &std::path::Path, verifier: &str) {
+    let body = serde_json::json!({ "verifier": verifier, "created_unix": now_unix() });
+    let _ = std::fs::write(path, body.to_string());
+}
+
+fn load_verifier_at(path: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let verifier = v.get("verifier")?.as_str()?.to_string();
+    let created = v.get("created_unix")?.as_i64()?;
+    if verifier.is_empty() || !verifier_is_fresh(created) {
+        let _ = std::fs::remove_file(path);
+        return None;
+    }
+    Some(verifier)
+}
+
+fn save_verifier_disk(verifier: &str) {
+    save_verifier_at(&verifier_path(), verifier);
+}
+
+fn load_verifier_disk() -> Option<String> {
+    load_verifier_at(&verifier_path())
+}
+
+fn clear_verifier_disk() {
+    let _ = std::fs::remove_file(verifier_path());
+}
+
+/// Human-readable bind failure for 127.0.0.1:3000. Pure for testability:
+/// AddrInUse names the likely holder (another Snapify window or the dev
+/// server) plus the fix; anything else reports the raw error.
+fn bind_error_message(e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::AddrInUse {
+        "Port 3000 is busy — likely another Snapify Overlay instance or `npm run dev` holds 127.0.0.1:3000. Free it: quit the extra Snapify window (check the tray), stop the dev server, or run `netstat -ano | findstr :3000` and stop that PID; then login again.".to_string()
+    } else {
+        format!("Login listener failed on 127.0.0.1:3000 ({e}). Close what uses it and retry.")
+    }
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Tokens {
     pub access_token: String,
@@ -105,15 +163,30 @@ pub async fn start_login(
     state: State<'_, AuthState>,
 ) -> Result<String, String> {
     {
-        let awaiting = state.awaiting.lock().map_err(|e| e.to_string())?;
-        if *awaiting {
-            return Err("Login already in progress. Complete it in the browser.".into());
+        let awaiting = state.awaiting.lock().map_err(|e| e.to_string())?.clone();
+        if awaiting {
+            // A restart orphans the listener thread while the gate stays shut.
+            // A fresh verifier means the 120 s window is still live, so keep
+            // the gate; a stale one means the window is gone, so release it
+            // instead of wedging login forever.
+            let live = state
+                .verifier
+                .lock()
+                .map(|g| g.is_some())
+                .unwrap_or(false)
+                || load_verifier_disk().is_some();
+            if live {
+                return Err("Login already in progress. Complete it in the browser.".into());
+            }
+            *state.awaiting.lock().map_err(|e| e.to_string())? = false;
+            clear_verifier_disk();
         }
     }
 
     let verifier = new_verifier();
     let challenge = challenge_for(&verifier);
-    *state.verifier.lock().map_err(|e| e.to_string())? = Some(verifier);
+    *state.verifier.lock().map_err(|e| e.to_string())? = Some(verifier.clone());
+    save_verifier_disk(&verifier);
     *state.awaiting.lock().map_err(|e| e.to_string())? = true;
 
     let url = format!(
@@ -158,8 +231,13 @@ fn wait_for_callback(app: AppHandle) {
 
     let listener = match TcpListener::bind("127.0.0.1:3000") {
         Ok(l) => l,
-        Err(_) => {
-            let _ = app.emit("auth-error", "Port 3000 is busy. Close what uses it and retry.");
+        Err(e) => {
+            // Name the holder and the fix: the usual squatter is another
+            // Snapify Overlay window or `npm run dev`, both of which bind
+            // 127.0.0.1:3000 for the same callback. SO_REUSE would only hide
+            // the conflict, so report it instead.
+            let msg = bind_error_message(&e);
+            let _ = app.emit("auth-error", msg);
             finish(false);
             return;
         }
@@ -249,7 +327,18 @@ fn wait_for_callback(app: AppHandle) {
             Err(_) => None,
         },
         None => None,
-    };
+    }
+    .or_else(|| {
+        // Restart inside the 120 s window: in-memory state is gone but the
+        // disk copy is still fresh. Repopulate memory so a retry works.
+        let v = load_verifier_disk()?;
+        if let Some(s) = app.try_state::<AuthState>() {
+            if let Ok(mut g) = s.verifier.lock() {
+                *g = Some(v.clone());
+            }
+        }
+        Some(v)
+    });
 
     let verifier = match verifier {
         Some(v) => v,
@@ -270,6 +359,7 @@ fn wait_for_callback(app: AppHandle) {
                 if let Ok(mut v) = state.verifier.lock() {
                     *v = None;
                 }
+                clear_verifier_disk();
             }
             if let Some(refresh) = t.refresh_token.clone() {
                 save_refresh_token(&refresh);
@@ -457,7 +547,10 @@ pub async fn access_token(app: &AppHandle) -> Result<String, String> {
         .ok_or_else(|| "Not logged in. Start login first.".to_string())
 }
 
-/// Best-effort restore of a saved session at startup.
+/// Best-effort restore of a saved session at startup. A fresh disk verifier
+/// (login started <120 s ago) re-arms the callback listener so a mid-login
+/// restart resumes; a stale one is already deleted by the loader, and the
+/// next callback fails clean with "Login session expired. Start again."
 pub fn restore_session(app: &AppHandle) {
     if let Some(refresh) = load_refresh_token() {
         if let Some(state) = app.try_state::<AuthState>() {
@@ -469,6 +562,22 @@ pub fn restore_session(app: &AppHandle) {
                 });
             }
         }
+    }
+    if let Some(v) = load_verifier_disk() {
+        if let Some(state) = app.try_state::<AuthState>() {
+            if let Ok(mut guard) = state.verifier.lock() {
+                if guard.is_none() {
+                    *guard = Some(v);
+                }
+            }
+            if let Ok(mut awaiting) = state.awaiting.lock() {
+                *awaiting = true;
+            }
+        }
+        let app_clone = app.clone();
+        std::thread::spawn(move || {
+            wait_for_callback(app_clone);
+        });
     }
 }
 
@@ -488,13 +597,31 @@ pub async fn logout(app: AppHandle, state: State<'_, AuthState>) -> Result<(), S
     *state.verifier.lock().map_err(|e| e.to_string())? = None;
     *state.awaiting.lock().map_err(|e| e.to_string())? = false;
     clear_refresh_token();
+    // A logout must also drop a pending PKCE verifier: it is single-use and
+    // bound to the abandoned login, so leaving it on disk would let the next
+    // callback attempt a stale exchange instead of failing clean.
+    clear_verifier_disk();
     let _ = app.emit("auth-changed", false);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::SCOPES;
+    use super::{
+        bind_error_message, load_verifier_at, save_verifier_at, verifier_is_fresh,
+        VERIFIER_TTL_SECS, SCOPES,
+    };
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SCRATCH_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn scratch_path() -> std::path::PathBuf {
+        let n = SCRATCH_SEQ.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!(
+            "snapify-pkce-verifier-test-{}-{n}.json",
+            std::process::id()
+        ))
+    }
 
     #[test]
     fn scopes_cover_sdk_playback() {
@@ -507,5 +634,68 @@ mod tests {
             scopes.contains(&"streaming"),
             "SCOPES lacks streaming: {SCOPES}"
         );
+    }
+
+    #[test]
+    fn verifier_fresh_inside_ttl_stale_outside() {
+        let now = super::now_unix();
+        assert!(verifier_is_fresh(now));
+        assert!(verifier_is_fresh(now - 10));
+        assert!(verifier_is_fresh(now - (VERIFIER_TTL_SECS - 1)));
+        // Boundary is exclusive: exactly TTL old is already stale.
+        assert!(!verifier_is_fresh(now - VERIFIER_TTL_SECS));
+        assert!(!verifier_is_fresh(now - (VERIFIER_TTL_SECS + 60)));
+        // Future timestamps (clock skew) count as fresh, never stale-panic.
+        assert!(verifier_is_fresh(now + 30));
+    }
+
+    #[test]
+    fn verifier_disk_fresh_loads_stale_rejects_and_cleans() {
+        let path = scratch_path();
+        let _ = std::fs::remove_file(&path);
+
+        // Fresh save round-trips.
+        save_verifier_at(&path, "verifier-abc");
+        assert_eq!(load_verifier_at(&path), Some("verifier-abc".to_string()));
+        assert!(path.exists());
+
+        // Stale file rejects AND deletes itself so the next callback fails
+        // clean with "Login session expired" instead of retrying a dead code.
+        let stale_body = serde_json::json!({
+            "verifier": "verifier-old",
+            "created_unix": super::now_unix() - (VERIFIER_TTL_SECS + 30),
+        });
+        std::fs::write(&path, stale_body.to_string()).expect("write stale fixture");
+        assert_eq!(load_verifier_at(&path), None);
+        assert!(!path.exists(), "stale verifier file must be removed on load");
+
+        // Corrupt JSON rejects without panicking.
+        std::fs::write(&path, "{not json").expect("write corrupt fixture");
+        assert_eq!(load_verifier_at(&path), None);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn busy_port_error_names_holder_and_fix() {
+        let in_use = std::io::Error::new(std::io::ErrorKind::AddrInUse, "address in use");
+        let msg = bind_error_message(&in_use);
+        assert!(msg.contains("Port 3000"), "must name the port: {msg}");
+        assert!(
+            msg.contains("127.0.0.1:3000"),
+            "must name the bound address: {msg}"
+        );
+        assert!(
+            msg.contains("npm run dev") || msg.contains("Snapify"),
+            "must name the likely holder: {msg}"
+        );
+        assert!(
+            msg.contains("netstat") || msg.contains("Free it"),
+            "must tell how to free it: {msg}"
+        );
+
+        let other = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let msg2 = bind_error_message(&other);
+        assert!(msg2.contains("127.0.0.1:3000"), "other errors keep the address: {msg2}");
+        assert!(!msg2.contains("netstat"), "other errors must not claim AddrInUse: {msg2}");
     }
 }

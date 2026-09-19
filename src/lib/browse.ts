@@ -305,16 +305,19 @@ export function parseArtistDetail(
   artist: unknown,
   albums: unknown,
   related: unknown,
+  searchFallback?: QueueItem[],
 ): DetailData | null {
   if (!artist || typeof artist !== "object") return null;
   const o = artist as Record<string, unknown>;
   if (typeof o["id"] !== "string") return null;
   // Dropped GET /artists/{id}/top-tracks. Replaced with albums strip +
-  // search fallback. Top tracks now come from the albums strip when present.
+  // search fallback. Top tracks now come from the search-derived backfill
+  // when the caller supplies it (see BrowsePane artist detail); without it
+  // the strip stays honestly empty instead of guessing.
   void related;
   const al = (albums as Record<string, unknown> | null) ?? {};
   const alList = Array.isArray(al["items"]) ? (al["items"] as Array<Record<string, unknown>>) : [];
-  const topList: Array<Record<string, unknown>> = [];
+  const topList: QueueItem[] = Array.isArray(searchFallback) ? searchFallback : [];
   return {
     kind: "artist",
     name: typeof o["name"] === "string" ? (o["name"] as string) : "Artist",
@@ -322,59 +325,68 @@ export function parseArtistDetail(
     genres: Array.isArray(o["genres"])
       ? (o["genres"] as unknown[]).filter((g): g is string => typeof g === "string").slice(0, 3)
       : [],
-    topTracks: topList.map(queueItem),
+    topTracks: topList,
     albums: alList.map((a) => toLibraryItem(a, "Album")),
     uri: typeof o["uri"] === "string" ? (o["uri"] as string) : "",
   };
 }
 
-export function parseSearch(raw: unknown): SearchResults {
+/** Search parser. `offset` pages into each bucket's raw items with a window
+ *  of SEARCH_PAGE (10), matching the backend limit clamp: page N fetches
+ *  offset N*10 and the caller merges bucket windows across pages. */
+export const SEARCH_PAGE = 10;
+
+export function parseSearch(raw: unknown, offset = 0): SearchResults {
   const out: SearchResults = { tracks: [], artists: [], playlists: [], albums: [], shows: [], episodes: [], audiobooks: [] };
   if (!raw || typeof raw !== "object") return out;
   const o = raw as Record<string, unknown>;
+  const off = Math.max(0, Math.floor(offset) || 0);
+  const windowOf = <T>(items: T[]): T[] => items.slice(off, off + SEARCH_PAGE);
   const t = o["tracks"] as Record<string, unknown> | undefined;
   if (t && Array.isArray(t["items"])) {
-    out.tracks = (t["items"] as Array<Record<string, unknown>>).slice(0, 5).map(queueItem);
+    out.tracks = windowOf(t["items"] as Array<Record<string, unknown>>).map(queueItem);
   }
   const a = o["artists"] as Record<string, unknown> | undefined;
   if (a && Array.isArray(a["items"])) {
-    out.artists = (a["items"] as Array<Record<string, unknown>>)
-      .slice(0, 5)
-      .map((x) => toLibraryItem(x, "Artist"));
+    out.artists = windowOf(a["items"] as Array<Record<string, unknown>>).map((x) =>
+      toLibraryItem(x, "Artist"),
+    );
   }
   const p = o["playlists"] as Record<string, unknown> | undefined;
   if (p && Array.isArray(p["items"])) {
-    out.playlists = (p["items"] as Array<Record<string, unknown>>)
-      .filter((x) => x && typeof x["id"] === "string")
-      .slice(0, 5)
-      .map((x) => toLibraryItem(x, "Playlist"));
+    out.playlists = windowOf(
+      (p["items"] as Array<Record<string, unknown>>).filter((x) => x && typeof x["id"] === "string"),
+    ).map((x) => toLibraryItem(x, "Playlist"));
   }
   const al = o["albums"] as Record<string, unknown> | undefined;
   if (al && Array.isArray(al["items"])) {
-    out.albums = (al["items"] as Array<Record<string, unknown>>)
-      .slice(0, 5)
-      .map((x) => toLibraryItem(x, "Album"));
+    out.albums = windowOf(al["items"] as Array<Record<string, unknown>>).map((x) =>
+      toLibraryItem(x, "Album"),
+    );
   }
   const sh = o["shows"] as Record<string, unknown> | undefined;
   if (sh && Array.isArray(sh["items"])) {
-    out.shows = (sh["items"] as Array<Record<string, unknown>>)
-      .filter((x) => x && typeof x["id"] === "string")
-      .slice(0, 5)
-      .map((x) => toLibraryItem(x, "Show"));
+    out.shows = windowOf(
+      (sh["items"] as Array<Record<string, unknown>>).filter(
+        (x) => x && typeof x["id"] === "string",
+      ),
+    ).map((x) => toLibraryItem(x, "Show"));
   }
   const ep = o["episodes"] as Record<string, unknown> | undefined;
   if (ep && Array.isArray(ep["items"])) {
-    out.episodes = (ep["items"] as Array<Record<string, unknown>>)
-      .filter((x) => x && typeof x["uri"] === "string")
-      .slice(0, 5)
-      .map(queueItem);
+    out.episodes = windowOf(
+      (ep["items"] as Array<Record<string, unknown>>).filter(
+        (x) => x && typeof x["uri"] === "string",
+      ),
+    ).map(queueItem);
   }
   const ab = o["audiobooks"] as Record<string, unknown> | undefined;
   if (ab && Array.isArray(ab["items"])) {
-    out.audiobooks = (ab["items"] as Array<Record<string, unknown>>)
-      .filter((x) => x && typeof x["id"] === "string")
-      .slice(0, 5)
-      .map((x) => toLibraryItem(x, "Audiobook"));
+    out.audiobooks = windowOf(
+      (ab["items"] as Array<Record<string, unknown>>).filter(
+        (x) => x && typeof x["id"] === "string",
+      ),
+    ).map((x) => toLibraryItem(x, "Audiobook"));
   }
   return out;
 }

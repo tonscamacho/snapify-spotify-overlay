@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import type { BrowseEntry, QueueContext, QueueItem } from "../lib/types";
 import { formatMs } from "../lib/lrc";
 import { RefreshIcon } from "./icons";
@@ -8,13 +9,59 @@ interface Props {
   loading: boolean;
   context: QueueContext | null;
   queuedCount?: number;
+  /** True while the list is pinned to the degraded 10-item fallback. */
+  capped?: boolean;
   onRefresh: () => void;
   onBrowse?: () => void;
   onOpenContext?: (entry: BrowseEntry) => void;
+  /** Play one queue row now (Enter/click). Kept as a button so keyboard works. */
+  onPlayUri?: (uri: string) => void;
 }
+
+/** Windowing constants. ROW_H is only the first guess: the real row height
+ *  is measured from the first rendered row (density setting changes padding)
+ *  so rows never overlap. OVERSCAN renders a few rows past the viewport so
+ *  fast scrolls never flash blank. No dependency, no CSS changes. */
+const ROW_GUESS = 64;
+const OVERSCAN = 4;
+const VIEW_MAX_H = 320;
 
 export default function QueuePane(p: Props) {
   const ctx = p.context;
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLOListElement | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewH, setViewH] = useState(VIEW_MAX_H);
+  const [rowH, setRowH] = useState(ROW_GUESS);
+
+  const total = p.upcoming.length;
+
+  // Measure one real row so the window math tracks density/font scale.
+  useEffect(() => {
+    const el = listRef.current?.querySelector("li.q");
+    if (!el) return;
+    const h = (el as HTMLElement).offsetHeight;
+    if (h >= 24 && h <= 220 && h !== rowH) setRowH(h);
+  });
+
+  // A fresh short queue (refresh, track change) rewinds to the top.
+  useEffect(() => {
+    setScrollTop(0);
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [total === 0]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setScrollTop(el.scrollTop);
+    if (el.clientHeight > 0 && el.clientHeight !== viewH) setViewH(el.clientHeight);
+  };
+
+  const start = Math.max(0, Math.min(total, Math.floor(scrollTop / rowH) - OVERSCAN));
+  const count = Math.ceil(viewH / rowH) + OVERSCAN * 2;
+  const end = Math.min(total, start + Math.max(count, OVERSCAN * 2 + 1));
+  const windowed = total > 0 ? p.upcoming.slice(start, end) : [];
+
   return (
     <>
       {p.queuedCount != null && p.queuedCount > 0 && (
@@ -27,7 +74,7 @@ export default function QueuePane(p: Props) {
       <div className="pane-subhead">
         <span>
           Up next
-          {p.upcoming.length > 0 && <span className="count"> {p.upcoming.length}</span>}
+          {total > 0 && <span className="count"> {total}</span>}
         </span>
         <button
           className="icon-btn sm"
@@ -38,6 +85,11 @@ export default function QueuePane(p: Props) {
           <RefreshIcon size={14} />
         </button>
       </div>
+      {p.capped && total > 0 && (
+        <div className="throttled-note" role="status">
+          <span>Showing first 10 — Spotify throttled the full queue.</span>
+        </div>
+      )}
       {ctx?.name && (
         <button
           className="queue-context"
@@ -51,13 +103,13 @@ export default function QueuePane(p: Props) {
           <span className="queue-context-name">{ctx.name}</span>
         </button>
       )}
-      {p.loading && p.upcoming.length === 0 ? (
+      {p.loading && total === 0 ? (
         <div aria-label="Loading queue" role="status">
           <div className="skel skel-row" />
           <div className="skel skel-row" />
           <div className="skel skel-row" />
         </div>
-      ) : p.upcoming.length === 0 ? (
+      ) : total === 0 ? (
         <div className="empty">
           <div className="empty-title">Queue is empty</div>
           <div className="empty-sub">Spotify builds it as you listen.</div>
@@ -71,18 +123,71 @@ export default function QueuePane(p: Props) {
           )}
         </div>
       ) : (
-        <ol className="queue">
-          {p.upcoming.map((q, i) => (
-            <li className="q" key={`${q.uri}-${i}`} title={q.uri}>
-              <span className="q-index">{String(i + 1).padStart(2, "0")}</span>
-              <span className="q-name">
-                {q.name}
-                <small>{q.artists}</small>
-              </span>
-              <span className="q-time">{formatMs(q.durationMs)}</span>
-            </li>
-          ))}
-        </ol>
+        <div
+          ref={scrollRef}
+          className="queue-scroll"
+          role="list"
+          aria-label="Upcoming queue"
+          tabIndex={0}
+          onScroll={onScroll}
+          style={{ overflowY: "auto", maxHeight: VIEW_MAX_H }}
+        >
+          <ol
+            ref={listRef}
+            className="queue"
+            data-virtualized="true"
+            data-total={total}
+            style={{ position: "relative", height: total * rowH }}
+          >
+            {windowed.map((q, i) => {
+              const idx = start + i;
+              return (
+                <li
+                  className="q"
+                  key={`${q.uri}-${idx}`}
+                  title={q.uri}
+                  style={{
+                    position: "absolute",
+                    top: idx * rowH,
+                    left: 0,
+                    right: 0,
+                    height: rowH,
+                    overflow: "hidden",
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="q-hit"
+                    onClick={() => p.onPlayUri?.(q.uri)}
+                    aria-label={`Play ${q.name} by ${q.artists || "unknown artist"}`}
+                    title={`Play ${q.name}`}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      display: "flex",
+                      alignItems: "baseline",
+                      gap: 10,
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      color: "inherit",
+                      font: "inherit",
+                      textAlign: "left",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <span className="q-index">{String(idx + 1).padStart(2, "0")}</span>
+                    <span className="q-name">
+                      {q.name}
+                      <small>{q.artists}</small>
+                    </span>
+                    <span className="q-time">{formatMs(q.durationMs)}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
       )}
     </>
   );

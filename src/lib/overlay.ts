@@ -44,7 +44,17 @@ export function collectOverlayRegions(): OverlayRect[] {
 
 export async function reportOverlayRegions(): Promise<void> {
   try {
-    await invoke("set_overlay_regions", { regions: collectOverlayRegions() });
+    // devicePixelRatio + monitor origin ride the Rust applied-signature so
+    // a same-CSS-rects hop across mixed-DPI monitors still re-applies.
+    // Scaling math is untouched: Rust converts with its live scale factor.
+    await invoke("set_overlay_regions", {
+      regions: collectOverlayRegions(),
+      devicePixelRatio: window.devicePixelRatio,
+      monitorOrigin: {
+        x: Math.round(window.screenX),
+        y: Math.round(window.screenY),
+      },
+    });
   } catch {
     // Web / mocked runs have no Rust side. CSS pointer-events still keeps
     // in-window hit-testing honest for the Playwright repro.

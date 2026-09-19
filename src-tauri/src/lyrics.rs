@@ -1,9 +1,10 @@
 use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tauri::{AppHandle, Manager};
+
+use crate::overlay::{atomic_write_json, read_json_guarded};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct LyricWord {
@@ -118,25 +119,28 @@ fn read_cache(app: &AppHandle) -> HashMap<String, CacheEntry> {
         Some(p) => p,
         None => return HashMap::new(),
     };
-    let text = fs::read_to_string(path).unwrap_or_default();
-    if text.is_empty() {
-        return HashMap::new();
-    }
+    // Corrupt primaries heal from the `.bak` copy inside
+    // `read_json_guarded`; doubly-corrupt starts empty.
+    let text = match read_json_guarded(&path, |t| {
+        serde_json::from_str::<HashMap<String, CacheEntry>>(t).is_ok()
+    }) {
+        Some(t) => t,
+        None => return HashMap::new(),
+    };
     serde_json::from_str(&text).unwrap_or_default()
 }
 
 fn write_cache(app: &AppHandle, map: &HashMap<String, CacheEntry>) {
     if let Some(path) = cache_path(app) {
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
         // Cap at 500 entries, keep most-recently-used (true LRU: hits
         // bump `last_access` in `get_lyrics`, so hot tracks survive).
         let mut owned: HashMap<String, CacheEntry> =
             map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         trim_to_cap(&mut owned);
         if let Ok(text) = serde_json::to_string(&owned) {
-            let _ = fs::write(path, text);
+            // Temp-file plus rename with one `.bak`; readers never see a
+            // half-written cache even on kill mid-write.
+            let _ = atomic_write_json(&path, &text);
         }
     }
 }
