@@ -89,8 +89,9 @@ test("toggle off/on restores the exact custom geometry", async ({ page }) => {
 
   // The toggle persisted as custom, not as a factory preset.
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
-  expect(saved.preset).toBe("custom");
-  expect(saved.panes.find((p) => p.type === "player")).toMatchObject(before);
+  expect(saved.version).toBe(4);
+  expect(saved.scenes[saved.activeScene].preset).toBe("custom");
+  expect(saved.scenes[saved.activeScene].panes.find((p) => p.type === "player")).toMatchObject(before);
 });
 
 test("reload keeps the persisted custom layout", async ({ page }) => {
@@ -130,9 +131,9 @@ test("queue Browse reveals browse without destroying custom geometry", async ({ 
   expect(await playerBox(page)).toEqual(before);
 
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
-  expect(saved.preset).toBe("custom");
-  expect(saved.panes.find((p) => p.type === "player")).toMatchObject(before);
-  expect(saved.panes.some((p) => p.type === "browse" && p.visible)).toBe(true);
+  expect(saved.scenes[saved.activeScene].preset).toBe("custom");
+  expect(saved.scenes[saved.activeScene].panes.find((p) => p.type === "player")).toMatchObject(before);
+  expect(saved.scenes[saved.activeScene].panes.some((p) => p.type === "browse" && p.visible)).toBe(true);
 });
 
 test("preset select previews without persisting; Apply saves, Revert restores", async ({ page }) => {
@@ -147,8 +148,8 @@ test("preset select previews without persisting; Apply saves, Revert restores", 
   await expect(page.locator('section[data-pane="lyrics"]')).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Apply" })).toBeVisible();
   let saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
-  expect(saved.preset).toBe("minimal");
-  expect(saved.panes.some((p) => p.type === "lyrics")).toBe(false);
+  expect(saved.scenes[saved.activeScene].preset).toBe("minimal");
+  expect(saved.scenes[saved.activeScene].panes.some((p) => p.type === "lyrics")).toBe(false);
 
   // Revert: back to the untouched arrangement.
   await dialog.getByRole("button", { name: "Revert" }).click();
@@ -161,8 +162,8 @@ test("preset select previews without persisting; Apply saves, Revert restores", 
   await dialog.getByRole("button", { name: "Apply" }).click();
   await expect(dialog.getByRole("button", { name: "Apply" })).toHaveCount(0);
   saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
-  expect(saved.preset).toBe("full");
-  expect(saved.panes.some((p) => p.type === "queue")).toBe(true);
+  expect(saved.scenes[saved.activeScene].preset).toBe("full");
+  expect(saved.scenes[saved.activeScene].panes.some((p) => p.type === "queue")).toBe(true);
 });
 
 test("closing settings without Apply restores the pre-preview layout", async ({ page }) => {
@@ -176,7 +177,7 @@ test("closing settings without Apply restores the pre-preview layout", async ({ 
   await expect(page.locator('section[data-pane="visualizer"]')).toHaveCount(0);
   await expect(page.locator('section[data-pane="player"]')).toBeVisible();
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
-  expect(saved.preset).toBe("minimal");
+  expect(saved.scenes[saved.activeScene].preset).toBe("minimal");
 });
 
 test("Reset still restores the default arrangement", async ({ page }) => {
@@ -186,8 +187,8 @@ test("Reset still restores the default arrangement", async ({ page }) => {
   await dialog.locator("div.row", { hasText: "Layout" }).getByRole("button").click();
   await expect(page.locator('section[data-pane="player"]')).toBeVisible();
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
-  expect(saved.panes.length).toBeGreaterThan(0);
-  expect(saved.preset).toBe("full");
+  expect(saved.scenes[saved.activeScene].panes.length).toBeGreaterThan(0);
+  expect(saved.scenes[saved.activeScene].preset).toBe("full");
 });
 
 test("Ctrl+Z in edit mode undoes the last geometry change", async ({ page }) => {
@@ -321,8 +322,8 @@ test("Alt+Arrows moves the focused pane, persists, flashes guides, undoes", asyn
   await expect(page.locator(".guide-h")).toHaveCount(1);
 
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
-  expect(saved.preset).toBe("custom");
-  expect(saved.panes.find((p) => p.type === "player")).toMatchObject({ x: before.x + 8, y: 150 });
+  expect(saved.scenes[saved.activeScene].preset).toBe("custom");
+  expect(saved.scenes[saved.activeScene].panes.find((p) => p.type === "player")).toMatchObject({ x: before.x + 8, y: 150 });
 
   // The nudge is one undo step: Ctrl+Z in edit mode restores it.
   await page.getByRole("button", { name: "Toggle edit lock" }).click();
@@ -350,7 +351,7 @@ test("Alt+Shift+Arrows resizes the focused pane and persists", async ({ page }) 
     .toBe(236);
 
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
-  expect(saved.panes.find((p) => p.type === "player")).toMatchObject({ w: 348, h: 236 });
+  expect(saved.scenes[saved.activeScene].panes.find((p) => p.type === "player")).toMatchObject({ w: 348, h: 236 });
 });
 
 test("resize handles are sliders: labeled, valued, keyboard-operable, focus-ringed", async ({ page }) => {
@@ -377,5 +378,174 @@ test("resize handles are sliders: labeled, valued, keyboard-operable, focus-ring
   await expect(east).toHaveAttribute("aria-valuenow", "348");
   expect(await playerBox(page)).toMatchObject({ w: 348 });
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
-  expect(saved.panes.find((p) => p.type === "player")).toMatchObject({ w: 348 });
+  expect(saved.scenes[saved.activeScene].panes.find((p) => p.type === "player")).toMatchObject({ w: 348 });
+});
+
+const SCENES_V4 = {
+  version: 4,
+  activeScene: "game",
+  scenes: {
+    game: {
+      preset: "minimal",
+      panes: [
+        { id: "player", type: "player", x: 24, y: 24, w: 340, h: 236, opacity: 0.92, visible: true, z: 1 },
+      ],
+    },
+    focus: {
+      preset: "lyrics",
+      panes: [
+        { id: "lyrics", type: "lyrics", x: 24, y: 24, w: 420, h: 380, opacity: 0.92, visible: true, z: 1 },
+        { id: "player", type: "player", x: 24, y: 416, w: 420, h: 190, opacity: 0.92, visible: true, z: 2 },
+      ],
+    },
+    stream: {
+      preset: "full",
+      panes: [
+        { id: "player", type: "player", x: 24, y: 24, w: 340, h: 236, opacity: 0.92, visible: true, z: 1 },
+        { id: "queue", type: "queue", x: 376, y: 24, w: 300, h: 236, opacity: 0.92, visible: true, z: 2 },
+      ],
+    },
+  },
+};
+
+test("Game/Focus/Stream swap per-scene geometry and persist it", async ({ page }) => {
+  await stubTauri(page, { layout: SCENES_V4 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
+
+  // Game: player only.
+  await expect(page.locator('section[data-pane="player"]')).toBeVisible();
+  await expect(page.locator('section[data-pane="lyrics"]')).toHaveCount(0);
+  await expect(page.locator('section[data-pane="queue"]')).toHaveCount(0);
+
+  // Focus swaps in its own arrangement.
+  await page.getByRole("button", { name: "Focus", exact: true }).click();
+  await expect(page.locator('section[data-pane="lyrics"]')).toBeVisible();
+  await expect(page.getByRole("button", { name: "Focus", exact: true })).toHaveAttribute("aria-pressed", "true");
+  let saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
+  expect(saved.version).toBe(4);
+  expect(saved.activeScene).toBe("focus");
+
+  // Per-scene divergence: hide the player in Focus only.
+  await page.getByTitle("Toggle Player pane").click();
+  await expect(page.locator('section[data-pane="player"]')).toHaveCount(0);
+
+  // Game still has its player; back in Focus the player stays hidden.
+  await page.getByRole("button", { name: "Game", exact: true }).click();
+  await expect(page.locator('section[data-pane="player"]')).toBeVisible();
+  await page.getByRole("button", { name: "Focus", exact: true }).click();
+  await expect(page.locator('section[data-pane="player"]')).toHaveCount(0);
+
+  saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
+  expect(saved.scenes.focus.panes.find((p) => p.type === "player").visible).toBe(false);
+  expect(saved.scenes.game.panes.find((p) => p.type === "player").visible).toBe(true);
+
+  // The active scene survives reload.
+  await stubTauri(page, { layout: JSON.parse(JSON.stringify(saved)) });
+  await page.reload();
+  await expect(page.locator('section[data-pane="lyrics"]')).toBeVisible();
+  await expect(page.locator('section[data-pane="player"]')).toHaveCount(0);
+  const reloaded = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
+  expect(reloaded.activeScene).toBe("focus");
+});
+
+test("stored v3 migrates into every v4 scene", async ({ page }) => {
+  await stubTauri(page, { layout: CUSTOM_LAYOUT });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
+
+  // The v3 seed upgrades to a v4 doc on boot, parked on Game, with the
+  // custom arrangement seeded into every scene.
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
+  expect(saved.version).toBe(4);
+  expect(saved.activeScene).toBe("game");
+  for (const s of ["game", "focus", "stream"]) {
+    expect(saved.scenes[s].preset).toBe("custom");
+    expect(saved.scenes[s].panes.find((p) => p.type === "player")).toMatchObject({ x: 100, y: 150 });
+  }
+  expect(await playerBox(page)).toEqual({ x: 100, y: 150, w: 340, h: 230 });
+});
+
+test("pause auto-hide hides the stage after 2.5s; resume restores; Dim ghosts", async ({ page }) => {
+  await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
+  const app = page.locator(".app");
+  const player = page.locator('section[data-pane="player"]');
+
+  await page.getByRole("button", { name: "Auto-hide", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Auto-hide", exact: true })).toHaveAttribute("aria-pressed", "true");
+
+  // Seeded playing: pause, wait out the fixed delay, the stage hides.
+  await player.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect(player.getByRole("button", { name: "Play", exact: true })).toBeVisible();
+  await expect(app).toHaveAttribute("data-stream", "hidden", { timeout: 8000 });
+
+  // Resume restores instantly.
+  await player.getByRole("button", { name: "Play", exact: true }).click();
+  await expect(app).not.toHaveAttribute("data-stream", "hidden");
+
+  // The toggle persists outside scene geometry.
+  expect(await page.evaluate(() => localStorage.getItem("snapify-stream"))).toBe(
+    JSON.stringify({ hideOnPause: true, dimInstead: false }),
+  );
+
+  // Dim ghosts instead of hiding.
+  await page.getByRole("button", { name: "Dim", exact: true }).click();
+  await player.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect(app).toHaveAttribute("data-stream", "dimmed", { timeout: 8000 });
+});
+
+const BROWSE_NARROW_LAYOUT = {
+  version: 3,
+  preset: "custom",
+  panes: [
+    {
+      id: "player",
+      type: "player",
+      x: 24,
+      y: 24,
+      w: 340,
+      h: 230,
+      opacity: 0.92,
+      visible: true,
+      z: 1,
+    },
+    {
+      id: "browse",
+      type: "browse",
+      x: 376,
+      y: 24,
+      w: 320,
+      h: 480,
+      opacity: 0.92,
+      visible: true,
+      z: 2,
+    },
+  ],
+};
+
+test("narrow browse shows a section select; lists skip off-screen paint", async ({ page }) => {
+  await stubTauri(page, { layout: BROWSE_NARROW_LAYOUT });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
+
+  // The browse pane needs revealing: the narrow layout seeds it visible.
+  const browse = page.locator('section[data-pane="browse"]');
+  await expect(browse).toBeVisible();
+
+  // Under a 380 px container the seven tab buttons hide and the select shows.
+  await expect(browse.getByLabel("Library section")).toBeVisible();
+  await expect(browse.getByRole("tab", { name: "Library: albums" })).toBeHidden();
+  // The wider tablist shell (Library/Search/Profile) is still in the tree.
+  await expect(browse.locator('[role="tablist"]')).toBeVisible();
+
+  // The select drives the same section state.
+  await browse.getByLabel("Library section").selectOption("tracks");
+  await expect(browse.getByLabel("Library section")).toHaveValue("tracks");
+
+  // Headless no-jank assertion: long lists carry content-visibility.
+  const cv = await browse
+    .locator("ol.queue")
+    .first()
+    .evaluate((el) => getComputedStyle(el).contentVisibility);
+  expect(cv).toBe("auto");
 });

@@ -3,18 +3,31 @@ import {
   clampLayoutToArea,
   clampPaneToArea,
   clonePanes,
+  DEFAULT_STREAM,
   defaultLayoutFor,
+  defaultSceneLayout,
+  defaultSceneLayoutFor,
+  defaultScenes,
   getPaneMin,
   LAYOUT_UNDO_DEPTH,
+  loadSceneLayout,
+  loadStreamSettings,
+  migrateV3ToV4,
   newPaneForType,
   PANE_MIN,
   pushLayoutUndo,
   revealPaneType,
+  saveSceneLayout,
+  saveStreamSettings,
+  SCENE_PRESETS,
+  setActiveSlot,
   snapMove,
   snapSize,
+  STREAM_HIDE_DELAY_MS,
+  togglePaneCollapsed,
   togglePaneVisibility,
 } from "./layout";
-import type { LayoutState, LayoutUndoEntry, PaneState, PaneType } from "./types";
+import type { LayoutState, LayoutUndoEntry, PaneState, PaneType, SceneLayout } from "./types";
 
 function pane(over: Partial<PaneState> = {}): PaneState {
   return {
@@ -409,5 +422,162 @@ describe("clampPaneToArea", () => {
     const p = pane({ x: 2000, y: 1500, w: 2000, h: 1500 });
     clampPaneToArea(p, 800, 600);
     expect(p.x).toBe(2000);
+  });
+});
+
+describe("migrateV3ToV4", () => {
+  it("seeds every scene with the v3 arrangement and parks on game", () => {
+    const v3 = layout([pane({ id: "a", x: 111, y: 222 })]);
+    const v4 = migrateV3ToV4(v3);
+    expect(v4.version).toBe(4);
+    expect(v4.activeScene).toBe("game");
+    for (const s of ["game", "focus", "stream"] as const) {
+      expect(v4.scenes[s].preset).toBe("custom");
+      expect(v4.scenes[s].panes).toHaveLength(1);
+      expect(v4.scenes[s].panes[0]).toMatchObject({ id: "a", x: 111, y: 222 });
+    }
+  });
+
+  it("deep-copies so later v3 mutation cannot corrupt the scenes", () => {
+    const v3 = layout([pane({ id: "a", x: 1 })]);
+    const v4 = migrateV3ToV4(v3);
+    v3.panes[0].x = 777;
+    expect(v4.scenes.game.panes[0].x).toBe(1);
+  });
+
+  it("carries the collapsed flag across the migration", () => {
+    const v3 = layout([pane({ id: "a", collapsed: true })]);
+    const v4 = migrateV3ToV4(v3);
+    expect(v4.scenes.stream.panes[0].collapsed).toBe(true);
+  });
+});
+
+describe("defaultScenes", () => {
+  it("maps each scene to its factory preset", () => {
+    expect(SCENE_PRESETS).toEqual({ game: "minimal", focus: "lyrics", stream: "full" });
+    const scenes = defaultScenes();
+    expect(scenes.game.preset).toBe("minimal");
+    expect(scenes.game.panes.map((p) => p.type)).toEqual(["player"]);
+    expect(scenes.focus.preset).toBe("lyrics");
+    expect(scenes.focus.panes.map((p) => p.type).sort()).toEqual(["lyrics", "player"]);
+    expect(scenes.stream.preset).toBe("full");
+    expect(scenes.stream.panes.map((p) => p.type).sort()).toEqual(["player", "queue"]);
+  });
+
+  it("starts every pane expanded", () => {
+    const scenes = defaultScenes();
+    for (const s of ["game", "focus", "stream"] as const) {
+      for (const p of scenes[s].panes) expect(p.collapsed).toBe(false);
+    }
+  });
+
+  it("parks a fresh doc on the game scene", () => {
+    const doc = defaultSceneLayout();
+    expect(doc).toMatchObject({ version: 4, activeScene: "game" });
+  });
+
+  it("opens the first-run stage (lyrics + player) on game, factories elsewhere", () => {
+    const doc = defaultSceneLayoutFor(1920, 1080);
+    expect(doc.activeScene).toBe("game");
+    expect(doc.scenes.game.panes.map((p) => p.type).sort()).toEqual(["lyrics", "player"]);
+    expect(doc.scenes.focus.preset).toBe("lyrics");
+    expect(doc.scenes.stream.preset).toBe("full");
+    expect(doc.scenes.focus.panes.map((p) => p.type).sort()).toEqual(["lyrics", "player"]);
+  });
+});
+
+describe("setActiveSlot", () => {
+  it("replaces only the active scene and copies the panes", () => {
+    const doc = defaultSceneLayout();
+    const panes = [pane({ id: "solo", x: 5 })];
+    const next = setActiveSlot(doc, panes, "custom");
+    expect(next.scenes.game).toMatchObject({ preset: "custom" });
+    expect(next.scenes.game.panes[0]).toMatchObject({ id: "solo", x: 5 });
+    expect(next.scenes.focus.preset).toBe("lyrics");
+    panes[0].x = 999;
+    expect(next.scenes.game.panes[0].x).toBe(5);
+    expect(doc.scenes.game.panes[0].id).toBe("player");
+  });
+});
+
+describe("togglePaneCollapsed", () => {
+  it("flips one pane and leaves siblings untouched", () => {
+    const l = [pane({ id: "a", x: 10 }), pane({ id: "b", x: 20 })];
+    const out = togglePaneCollapsed(l, "a");
+    expect(out[0]).toMatchObject({ collapsed: true, x: 10 });
+    expect(out[1]).toEqual(l[1]);
+    expect(togglePaneCollapsed(out, "a")[0].collapsed).toBe(false);
+  });
+
+  it("does not mutate the input panes", () => {
+    const l = [pane({ id: "a" })];
+    togglePaneCollapsed(l, "a");
+    expect(l[0].collapsed).toBeUndefined();
+  });
+});
+
+/** Node has no localStorage: a Map-backed fake for the storage tests. */
+function stubStorage(seed: Record<string, string> = {}): Map<string, string> {
+  const store = new Map(Object.entries(seed));
+  (globalThis as unknown as { localStorage: unknown }).localStorage = {
+    getItem: (k: string) => (store.has(k) ? (store.get(k) as string) : null),
+    setItem: (k: string, v: string) => {
+      store.set(k, String(v));
+    },
+    removeItem: (k: string) => {
+      store.delete(k);
+    },
+  };
+  return store;
+}
+
+describe("loadSceneLayout", () => {
+  it("loads a stored v3 doc through the migration", () => {
+    const v3 = layout([pane({ id: "a", x: 100, y: 150, w: 340, h: 230 })]);
+    stubStorage({ "snapify-layout-v3": JSON.stringify(v3) });
+    const doc = loadSceneLayout();
+    expect(doc?.version).toBe(4);
+    expect(doc?.activeScene).toBe("game");
+    expect(doc?.scenes.game.panes[0]).toMatchObject({ id: "a", x: 100, y: 150 });
+    expect(doc?.scenes.stream.panes[0]).toMatchObject({ id: "a", x: 100, y: 150 });
+  });
+
+  it("round-trips a v4 doc with per-scene geometry", () => {
+    stubStorage();
+    const doc: SceneLayout = {
+      ...defaultSceneLayout(),
+      activeScene: "focus",
+      scenes: {
+        ...defaultSceneLayout().scenes,
+        focus: { preset: "custom", panes: [pane({ id: "f", x: 7 })] },
+      },
+    };
+    saveSceneLayout(doc);
+    const back = loadSceneLayout();
+    expect(back?.activeScene).toBe("focus");
+    expect(back?.scenes.focus.panes[0]).toMatchObject({ id: "f", x: 7 });
+    expect(back?.scenes.game.preset).toBe("minimal");
+  });
+
+  it("returns null when nothing is stored", () => {
+    stubStorage();
+    expect(loadSceneLayout()).toBeNull();
+  });
+});
+
+describe("stream settings", () => {
+  it("fixes the pause delay at 2.5 s and defaults to off/off", () => {
+    expect(STREAM_HIDE_DELAY_MS).toBe(2500);
+    expect(DEFAULT_STREAM).toEqual({ hideOnPause: false, dimInstead: false });
+    stubStorage();
+    expect(loadStreamSettings()).toEqual({ hideOnPause: false, dimInstead: false });
+  });
+
+  it("round-trips the toggles under the snapify-stream key", () => {
+    const store = stubStorage();
+    saveStreamSettings({ hideOnPause: true, dimInstead: true });
+    expect(store.has("snapify-stream")).toBe(true);
+    expect(store.has("snapify-layout-v3")).toBe(false);
+    expect(loadStreamSettings()).toEqual({ hideOnPause: true, dimInstead: true });
   });
 });

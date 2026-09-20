@@ -40,6 +40,22 @@ import SpotifyMark from "./SpotifyMark";
 
 type LibTab = "playlists" | "albums" | "tracks" | "artists" | "shows" | "episodes" | "audiobooks";
 
+/** The seven library sections. Buttons render wide; the select below
+ *  renders under a 380 px container (same values, tablist kept wide). */
+const LIB_TABS: readonly LibTab[] = [
+  "playlists",
+  "albums",
+  "tracks",
+  "artists",
+  "shows",
+  "episodes",
+  "audiobooks",
+];
+
+function libTabLabel(t: LibTab): string {
+  return t[0].toUpperCase() + t.slice(1);
+}
+
 interface Props {
   state: BrowseState;
   deviceId: string | null;
@@ -185,9 +201,9 @@ function TrackRow({
   );
 }
 
-function Skeletons({ n = 3 }: { n?: number }) {
+function Skeletons({ n = 3, label = "Loading" }: { n?: number; label?: string }) {
   return (
-    <div aria-label="Loading" role="status">
+    <div aria-label={label} role="status">
       {Array.from({ length: n }, (_, i) => (
         <div className="skel skel-row" key={i} />
       ))}
@@ -235,14 +251,60 @@ function entryForUri(uri: string, name?: string): BrowseEntry | null {
   return null;
 }
 
-function ThrottledNote({ message, onRetry }: { message: string; onRetry: () => void }) {
-  const quota = /quota-exceeded/i.test(message);
+/** Unified pane-state banner (PR8). One component for the loading,
+ *  queued-write, throttled, and capped states across panes — same
+ *  `throttled-note` / `skel` visuals and copy as the old per-pane notes,
+ *  no new visual language. PlayerPane and VisualizerPane import this;
+ *  QueuePane keeps its own inline notes (out of slice bounds). */
+export type PaneBannerTone = "loading" | "queued" | "throttled" | "capped";
+
+export function PaneStateBanner({
+  tone,
+  message,
+  count,
+  onRetry,
+  skeletonN = 3,
+  contextLabel,
+}: {
+  tone: PaneBannerTone;
+  /** Raw throttle message; only inspected for the quota-vs-rate copy. */
+  message?: string;
+  /** Parked write count for the queued copy. */
+  count?: number;
+  onRetry?: () => void;
+  skeletonN?: number;
+  contextLabel?: string;
+}) {
+  if (tone === "loading") {
+    return <Skeletons n={skeletonN} label={contextLabel ?? "Loading"} />;
+  }
+  if (tone === "queued") {
+    const n = typeof count === "number" ? count : 0;
+    if (n <= 0) return null;
+    return (
+      <div className="throttled-note" role="status">
+        <span>
+          Queued — will send after cooldown{n > 1 ? ` (${n})` : ""}.
+        </span>
+      </div>
+    );
+  }
+  if (tone === "capped") {
+    return (
+      <div className="throttled-note" role="status">
+        <span>Showing first 10 — Spotify throttled the full queue.</span>
+      </div>
+    );
+  }
+  const quota = /quota-exceeded/i.test(message ?? "");
   return (
     <div className="throttled-note" role="status">
       <span>{quota ? "Spotify quota hit — cooling down." : "Spotify throttled — retrying in background."}</span>
-      <button className="btn sm" onClick={onRetry}>
-        Retry
-      </button>
+      {onRetry && (
+        <button className="btn sm" onClick={onRetry}>
+          Retry
+        </button>
+      )}
     </div>
   );
 }
@@ -376,10 +438,10 @@ function PagedSearch({
     merged.episodes.length === 0 &&
     merged.audiobooks.length === 0;
 
-  if (list.loading && list.items.length === 0) return <Skeletons />;
+  if (list.loading && list.items.length === 0) return <PaneStateBanner tone="loading" />;
   return (
     <>
-      {list.throttled && <ThrottledNote message={list.throttled} onRetry={list.retry} />}
+      {list.throttled && <PaneStateBanner tone="throttled" message={list.throttled} onRetry={list.retry} />}
       {empty && (
         <div className="empty">
           <div className="empty-title">No results</div>
@@ -672,11 +734,11 @@ function LibraryList({
     { pageSize: 20, resetKey: `${resetKey}:lib:${tab}`, onError: err },
   );
 
-  if (list.loading && list.items.length === 0) return <Skeletons />;
+  if (list.loading && list.items.length === 0) return <PaneStateBanner tone="loading" />;
   if (list.items.length === 0 && list.throttled) {
     return (
       <>
-        <ThrottledNote message={list.throttled} onRetry={list.retry} />
+        <PaneStateBanner tone="throttled" message={list.throttled} onRetry={list.retry} />
         <div className="empty">
           <div className="empty-title">Throttled</div>
           <div className="empty-sub">Spotify rate-limited this list. Stale results kept; retry when ready.</div>
@@ -703,7 +765,7 @@ function LibraryList({
   }
   return (
     <>
-      {list.throttled && <ThrottledNote message={list.throttled} onRetry={list.retry} />}
+      {list.throttled && <PaneStateBanner tone="throttled" message={list.throttled} onRetry={list.retry} />}
       <ol className="queue">
         {list.items.map((it, i) => {
           if ("durationMs" in it) {
@@ -816,11 +878,11 @@ function PlaylistTracks({
     },
     { pageSize: 50, resetKey: `pl-tracks:${resetKey}:${id}`, onError: errInline },
   );
-  if (list.loading && list.items.length === 0) return <Skeletons />;
+  if (list.loading && list.items.length === 0) return <PaneStateBanner tone="loading" />;
   if (list.items.length === 0 && list.throttled) {
     return (
       <>
-        <ThrottledNote message={list.throttled} onRetry={list.retry} />
+        <PaneStateBanner tone="throttled" message={list.throttled} onRetry={list.retry} />
         <div className="empty">
           <div className="empty-title">Throttled</div>
           <div className="empty-sub">Spotify rate-limited this playlist. Retry keeps your place.</div>
@@ -870,7 +932,7 @@ function PlaylistTracks({
   }
   return (
     <>
-      {list.throttled && <ThrottledNote message={list.throttled} onRetry={list.retry} />}
+      {list.throttled && <PaneStateBanner tone="throttled" message={list.throttled} onRetry={list.retry} />}
       <ol className="queue">
         {list.items.map((t, i) => {
           const entry = entryForUri(t.uri, t.name);
@@ -1142,13 +1204,7 @@ export default function BrowsePane(p: Props) {
     const label = top.name ?? top.id;
     return (
       <>
-        {p.queuedCount != null && p.queuedCount > 0 && (
-          <div className="throttled-note" role="status">
-            <span>
-              Queued — will send after cooldown{p.queuedCount > 1 ? ` (${p.queuedCount})` : ""}.
-            </span>
-          </div>
-        )}
+        <PaneStateBanner tone="queued" count={p.queuedCount} />
         <div className="pane-subhead">
           <button className="icon-btn sm" onClick={back} title="Back" aria-label="Back">
             ←
@@ -1159,7 +1215,7 @@ export default function BrowsePane(p: Props) {
         {detailLoading ? (
           <>
             <div className="skel skel-head" aria-hidden="true" />
-            <Skeletons n={4} />
+            <PaneStateBanner tone="loading" skeletonN={4} contextLabel="Loading detail" />
           </>
         ) : detail ? (
           <>
@@ -1385,13 +1441,7 @@ export default function BrowsePane(p: Props) {
 
   return (
     <>
-      {p.queuedCount != null && p.queuedCount > 0 && (
-        <div className="throttled-note" role="status">
-          <span>
-            Queued — will send after cooldown{p.queuedCount > 1 ? ` (${p.queuedCount})` : ""}.
-          </span>
-        </div>
-      )}
+      <PaneStateBanner tone="queued" count={p.queuedCount} />
       <div className="browse-tabs" role="tablist" aria-label="Browse">
         <SpotifyMark variant="full" size={18} />
         {views.map((v, i) => (
@@ -1412,16 +1462,32 @@ export default function BrowsePane(p: Props) {
         {p.state.view === "library" && (
           <>
             <span className="sep" aria-hidden="true" />
-            {(["playlists", "albums", "tracks", "artists", "shows", "episodes", "audiobooks"] as const).map((t) => (
+            {/* Narrow-pane fallback for the seven library tabs: a labelled
+              select under a 380 px container. The tab buttons keep their
+              tablist semantics at wider widths (CSS hides one or the
+              other, never both). */}
+            <select
+              className="browse-tab-select"
+              aria-label="Library section"
+              value={libTab}
+              onChange={(e) => setLibTab(e.target.value as LibTab)}
+            >
+              {LIB_TABS.map((t) => (
+                <option key={t} value={t}>
+                  {libTabLabel(t)}
+                </option>
+              ))}
+            </select>
+            {LIB_TABS.map((t) => (
               <button
                 key={t}
                 role="tab"
                 aria-selected={libTab === t}
-                className={`chip${libTab === t ? " chip-on" : ""}`}
+                className={`chip lib-tab${libTab === t ? " chip-on" : ""}`}
                 onClick={() => setLibTab(t)}
                 aria-label={`Library: ${t}`}
               >
-                {t[0].toUpperCase() + t.slice(1)}
+                {libTabLabel(t)}
               </button>
             ))}
           </>
@@ -1524,7 +1590,7 @@ export default function BrowsePane(p: Props) {
           {profileLoading && !me ? (
             <>
               <div className="skel skel-head" aria-hidden="true" />
-              <Skeletons n={4} />
+              <PaneStateBanner tone="loading" skeletonN={4} contextLabel="Loading profile" />
             </>
           ) : (
             <>

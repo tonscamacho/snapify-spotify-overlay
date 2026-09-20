@@ -20,6 +20,7 @@ import {
   VolumeIcon,
 } from "./icons";
 import SpotifyMark from "./SpotifyMark";
+import { PaneStateBanner } from "./BrowsePane";
 
 interface Props {
   snapshot: PlayerSnapshot;
@@ -29,6 +30,16 @@ interface Props {
   tier?: "premium" | "free";
   sdkDeviceId?: string | null;
   queuedCount?: number;
+  /** True while the app is in a throttled episode: pins the unified
+   *  banner above the player. Retry re-polls the player. */
+  degraded?: boolean;
+  onRetry?: () => void;
+  /** Render the mini row (art + title + play/pause) alongside the full
+   *  player. The App sets this when the pane is collapsed or narrow
+   *  enough for the 280 px container query to show it; otherwise the
+   *  mini stays out of the DOM so track text and Play/Pause resolve
+   *  exactly once. */
+  compact?: boolean;
   onPlay: () => void;
   onPause: () => void;
   onNext: () => void;
@@ -303,6 +314,7 @@ export default function PlayerPane(p: Props) {
   if (!track) {
     return (
       <>
+        <div className="player-full">
         <div className="empty">
           <div className="empty-icon">
             <NoteIcon size={22} />
@@ -319,6 +331,15 @@ export default function PlayerPane(p: Props) {
             {isFree ? "Free" : "Premium"}
           </span>
         </div>
+        </div>
+        {p.compact === true && (
+          <div className="mini-row">
+            <div className="mini-cover cover-fallback" aria-hidden="true">
+              <NoteIcon size={16} />
+            </div>
+            <div className="mini-title">Nothing playing</div>
+          </div>
+        )}
       </>
     );
   }
@@ -333,13 +354,11 @@ export default function PlayerPane(p: Props) {
 
   return (
     <div className="pane-fill">
-      {p.queuedCount != null && p.queuedCount > 0 && (
-        <div className="throttled-note" role="status">
-          <span>
-            Queued — will send after cooldown{p.queuedCount > 1 ? ` (${p.queuedCount})` : ""}.
-          </span>
-        </div>
+      <PaneStateBanner tone="queued" count={p.queuedCount} />
+      {p.degraded === true && (
+        <PaneStateBanner tone="throttled" onRetry={p.onRetry} />
       )}
+      <div className="player-full">
       <div className="track-row">
         {track.image ? (
           <img className="cover" src={track.image} alt="" draggable={false} />
@@ -664,6 +683,49 @@ export default function PlayerPane(p: Props) {
       <div className="player-foot">
         <SpotifyMark variant="icon" size={21} />
       </div>
+      </div>
+      {/* Mini player row (PR8): art + title + play/pause only. Rendered
+        only when the App flags the pane compact (collapsed or narrow);
+        a 280 px container query or the collapsed flag swaps it in for
+        the full player (see App.css). */}
+      {p.compact === true && (
+        <div className="mini-row">
+        {track.image ? (
+          <img className="mini-cover" src={track.image} alt="" draggable={false} />
+        ) : (
+          <div className="mini-cover cover-fallback" aria-hidden="true">
+            <NoteIcon size={16} />
+          </div>
+        )}
+        <div
+          className="mini-title"
+          title={`${track.name} — ${track.artists}`}
+        >
+          {track.name}
+        </div>
+        {s.isPlaying ? (
+          <button
+            className="play-disc mini-play"
+            onClick={p.onPause}
+            disabled={p.busy}
+            title="Pause"
+            aria-label="Pause"
+          >
+            <PauseIcon size={15} />
+          </button>
+        ) : (
+          <button
+            className="play-disc mini-play"
+            onClick={p.onPlay}
+            disabled={p.busy || isFree}
+            title={isFree ? UPGRADE_TEXT : "Play"}
+            aria-label="Play"
+          >
+            <PlayIcon size={15} />
+          </button>
+        )}
+        </div>
+      )}
     </div>
   );
 }

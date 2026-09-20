@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { stubTauri, commandsNamed, failNext } from "./tauri-mock";
-import { TRACK_NAME } from "./fixtures";
+import { TRACK_NAME, buildFixtures } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
   await stubTauri(page);
@@ -137,4 +137,108 @@ test("Keep there transfers to the chosen device and remembers it", async ({ page
   await page.reload();
   const panel2 = page.locator('section[data-pane="player"]').getByRole("group", { name: "Playback device" });
   await expect(panel2).toContainText("remembered");
+});
+
+test("player collapses to the 64px mini row and persists", async ({ page }) => {
+  // Lowered pane: the floating dock overlaps pane headers near the top.
+  await stubTauri(page, {
+    layout: {
+      version: 3,
+      preset: "custom",
+      panes: [
+        { id: "player", type: "player", x: 24, y: 200, w: 340, h: 260, opacity: 0.92, visible: true, z: 1 },
+      ],
+    },
+  });
+  await page.goto("/");
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME)).toBeVisible();
+
+  await player.getByRole("button", { name: "Collapse Player pane" }).click();
+  await expect(player).toHaveAttribute("data-collapsed", "true");
+  await expect(player.locator(".mini-row")).toBeVisible();
+  await expect(player.locator(".player-full")).toBeHidden();
+  await expect(player.locator(".mini-row")).toContainText(TRACK_NAME);
+  await expect(
+    player.locator(".mini-row").getByRole("button", { name: "Pause", exact: true }),
+  ).toBeVisible();
+
+  const box = await player.boundingBox();
+  if (!box) throw new Error("player has no box");
+  expect(box.height).toBeLessThanOrEqual(72);
+
+  // The collapsed flag persists per scene, not as a preset swap.
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
+  expect(saved.version).toBe(4);
+  expect(
+    saved.scenes[saved.activeScene].panes.find((p) => p.type === "player").collapsed,
+  ).toBe(true);
+
+  await stubTauri(page, { layout: JSON.parse(JSON.stringify(saved)) });
+  await page.reload();
+  const reloaded = page.locator('section[data-pane="player"]');
+  await expect(reloaded).toHaveAttribute("data-collapsed", "true");
+  await expect(reloaded.locator(".mini-row")).toBeVisible();
+
+  // Expand restores the full player.
+  await reloaded.getByRole("button", { name: "Expand Player pane" }).click();
+  await expect(reloaded.locator(".player-full")).toBeVisible();
+  await expect(reloaded.locator(".mini-row")).toBeHidden();
+});
+
+const VIZ_LAYOUT = {
+  version: 3,
+  preset: "custom",
+  panes: [
+    {
+      id: "player",
+      type: "player",
+      x: 24,
+      y: 200,
+      w: 340,
+      h: 260,
+      opacity: 0.92,
+      visible: true,
+      z: 1,
+    },
+    {
+      id: "viz",
+      type: "visualizer",
+      x: 376,
+      y: 200,
+      w: 340,
+      h: 260,
+      opacity: 0.92,
+      visible: true,
+      z: 2,
+    },
+  ],
+};
+
+test("one banner type covers player and visualizer while throttled", async ({ page }) => {
+  // Paused seed: the player poll backs off to 20 s, so the throttled
+  // episode stays up long enough to assert both banners.
+  const seed = buildFixtures();
+  (seed.player as Record<string, unknown>)["is_playing"] = false;
+  await stubTauri(page, { layout: VIZ_LAYOUT, fixtures: { player: seed.player } });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
+
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME)).toBeVisible();
+
+  // Every play attempt 429s: the write parks, the episode pins degraded UI.
+  await failNext(page, "play", "rate-limited: retry after 1s", 50);
+  await player.getByRole("button", { name: "Play", exact: true }).click();
+  await expect(player.getByText(/Queued/)).toBeVisible({ timeout: 10000 });
+
+  const bannerCopy = "Spotify throttled — retrying in background.";
+  await expect(player.getByText(bannerCopy)).toBeVisible({ timeout: 4000 });
+  const viz = page.locator('section[data-pane="visualizer"]');
+  await expect(viz.getByText(bannerCopy)).toBeVisible({ timeout: 4000 });
+
+  // Retry re-polls and clears the episode everywhere at once.
+  await viz.getByRole("button", { name: "Retry" }).click();
+  await expect(viz.getByText(bannerCopy)).toHaveCount(0);
+  await expect(player.getByText(bannerCopy)).toHaveCount(0);
 });

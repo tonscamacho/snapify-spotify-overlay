@@ -1605,3 +1605,191 @@ select:focus-visible,
     transition: none !important;
   }
 }
+
+/* ---------- PR8: scenes, stream-safe, collapse, mini, banner ----------
+   New rules only; light/glass/corners values above are untouched. */
+
+/* Streaming-safe auto-hide: a CSS-only ghost over the stage. Opacity
+   only, inside the theme's motion budget. Hit regions are untouched so
+   the overlay stays interactive while hidden. */
+.stage {
+  transition: opacity var(--dur) var(--ease);
+}
+
+.app[data-stream="hidden"] .stage {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.app[data-stream="dimmed"] .stage {
+  opacity: 0.18;
+}
+
+/* Per-pane collapse toggle in the pane header. Always visible (not just
+   edit mode) so the mini player stays one press away mid-game. */
+.collapse-btn {
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.collapse-btn:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--txt);
+}
+
+.app[data-theme="light"] .collapse-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: #000;
+}
+
+.pane.editing .collapse-btn {
+  margin-left: 0;
+}
+
+/* Collapsed panes drop their content floor and hide the body; the stored
+   geometry survives in state so expand restores it exactly. */
+.pane[data-collapsed="true"] {
+  min-height: 0;
+}
+
+.pane[data-collapsed="true"] .pane-body {
+  display: none;
+}
+
+/* Mini player row: art + title + play/pause only. */
+.mini-row {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  padding: 12px var(--pad-pane);
+}
+
+.mini-cover {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: var(--r-sm);
+  object-fit: cover;
+  background: #232329;
+}
+
+.mini-cover.cover-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+}
+
+.mini-title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--txt);
+}
+
+.mini-play {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  margin: 0;
+}
+
+/* Collapsed player: header slims down and the body shows only the mini
+   row, totalling the 64 px mini floor (20 header + 42 row + 2 border). */
+.pane[data-pane="player"][data-collapsed="true"] .pane-body {
+  display: block;
+  overflow: hidden;
+  padding: 0;
+}
+
+.pane[data-pane="player"][data-collapsed="true"] .pane-handle {
+  padding: 2px 12px 0;
+  min-height: 18px;
+}
+
+.pane[data-pane="player"][data-collapsed="true"] .player-full {
+  display: none;
+}
+
+.pane[data-pane="player"][data-collapsed="true"] .mini-row {
+  display: flex;
+  padding: 4px 12px 6px;
+}
+
+/* Narrow player panes fall back to the mini row under 280 px. */
+@container (max-width: 280px) {
+  .pane[data-pane="player"] .player-full {
+    display: none;
+  }
+  .pane[data-pane="player"] .mini-row {
+    display: flex;
+  }
+}
+
+/* Seven library tabs collapse to a labelled select under 380 px. The
+   tab buttons keep their tablist semantics at wider widths: CSS hides
+   one control or the other, never both. */
+.browse-tab-select {
+  display: none;
+  max-width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--stroke);
+  background: var(--surface-2);
+  color: var(--txt);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+@container (max-width: 380px) {
+  .browse-tabs .lib-tab {
+    display: none;
+  }
+  .browse-tabs .browse-tab-select {
+    display: block;
+  }
+}
+
+/* Long lists skip off-screen rendering so a 300 px browse pane scrolls
+   without jank. The virtualized queue keeps its explicit height; this
+   only skips paint, never layout. */
+.queue {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 320px;
+}
+
+/* Queue-context skeleton: holds the context row while the name resolves
+   instead of hiding the button and jumping the pane. Reuses .skel. */
+.queue-context-skel {
+  height: 32px;
+  margin: 6px 0 2px;
+}
+
+/* Scene switcher group in the dock: same chip language as the PR1 dock. */
+.dock-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chip:disabled {
+  opacity: 0.38;
+  cursor: default;
+}

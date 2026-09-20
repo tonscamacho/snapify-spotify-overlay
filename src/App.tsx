@@ -45,18 +45,29 @@ import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updat
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
 import {
+  COLLAPSED_PLAYER_H,
+  MINI_PLAYER_W,
   PRESETS,
+  SCENE_LABELS,
+  SCENE_NAMES,
+  STREAM_HIDE_DELAY_MS,
   clampLayoutToArea,
   clampPaneToArea,
   clonePanes,
   defaultLayoutFor,
+  defaultSceneLayout,
+  defaultSceneLayoutFor,
   getPaneMin,
-  loadLayout,
+  loadSceneLayout,
+  loadStreamSettings,
   pushLayoutUndo,
   revealPaneType,
-  saveLayout,
+  saveSceneLayout,
+  saveStreamSettings,
+  setActiveSlot,
   snapMove,
   snapSize,
+  togglePaneCollapsed,
   togglePaneVisibility,
 } from "./lib/layout";
 import type {
@@ -72,8 +83,11 @@ import type {
   PlayerSnapshot,
   QueueContext,
   QueueItem,
+  SceneLayout,
+  SceneName,
   Surface,
 } from "./lib/types";
+import type { StreamSettings } from "./lib/layout";
 import "./App.css";
 
 const EMPTY_SNAP: PlayerSnapshot = {
@@ -169,6 +183,16 @@ export default function App() {
 
   const [layout, setLayout] = useState<PaneState[]>([]);
   const [preset, setPreset] = useState("full");
+  // PR8 scenes: the active scene name. The full v4 doc (one slot per
+  // scene) lives in docRef so every persist writes the active slot
+  // through; layout/preset state always mirror the active scene.
+  const [scene, setScene] = useState<SceneName>("game");
+  const docRef = useRef<SceneLayout | null>(null);
+  const sceneRef = useRef<SceneName>("game");
+  // Streaming-safe settings (snapify-stream key, never scene geometry).
+  const [stream, setStream] = useState<StreamSettings>(() => loadStreamSettings());
+  // True once a pause outlasts STREAM_HIDE_DELAY_MS; resume clears it.
+  const [streamHidden, setStreamHidden] = useState(false);
   // Bounded layout-undo stack (cap LAYOUT_UNDO_DEPTH). Snapshots are pushed
   // before geometry-changing ops; Ctrl+Z while editing pops the last.
   const [undoStack, setUndoStack] = useState<LayoutUndoEntry[]>([]);
@@ -317,7 +341,12 @@ export default function App() {
   const handleUndoElRef = useRef<unknown>(null);
 
   const persist = useCallback((panes: PaneState[], name: string) => {
-    saveLayout({ version: 3, preset: name, panes });
+    // Scene-aware persist: the active slot follows layout/preset state,
+    // the other two scenes ride along untouched in the v4 doc.
+    const base = docRef.current ?? defaultSceneLayout();
+    const next = setActiveSlot({ ...base, activeScene: sceneRef.current }, panes, name);
+    docRef.current = next;
+    saveSceneLayout(next);
   }, []);
 
   // Synchronous mirrors so geometry callbacks and the global key listener
@@ -670,18 +699,25 @@ export default function App() {
   useEffect(() => {
     const w = window.innerWidth || 1280;
     const hgt = window.innerHeight || 800;
-    const saved = loadLayout();
-    if (saved) {
-      const clamped = clampLayoutToArea(saved, w, hgt, uiScaleRef.current);
-      setLayout(clamped.panes);
-      setPreset(saved.preset);
-      if (clamped !== saved) persist(clamped.panes, saved.preset);
-    } else {
-      const fresh = defaultLayoutFor(w, hgt);
-      setLayout(fresh.panes);
-      setPreset(fresh.preset);
-      persist(fresh.panes, fresh.preset);
-    }
+    // v4 scene doc, with v3/legacy fallback migrated in place. A stored
+    // v3 arrangement loads (seeded into every scene by the migration);
+    // a missing/corrupt entry seeds the first-run doc (game opens the
+    // historic lyrics + player stage, focus/stream start factory-fresh).
+    const doc = loadSceneLayout() ?? defaultSceneLayoutFor(w, hgt);
+    docRef.current = doc;
+    sceneRef.current = doc.activeScene;
+    setScene(doc.activeScene);
+    const slot = doc.scenes[doc.activeScene];
+    const clamped = clampLayoutToArea(
+      { version: 3, preset: slot.preset, panes: slot.panes },
+      w,
+      hgt,
+      uiScaleRef.current,
+    );
+    setLayout(clamped.panes);
+    setPreset(slot.preset);
+    // Always re-save: clamps stick, and v3-sourced docs upgrade to v4.
+    persist(clamped.panes, slot.preset);
     invoke<boolean>("autostart_state").then(setAutostart).catch(() => {});
     invoke<unknown>("get_keybinds")
       .then((raw) => {
@@ -769,6 +805,20 @@ export default function App() {
     }, 500);
     return () => window.clearInterval(t);
   }, [loggedIn, snap.isPlaying]);
+
+  // Streaming-safe auto-hide (PR8): when enabled and playback is paused,
+  // the stage hides (or dims per setting) STREAM_HIDE_DELAY_MS after the
+  // pause so a stream's window capture stops showing a stale frame.
+  // Resume restores instantly. CSS-only via data-stream on .app; the Rust
+  // visibility truth (toggle_visibility) is never touched.
+  useEffect(() => {
+    if (!stream.hideOnPause || !loggedIn || snap.isPlaying) {
+      setStreamHidden(false);
+      return;
+    }
+    const t = window.setTimeout(() => setStreamHidden(true), STREAM_HIDE_DELAY_MS);
+    return () => window.clearTimeout(t);
+  }, [stream.hideOnPause, loggedIn, snap.isPlaying, snap.track?.id]);
 
   useEffect(() => {
     queueVisibleRef.current = layout.some((p) => p.type === "queue" && p.visible);
@@ -1242,6 +1292,11 @@ export default function App() {
     () => trackIdRef.current && void fetchLyrics(trackIdRef.current),
     [fetchLyrics],
   );
+  // Unified-banner retry for the player/visualizer degraded notes: one
+  // fresh poll, throttled-aware like every other read.
+  const retryPlayerCb = useCallback(() => {
+    void fetchPlayer();
+  }, [fetchPlayer]);
   const browsePlayContextCb = useCallback(
     (uri: string) =>
       void run(() => api.playContext(uri, snap.deviceId ?? sdkDeviceId), {
@@ -1393,6 +1448,68 @@ export default function App() {
     },
     [persist, pushUndoSnapshot],
   );
+
+  // PR8 scene switch: swaps the stage to the scene's saved arrangement
+  // (geometry + preset) and persists the new active scene. The outgoing
+  // slot is already persisted on every edit, so no write-back is needed
+  // first. No undo step, and the stack clears: scenes are destinations,
+  // not edits, so undoing across scenes would corrupt the new scene.
+  const switchScene = useCallback((name: SceneName) => {
+    const doc = docRef.current;
+    if (!doc || name === sceneRef.current) return;
+    const slot = doc.scenes[name];
+    const clamped = clampLayoutToArea(
+      { version: 3, preset: slot.preset, panes: slot.panes },
+      window.innerWidth,
+      window.innerHeight,
+      uiScaleRef.current,
+    );
+    const next: SceneLayout = { ...doc, activeScene: name };
+    docRef.current = next;
+    sceneRef.current = name;
+    undoRef.current = [];
+    setUndoStack([]);
+    previewBaseRef.current = null;
+    setPreviewing(false);
+    setScene(name);
+    setLayout(clamped.panes);
+    setPreset(slot.preset);
+    saveSceneLayout(next);
+  }, []);
+
+  // PR8 per-pane collapse: flips the persisted collapsed flag, keeping
+  // geometry/z/visibility so expand restores the exact pane. One undo
+  // step like any geometry op. The preset label stays: collapse is a
+  // flag on the arrangement, not a new arrangement.
+  const toggleCollapsed = useCallback(
+    (id: string) => {
+      pushUndoSnapshot();
+      previewBaseRef.current = null;
+      setPreviewing(false);
+      setLayout((l) => {
+        const panes = togglePaneCollapsed(l, id);
+        persist(panes, presetRef.current);
+        return panes;
+      });
+    },
+    [persist, pushUndoSnapshot],
+  );
+
+  // Streaming-safe toggles (snapify-stream key; geometry untouched).
+  const toggleStreamHide = useCallback(() => {
+    setStream((s) => {
+      const next = { ...s, hideOnPause: !s.hideOnPause };
+      saveStreamSettings(next);
+      return next;
+    });
+  }, []);
+  const toggleStreamDim = useCallback(() => {
+    setStream((s) => {
+      const next = { ...s, dimInstead: !s.dimInstead };
+      saveStreamSettings(next);
+      return next;
+    });
+  }, []);
 
   // Queue "Next from" navigation: reveal the browse pane when hidden, then
   // push the playing context so its detail loads through the normal path.
@@ -1851,6 +1968,7 @@ export default function App() {
 
   const renderPane = (pane: PaneState) => {
     if (!pane.visible) return null;
+    const collapsed = pane.collapsed === true;
     return (
       <section
         key={`${preset}:${pane.id}`}
@@ -1858,14 +1976,37 @@ export default function App() {
         data-pane={pane.type}
         data-pane-id={pane.id}
         data-density={density}
+        data-collapsed={collapsed ? "true" : undefined}
         tabIndex={-1}
-        style={{ left: pane.x, top: pane.y, width: pane.w, height: pane.h, zIndex: pane.z, opacity: pane.opacity }}
+        style={{
+          left: pane.x,
+          top: pane.y,
+          width: pane.w,
+          // Collapsed pins the rendered height; the stored h survives in
+          // state so expand restores it exactly.
+          height: collapsed ? (pane.type === "player" ? COLLAPSED_PLAYER_H : "auto") : pane.h,
+          zIndex: pane.z,
+          opacity: pane.opacity,
+        }}
         onPointerDown={(e) => {
           if (editing) e.stopPropagation();
         }}
       >
         <header className="pane-handle" onPointerDown={(e) => beginDrag(e, pane.id, "move")}>
           <h2 className="pane-title">{PANE_TITLES[pane.type]}</h2>
+          <button
+            className="collapse-btn"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleCollapsed(pane.id);
+            }}
+            aria-label={collapsed ? `Expand ${PANE_TITLES[pane.type]} pane` : `Collapse ${PANE_TITLES[pane.type]} pane`}
+            aria-expanded={!collapsed}
+            title={collapsed ? "Expand" : "Collapse"}
+          >
+            {collapsed ? "▸" : "▾"}
+          </button>
           {editing && (
             <>
               <input
@@ -1894,6 +2035,12 @@ export default function App() {
               tier={tier}
               sdkDeviceId={sdkDeviceId}
               queuedCount={pendingCount}
+              degraded={degradedUi}
+              onRetry={retryPlayerCb}
+              // Compact (mini row in DOM) when collapsed or narrow enough
+              // for the 280 px container query; +2 px pane border, so the
+              // React gate and the CSS switch agree with no dead zone.
+              compact={pane.collapsed === true || pane.w <= MINI_PLAYER_W + 2}
               onPlay={playCb}
               onPause={pauseCb}
               onNext={nextCb}
@@ -1920,21 +2067,38 @@ export default function App() {
             />
           )}
           {pane.type === "queue" && (
-            <MemoQueuePane
-              current={queue.current}
-              upcoming={queue.upcoming}
-              loading={queueLoading}
-              context={queueContext}
-              queuedCount={pendingCount}
-              capped={degradedUi && queue.upcoming.length > 0}
-              onRefresh={fetchQueue}
-              onBrowse={queueBrowseCb}
-              onOpenContext={openQueueContext}
-              onPlayUri={queuePlayUriCb}
-            />
+            <>
+              {/* Queue-context skeleton (PR8): while the context name
+                resolves the QueuePane hides its button; this placeholder
+                holds the row so the pane never jumps. */}
+              {queueContext && queueContext.name == null && (
+                <div
+                  className="queue-context-skel skel"
+                  role="status"
+                  aria-label="Loading queue context"
+                />
+              )}
+              <MemoQueuePane
+                current={queue.current}
+                upcoming={queue.upcoming}
+                loading={queueLoading}
+                context={queueContext}
+                queuedCount={pendingCount}
+                capped={degradedUi && queue.upcoming.length > 0}
+                onRefresh={fetchQueue}
+                onBrowse={queueBrowseCb}
+                onOpenContext={openQueueContext}
+                onPlayUri={queuePlayUriCb}
+              />
+            </>
           )}
           {pane.type === "visualizer" && (
-            <MemoVisualizerPane isPlaying={snap.isPlaying} seed={snap.track?.id ?? null} />
+            <MemoVisualizerPane
+              isPlaying={snap.isPlaying}
+              seed={snap.track?.id ?? null}
+              degraded={degradedUi}
+              onRetry={retryPlayerCb}
+            />
           )}
           {pane.type === "browse" && (
             <MemoBrowsePane
@@ -1984,7 +2148,13 @@ export default function App() {
   };
 
   return (
-    <div className="app" data-theme={theme} data-surface={surface} data-corners={corners}>
+    <div
+      className="app"
+      data-theme={theme}
+      data-surface={surface}
+      data-corners={corners}
+      data-stream={streamHidden ? (stream.dimInstead ? "dimmed" : "hidden") : undefined}
+    >
       {!loggedIn ? (
         <div className="gate">
           <div className="pane gate-card">
@@ -2112,6 +2282,42 @@ export default function App() {
           >
             <GridIcon size={15} />
             <span className="dock-label">Preset</span>
+          </button>
+          {/* PR8 scenes + streaming-safe: labeled chips like the PR1 dock
+            pattern. Scene buttons swap geometry + preset per scene;
+            Auto-hide pauses the stage 2.5 s after pausing, Dim ghosts it
+            instead of hiding fully. */}
+          <span className="dock-sep" aria-hidden="true" />
+          <div className="dock-group" role="group" aria-label="Scene">
+            {SCENE_NAMES.map((s) => (
+              <button
+                key={s}
+                className={`chip${scene === s ? " chip-on" : ""}`}
+                onClick={() => switchScene(s)}
+                title={`Switch to the ${SCENE_LABELS[s]} scene`}
+                aria-pressed={scene === s}
+              >
+                {SCENE_LABELS[s]}
+              </button>
+            ))}
+          </div>
+          <span className="dock-sep" aria-hidden="true" />
+          <button
+            className={`chip${stream.hideOnPause ? " chip-on" : ""}`}
+            onClick={toggleStreamHide}
+            title="Streaming-safe: hide the overlay 2.5 seconds after pausing; resume restores it"
+            aria-pressed={stream.hideOnPause}
+          >
+            Auto-hide
+          </button>
+          <button
+            className={`chip${stream.dimInstead ? " chip-on" : ""}`}
+            onClick={toggleStreamDim}
+            title="Dim instead of hiding for streaming-safe auto-hide"
+            aria-pressed={stream.dimInstead}
+            disabled={!stream.hideOnPause}
+          >
+            Dim
           </button>
           <button
             className="tbtn"

@@ -22,6 +22,10 @@ export interface PaneState {
   /** Per-pane opacity, 0.4–1. Persisted in layout v3. */
   opacity: number;
   visible: boolean;
+  /** PR8 collapse: true pins the pane to its mini/compact floor (player →
+   *  the 64 px mini row, other panes → header only). Persisted in v4;
+   *  absent (v3 docs) means expanded. */
+  collapsed?: boolean;
   z: number;
 }
 
@@ -37,6 +41,26 @@ export interface LayoutState {
 export interface LayoutUndoEntry {
   panes: PaneState[];
   preset: string;
+}
+
+/** PR8 scene profiles. One persisted arrangement per scene; the dock
+ *  switches the active scene and the stage swaps to its geometry. */
+export type SceneName = "game" | "focus" | "stream";
+
+/** One scene's arrangement: the preset label plus its pane geometry
+ *  (including each pane's `collapsed` flag). */
+export interface SceneSlot {
+  preset: string;
+  panes: PaneState[];
+}
+
+/** Schema v4 layout doc, stored under the same `snapify-layout-v3` key.
+ *  v3 JSON (`{ version: 3, preset, panes }`) still loads via the v3
+ *  fallback and migrates (see `migrateV3ToV4` in layout.ts). */
+export interface SceneLayout {
+  version: 4;
+  activeScene: SceneName;
+  scenes: Record<SceneName, SceneSlot>;
 }
 
 export interface TrackInfo {

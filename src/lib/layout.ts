@@ -1,4 +1,12 @@
-import type { LayoutState, LayoutUndoEntry, PaneState, PaneType } from "./types";
+import type {
+  LayoutState,
+  LayoutUndoEntry,
+  PaneState,
+  PaneType,
+  SceneLayout,
+  SceneName,
+  SceneSlot,
+} from "./types";
 
 const KEY = "snapify-layout-v3";
 const LEGACY_KEYS = ["snapify-layout-v2", "nebula-layout-v1"];
@@ -25,7 +33,7 @@ export function getPaneMin(type: PaneType): { w: number; h: number } {
 }
 
 function pane(id: string, type: PaneType, x: number, y: number, w: number, h: number, z: number): PaneState {
-  return { id, type, x, y, w, h, opacity: DEFAULT_OPACITY, visible: true, z };
+  return { id, type, x, y, w, h, opacity: DEFAULT_OPACITY, visible: true, collapsed: false, z };
 }
 
 export const PRESETS: Record<string, () => LayoutState> = {
@@ -86,15 +94,20 @@ export function newPaneForType(panes: PaneState[], type: PaneType, id?: string):
   const z = panes.reduce((m, x) => Math.max(m, x.z), 0) + 1;
   const n = panes.length;
   const min = getPaneMin(type);
+  // Browse defaults to 400 px wide so a fresh pane lands above the 380 px
+  // tab-collapse breakpoint (content 398 > 380): the seven tabs stay
+  // clickable until the user narrows the pane into the select fallback.
+  const defaultW = type === "browse" ? 400 : Math.max(min.w, type === "lyrics" ? 420 : 340);
   return {
     id: id ?? `${type}-${Date.now() % 100000}`,
     type,
     x: 40 + n * 32,
     y: 40 + n * 32,
-    w: Math.max(min.w, type === "lyrics" ? 420 : type === "browse" ? 380 : 340),
+    w: defaultW,
     h: Math.max(min.h, type === "lyrics" ? 380 : type === "browse" ? 480 : 230),
     opacity: DEFAULT_OPACITY,
     visible: true,
+    collapsed: false,
     z,
   };
 }
@@ -195,6 +208,7 @@ function coercePane(raw: Partial<PaneState>, z: number): PaneState | null {
     h: Math.max(min.h, Math.round(num(raw.h, 220))),
     opacity: Math.min(1, Math.max(0.4, num(raw.opacity, DEFAULT_OPACITY))),
     visible: raw.visible !== false,
+    collapsed: raw.collapsed === true,
     z: num(raw.z, z),
   };
 }
@@ -235,6 +249,238 @@ export function saveLayout(layout: LayoutState): void {
     localStorage.setItem(KEY, JSON.stringify({ ...layout, version: 3 }));
   } catch {
     // Storage full or blocked. Layout stays in memory.
+  }
+}
+
+/* ---------- PR8 scenes (schema v4), collapse, stream-safe ---------- */
+
+export const SCENE_NAMES: SceneName[] = ["game", "focus", "stream"];
+
+export const SCENE_LABELS: Record<SceneName, string> = {
+  game: "Game",
+  focus: "Focus",
+  stream: "Stream",
+};
+
+/** Fresh-install factory preset per scene. Game stays glance-only
+ *  (player), Focus pairs lyrics with the player, Stream keeps the
+ *  player plus the queue for chat-driven picks. */
+export const SCENE_PRESETS: Record<SceneName, string> = {
+  game: "minimal",
+  focus: "lyrics",
+  stream: "full",
+};
+
+/** Pause-to-hide delay for streaming-safe mode. Fixed at 2.5 s per
+ *  the PR8 spec (on/off + dim are the only settings). */
+export const STREAM_HIDE_DELAY_MS = 2500;
+
+/** Collapsed player floor: the 64 px mini row (art + title + play). */
+export const COLLAPSED_PLAYER_H = 64;
+
+/** Player container breakpoint for the mini row (see the 280 px
+ *  container query in App.css). The App renders the mini row when the
+ *  pane box is at most this plus the 2 px pane border, so the React
+ *  gate and the CSS switch agree with no dead zone. */
+export const MINI_PLAYER_W = 280;
+
+function isSceneName(v: unknown): v is SceneName {
+  return v === "game" || v === "focus" || v === "stream";
+}
+
+function coerceSceneSlot(raw: unknown): SceneSlot | null {
+  if (!raw || typeof raw !== "object") return null;
+  const s = raw as { preset?: unknown; panes?: unknown };
+  if (!Array.isArray(s.panes) || s.panes.length === 0) return null;
+  const panes: PaneState[] = [];
+  s.panes.forEach((p, i) => {
+    const c = coercePane(p as Partial<PaneState>, i + 1);
+    if (c) panes.push(c);
+  });
+  if (panes.length === 0) return null;
+  return {
+    preset: typeof s.preset === "string" && s.preset ? s.preset : "custom",
+    panes,
+  };
+}
+
+/** Fresh per-scene arrangements from the scene factories. Pure. */
+export function defaultScenes(): Record<SceneName, SceneSlot> {
+  const take = (name: SceneName): SceneSlot => {
+    const factory = PRESETS[SCENE_PRESETS[name]] ?? PRESETS.minimal;
+    const l = factory();
+    return { preset: l.preset, panes: clonePanes(l.panes) };
+  };
+  return { game: take("game"), focus: take("focus"), stream: take("stream") };
+}
+
+export function defaultSceneLayout(): SceneLayout {
+  return { version: 4, activeScene: "game", scenes: defaultScenes() };
+}
+
+/** First-run doc for a known canvas: the game scene opens the historic
+ *  first-run stage (lyrics + player from defaultLayoutFor, kept under
+ *  its legacy "full" label) so fresh installs land on the familiar
+ *  arrangement with lyrics visible; focus/stream start from their
+ *  factories and diverge from there. Pure. */
+export function defaultSceneLayoutFor(areaW: number, areaH: number): SceneLayout {
+  const first = defaultLayoutFor(areaW, areaH);
+  const factories = defaultScenes();
+  return {
+    version: 4,
+    activeScene: "game",
+    scenes: {
+      game: { preset: first.preset, panes: clonePanes(first.panes) },
+      focus: factories.focus,
+      stream: factories.stream,
+    },
+  };
+}
+
+/** v3 → v4 migration: the stored v3 arrangement seeds every scene so a
+ *  pre-v4 custom layout survives the upgrade on all three scenes, then
+ *  each scene diverges as the user arranges it. Pure. */
+export function migrateV3ToV4(v3: LayoutState): SceneLayout {
+  const slot = (preset: string, panes: PaneState[]): SceneSlot => ({
+    preset,
+    panes: clonePanes(panes),
+  });
+  return {
+    version: 4,
+    activeScene: "game",
+    scenes: {
+      game: slot(v3.preset, v3.panes),
+      focus: slot(v3.preset, v3.panes),
+      stream: slot(v3.preset, v3.panes),
+    },
+  };
+}
+
+function coerceSceneLayout(parsed: unknown): SceneLayout | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  const d = parsed as Partial<SceneLayout> & Partial<LayoutState>;
+  if (d.version === 4 && d.scenes && typeof d.scenes === "object") {
+    const scenes = d.scenes as Record<string, unknown>;
+    const game = coerceSceneSlot(scenes["game"]);
+    const focus = coerceSceneSlot(scenes["focus"]);
+    const stream = coerceSceneSlot(scenes["stream"]);
+    // A v4 doc with no usable scene is corrupt; fall through to null so
+    // the caller falls back to defaults instead of an empty stage.
+    if (!game && !focus && !stream) return null;
+    const fallback = defaultScenes();
+    return {
+      version: 4,
+      activeScene: isSceneName(d.activeScene) ? d.activeScene : "game",
+      scenes: {
+        game: game ?? fallback.game,
+        focus: focus ?? fallback.focus,
+        stream: stream ?? fallback.stream,
+      },
+    };
+  }
+  // v3 read fallback: any v3-shaped doc migrates in place.
+  const v3 = coerceLayout(parsed);
+  return v3 ? migrateV3ToV4(v3) : null;
+}
+
+/** Load the v4 scene doc, migrating v3/legacy keys in place. A stored v3
+ *  arrangement loads (migrated); only a missing or corrupt entry yields
+ *  null so the caller can seed factory scenes. */
+export function loadSceneLayout(): SceneLayout | null {
+  for (const k of [KEY, ...LEGACY_KEYS]) {
+    try {
+      const raw = localStorage.getItem(k);
+      if (!raw) continue;
+      const doc = coerceSceneLayout(JSON.parse(raw) as unknown);
+      if (doc) return doc;
+    } catch {
+      // Corrupt entry. Try the next key.
+    }
+  }
+  return null;
+}
+
+export function saveSceneLayout(doc: SceneLayout): void {
+  try {
+    localStorage.setItem(KEY, JSON.stringify({ ...doc, version: 4 }));
+  } catch {
+    // Storage full or blocked. Scenes stay in memory.
+  }
+}
+
+/** Read one scene slot out of a doc. Pure. */
+export function getSceneSlot(
+  doc: SceneLayout,
+  name: SceneName,
+): SceneSlot {
+  return doc.scenes[name];
+}
+
+/** Replace the active scene's slot, returning a new doc. Pure: inputs
+ *  are copied, never aliased. */
+export function setActiveSlot(
+  doc: SceneLayout,
+  panes: PaneState[],
+  preset: string,
+): SceneLayout {
+  return {
+    version: 4,
+    activeScene: doc.activeScene,
+    scenes: {
+      ...doc.scenes,
+      [doc.activeScene]: { preset, panes: clonePanes(panes) },
+    },
+  };
+}
+
+/** Flip one pane's collapsed flag by id, copying every other pane
+ *  untouched (geometry, z, visibility all preserved). Pure. */
+export function togglePaneCollapsed(panes: PaneState[], id: string): PaneState[] {
+  return panes.map((x) =>
+    x.id === id ? { ...x, collapsed: !(x.collapsed === true) } : { ...x },
+  );
+}
+
+/** Streaming-safe settings, persisted under their own key so toggling
+ *  them never rewrites scene geometry. Full browser-source export is
+ *  deferred (PR8); see the OBS notes for the window-capture path. */
+export const STREAM_KEY = "snapify-stream";
+
+export interface StreamSettings {
+  /** Pause-delay auto-hide (fixed 2.5 s). Off by default so upgrades
+   *  never surprise a running overlay. */
+  hideOnPause: boolean;
+  /** Dim to a ghost instead of hiding fully. */
+  dimInstead: boolean;
+}
+
+export const DEFAULT_STREAM: StreamSettings = {
+  hideOnPause: false,
+  dimInstead: false,
+};
+
+export function loadStreamSettings(): StreamSettings {
+  try {
+    const raw = localStorage.getItem(STREAM_KEY);
+    if (!raw) return { ...DEFAULT_STREAM };
+    const v = JSON.parse(raw) as Partial<StreamSettings>;
+    return {
+      hideOnPause: v.hideOnPause === true,
+      dimInstead: v.dimInstead === true,
+    };
+  } catch {
+    return { ...DEFAULT_STREAM };
+  }
+}
+
+export function saveStreamSettings(s: StreamSettings): void {
+  try {
+    localStorage.setItem(
+      STREAM_KEY,
+      JSON.stringify({ hideOnPause: s.hideOnPause === true, dimInstead: s.dimInstead === true }),
+    );
+  } catch {
+    // Private mode. Settings last the session.
   }
 }
 

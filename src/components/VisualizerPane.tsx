@@ -1,11 +1,16 @@
 import { useEffect, useRef } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { NoteIcon } from "./icons";
+import { PaneStateBanner } from "./BrowsePane";
 
 interface Props {
   isPlaying: boolean;
   /** Changes per track so the motion signature follows the music. */
   seed: string | null;
+  /** True while the app is in a throttled episode: pins the unified
+   *  banner above the canvas instead of a one-off note. */
+  degraded?: boolean;
+  onRetry?: () => void;
 }
 
 const BARS = 40;
@@ -142,6 +147,9 @@ export default function VisualizerPane(p: Props) {
 
   return (
     <>
+      {p.degraded === true && (
+        <PaneStateBanner tone="throttled" onRetry={p.onRetry} />
+      )}
       <div className="viz-meta" role="status" aria-live="polite" aria-label={p.isPlaying ? "Visualizer live" : "Visualizer paused"}>
         <span>{p.isPlaying ? "Live" : "Paused"}</span>
         <span className="viz-dot" data-on={p.isPlaying ? "1" : "0"} aria-hidden="true" />
