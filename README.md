@@ -1,6 +1,12 @@
 # Snapify Spotify Overlay
 
+<img src="public/snapify-icon.svg" width="64" alt="Snapify icon, a galaxy disc with a snap ring">
+
 Snapify is an always-on-top Spotify overlay for Windows. It shows control and synced lyrics in panes you can drag, snap, and lock, without opening Spotify. It is built with Tauri v2, React 19, and Rust.
+
+![Overlay stage with the slim dock, lyrics, and player](assets/readme/stage.png)
+
+*The stage, dock, lyrics with karaoke highlight, and player. Shots on this page come from the mocked test harness, so names like Fixture Anthem are fixture data, not real listening.*
 
 ## Install and update
 
@@ -8,7 +14,7 @@ Download the latest `.msi` or `-setup.exe` from the releases page and run it.
 
 The app checks for updates itself. To check by hand, open Settings and select Check for updates. When a newer signed release exists, the app downloads it and hands off to the installer. Login, layout, and shortcut data stay untouched.
 
-## Set up Spotify
+## Connect Spotify
 
 You need Spotify Premium for playback control. Free accounts see playback state but cannot control it.
 
@@ -24,34 +30,51 @@ You need Spotify Premium for playback control. Free accounts see playback state 
 
 If login reports that port 3000 is busy, close whatever holds the port and try again. Login listens on that port once per attempt.
 
-## Use the overlay
+## First run
 
-The overlay has three input states.
+1. Log in and pick a preset in Settings: minimal, full, lyrics, or spotlight. Any change you make becomes the custom layout.
+2. Press **Ctrl+Alt+E**, drag panes by their headers, resize from edges and corners, then press **Esc**. Geometry, opacity, preset, theme, and density persist across restarts.
+3. Pick a scene for the moment: **Game**, **Focus**, or **Stream**. Each scene keeps its own arrangement.
+4. Press **Done** (or **Shift+Tab**) to drop into pass-through. The overlay stays visible while every mouse event goes to the game or window below.
 
-- Passive. The window is visible but passes every mouse event to the game or window below. This is the default over fullscreen apps.
-- Interactive. Panes, the dock, dialogs, and toasts take input. Empty pixels still pass through to the game, so the game keeps focus and keeps running. Toggle with Shift+Tab or the tray icon.
-- Editing. Pane headers drag, edges and corners resize, Shift bypasses snap. Toggle with Ctrl+Alt+E. Esc leaves editing first, then settings, then interactive, in that order.
+## Daily use
 
-Hide or show the whole window with Ctrl+Alt+H. The tray icon is the way back when the window is hidden. Left-click the tray icon to toggle interactive mode.
+- Glance, press, resume. Transport, like, and volume live in the player. Collapse any pane to its mini row with the chevron in its header.
+- Sound output hides behind one line. The player shows `Sound plays on: name`. Expand **Devices** only to move sound with **Play here** or pin it with **Keep there**.
+- Lyrics highlight line by line with word-by-word progress. Click a line to seek. Shift the sync with the offset chips when a track drifts.
+- The queue shows what plays next. Select **Next from** to jump to the playing collection in Browse.
+- Streaming: turn on **Auto-hide on pause** in Settings and the stage hides 2.5 seconds after pausing. Resume restores it at once. **Dim instead of hiding** ghosts it for window capture.
 
-### Panes
+## Panes
 
-- Player. Cover art, title, progress with click to seek, transport, volume, shuffle, repeat, device picker, and a heart button that saves to Liked Songs or New Episodes.
+- Player. Cover art, title, progress with click to seek, transport, volume, shuffle, repeat, a collapsible device picker, and a heart button that saves to Liked Songs or New Episodes.
 - Lyrics. Line-synced lyrics with karaoke highlight on the active line, word-by-word progress, click a line to seek, and auto-scroll. Optional per-line translation (Spanish, French, German, Portuguese, Japanese). Lyrics come from LRCLIB and cache locally for offline replay, up to 500 tracks.
 - Queue. The current track and what plays next, with refresh. The playing collection opens in the browse pane.
 - Visualizer. Ambient motion driven by playback state. The Spotify API exposes no audio stream, so this is a motion signature, not spectrum analysis. It freezes on pause and stays off under reduced-motion.
-- Browse. Library shelves, search, artist and album detail, and your profile with top artists, top songs, and recently played.
+- Browse. Library shelves behind one section select, search, artist and album detail, and your profile with top artists, top songs, and recently played.
 
-Four layout presets ship with the app: minimal, full, lyrics, and spotlight. Any change you make becomes the custom layout. Geometry, opacity, preset, theme, and density persist across restarts.
+![Browse pane with the section select](assets/readme/browse.png)
 
-### Shortcuts
+## Settings
 
-Global shortcuts work over games and fullscreen apps. You can remap them in Settings.
+![Settings with scene, preset, and streaming rows](assets/readme/settings.png)
+
+Settings holds theme (dark or light), density, surface (solid or glass), corners, UI scale, launch on login, lyrics options, translation language, scene, preset preview with Apply and Revert, streaming-safe toggles, layout and shortcut resets, the full shortcut list with remapping, and updates.
+
+![Light theme stage](assets/readme/light.png)
+
+## Shortcuts
+
+Global shortcuts work over games and fullscreen apps. You can remap them in Settings. The coach pill under the dock always shows your current interact key.
 
 | Keys | Action |
 | ---- | ------ |
 | Ctrl+Alt+P | Play or pause |
 | Ctrl+Alt+N | Next track |
+| Ctrl+Alt+M | Mute or unmute |
+| Ctrl+Alt+K | Like or unlike track |
+| Ctrl+Alt+B | Seek back 10 seconds |
+| Ctrl+Alt+F | Seek forward 10 seconds |
 | Shift+Tab | Interact or pass through |
 | Ctrl+Alt+E | Edit lock |
 | Ctrl+Alt+H | Show or hide window |
@@ -62,6 +85,22 @@ Focused shortcuts work only when the overlay window has focus.
 | ---- | ------ |
 | Ctrl+Alt+L | Cycle preset |
 | Ctrl+Alt+C | Interact toggle, legacy |
+| Alt+Arrow keys | Move the focused pane |
+| Alt+Shift+Arrow keys | Resize the focused pane |
+| Ctrl+Z in edit mode | Undo layout change |
+
+## Troubleshooting
+
+- **No devices.** Open Spotify on a phone, desktop, or the web player first then refresh the device list in the player. Or select **Play here** to play through the overlay itself.
+- **Stuck in pass-through.** Press your interact key (shown in the coach pill and in Settings) or use the tray icon. The mouse alone cannot bring the overlay back by design.
+- **Stale content with a notice.** Spotify throttled the app. The overlay pins the last good content and retries on its own. Queues pin to the first 10 until recovery.
+- **Free account.** Transport stays disabled with one upgrade line. Everything else reads normally.
+- **Lyrics missing or late.** The track may have no synced lyrics in LRCLIB, or the sync needs an offset nudge from the chips above the lines.
+- **Lost arrangement.** Settings holds a layout reset. Ctrl+Z restores geometry while editing.
+
+## Icons
+
+The mark is a galaxy disc with a snap ring, orbital sound arcs, and one signal-green star. The tray icon is a one-color cut of the same mark that recolors to any theme. Sources live in `icon pack/` with usage notes in `icon pack/README.md`. The 17 in-app glyphs ship in `src/components/icons.tsx` and stay in sync with `icon pack/svg/ui/`.
 
 ## Spotify API limits worth knowing
 
@@ -97,7 +136,7 @@ The MSI target needs the WiX toolset on the build machine. The NSIS target needs
 
 ## Ship an update
 
-1. Set the same version in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`. CI refuses a tag that disagrees with any of them.
+1. Set the same version in `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the `snapify-overlay` entry in `src-tauri/Cargo.lock`. CI refuses a tag that disagrees with any of them.
 2. Commit, then tag and push: `git tag vX.Y.Z; git push origin vX.Y.Z`.
 3. The Publish workflow builds, signs, and opens a draft release. Review the assets, press Publish, and installed apps will offer the update through `latest.json`.
 
@@ -130,6 +169,7 @@ src/
   lib/types.ts       # shared shapes
   components/        # PlayerPane, LyricsPane, QueuePane, VisualizerPane,
                      # BrowsePane, SettingsModal, icons, SpotifyMark
+assets/readme/       # screenshots on this page, captured from the mocked harness
 verify/web/          # Playwright specs, Tauri mocks, and fixtures
 ```
 
