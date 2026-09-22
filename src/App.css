@@ -1743,11 +1743,9 @@ select:focus-visible,
   }
 }
 
-/* Seven library tabs collapse to a labelled select under 380 px. The
-   tab buttons keep their tablist semantics at wider widths: CSS hides
-   one control or the other, never both. */
+/* Single library-section control at all widths: the select drives lib tabs. */
 .browse-tab-select {
-  display: none;
+  display: block;
   max-width: 100%;
   padding: 6px 8px;
   border-radius: var(--r-sm);
@@ -1756,15 +1754,6 @@ select:focus-visible,
   color: var(--txt);
   font-size: 12px;
   font-weight: 600;
-}
-
-@container (max-width: 380px) {
-  .browse-tabs .lib-tab {
-    display: none;
-  }
-  .browse-tabs .browse-tab-select {
-    display: block;
-  }
 }
 
 /* Long lists skip off-screen rendering so a 300 px browse pane scrolls
@@ -1782,14 +1771,25 @@ select:focus-visible,
   margin: 6px 0 2px;
 }
 
-/* Scene switcher group in the dock: same chip language as the PR1 dock. */
-.dock-group {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
 .chip:disabled {
   opacity: 0.38;
   cursor: default;
+}
+
+/* Pressed feedback inside the motion budget: instant scale, no new transition. */
+.tbtn:active, .icon-btn:active, .chip:active {
+  transform: scale(0.96);
+}
+
+.btn:active, .play-disc:active {
+  transform: scale(0.97);
+}
+
+/* Device section toggle reuses panel classes: pointer cursor, faint marker. */
+.device-panel summary {
+  cursor: pointer;
+}
+
+.device-panel summary::marker {
+  color: var(--faint);
 }

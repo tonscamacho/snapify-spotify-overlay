@@ -147,7 +147,7 @@ test("artist detail backfills top songs from search and marks the source", async
   await page.getByTitle("Toggle Browse pane").click();
   const browse = page.locator('section[data-pane="browse"]');
   await expect(browse).toBeVisible();
-  await browse.getByRole("tab", { name: "Artists" }).click();
+  await browse.getByLabel("Library section").selectOption("artists");
   await browse.getByRole("button", { name: "Open Fixture Band" }).click();
   await expect(browse.locator(".detail-title")).toContainText("Fixture Band");
   await expect(browse.getByText("Top songs · from search")).toBeVisible({ timeout: 10000 });
@@ -191,7 +191,7 @@ test("episode detail carries a show-notes link", async ({ page }) => {
   await page.getByTitle("Toggle Browse pane").click();
   const browse = page.locator('section[data-pane="browse"]');
   await expect(browse).toBeVisible();
-  await browse.getByRole("tab", { name: "Episodes" }).click();
+  await browse.getByLabel("Library section").selectOption("episodes");
   await browse.getByRole("button", { name: "Open Verify Episode" }).click();
   await expect(browse.locator(".detail-title")).toContainText("Verify Episode");
   const notes = browse.getByRole("button", { name: "Open show notes in Spotify" });

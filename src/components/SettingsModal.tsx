@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { TRANS_LANGS, type TransLang } from "../lib/translate";
-import type { Density, Surface, Corners } from "../lib/types";
+import type { Density, Surface, Corners, SceneName } from "../lib/types";
 import {
   KEYBIND_LABELS,
   KEYBIND_ORDER,
@@ -10,6 +10,7 @@ import {
   type KeybindMap,
 } from "../lib/keybinds";
 import type { UpdateStatus } from "../lib/updater";
+import { SCENE_NAMES, SCENE_LABELS } from "../lib/layout";
 import { XIcon } from "./icons";
 
 interface Props {
@@ -36,6 +37,13 @@ interface Props {
   onApplyPreset: () => void;
   onRevertPreset: () => void;
   previewing: boolean;
+  scene: SceneName;
+  onScene: (name: SceneName) => void;
+  onCyclePreset: () => void;
+  streamHideOnPause: boolean;
+  streamDimInstead: boolean;
+  onToggleStreamHide: () => void;
+  onToggleStreamDim: () => void;
   onUiScale: (v: number) => void;
   onTheme: (v: "dark" | "light") => void;
   onDensity: (v: Density) => void;
@@ -305,6 +313,51 @@ export default function SettingsModal(p: Props) {
               </button>
             ))}
           </span>
+        </div>
+        {/* Scene + preset-cycle + streaming-safe live here so the dock stays
+          slim. Scene and cycle commit immediately, never as a preview. */}
+        <div className="row">
+          <span>Scene</span>
+          <span className="seg" role="group" aria-label="Scene">
+            {SCENE_NAMES.map((n) => (
+              <button
+                key={n}
+                className={p.scene === n ? "seg-on" : ""}
+                onClick={() => p.onScene(n)}
+                aria-pressed={p.scene === n}
+              >
+                {SCENE_LABELS[n]}
+              </button>
+            ))}
+          </span>
+        </div>
+        <div className="row">
+          <span>Cycle preset ({p.keybinds.cyclePreset})</span>
+          <button className="btn sm" onClick={p.onCyclePreset}>
+            Next preset
+          </button>
+        </div>
+        <div className="row">
+          <span>Auto-hide on pause</span>
+          <input
+            type="checkbox"
+            checked={p.streamHideOnPause}
+            aria-label="Auto-hide on pause"
+            onChange={() => p.onToggleStreamHide()}
+          />
+        </div>
+        <div className="hint">
+          Hides the overlay 2.5 s after pausing; resume restores it.
+        </div>
+        <div className="row">
+          <span>Dim instead of hiding</span>
+          <input
+            type="checkbox"
+            checked={p.streamDimInstead}
+            aria-label="Dim instead of hiding"
+            onChange={() => p.onToggleStreamDim()}
+            disabled={!p.streamHideOnPause}
+          />
         </div>
         {p.previewing && (
           <>

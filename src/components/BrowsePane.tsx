@@ -1462,10 +1462,8 @@ export default function BrowsePane(p: Props) {
         {p.state.view === "library" && (
           <>
             <span className="sep" aria-hidden="true" />
-            {/* Narrow-pane fallback for the seven library tabs: a labelled
-              select under a 380 px container. The tab buttons keep their
-              tablist semantics at wider widths (CSS hides one or the
-              other, never both). */}
+            {/* Single library-section control at all widths: the select
+              drives the same lib tab state directly. */}
             <select
               className="browse-tab-select"
               aria-label="Library section"
@@ -1478,18 +1476,6 @@ export default function BrowsePane(p: Props) {
                 </option>
               ))}
             </select>
-            {LIB_TABS.map((t) => (
-              <button
-                key={t}
-                role="tab"
-                aria-selected={libTab === t}
-                className={`chip lib-tab${libTab === t ? " chip-on" : ""}`}
-                onClick={() => setLibTab(t)}
-                aria-label={`Library: ${t}`}
-              >
-                {libTabLabel(t)}
-              </button>
-            ))}
           </>
         )}
         <button

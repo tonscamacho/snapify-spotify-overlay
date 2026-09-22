@@ -11,7 +11,12 @@ test("cycle preset swaps the visible pane set", async ({ page }) => {
   await expect(page.locator('section[data-pane="player"]')).toBeVisible();
   await expect(page.locator('section[data-pane="queue"]')).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Cycle preset" }).click();
+  // Slim dock: the cycle control lives in Settings and commits immediately.
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog.getByRole("button", { name: "Next preset" }).click();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
 
   await expect(page.locator('section[data-pane="player"]')).toBeVisible();
   await expect(page.locator('section[data-pane="queue"]')).toBeVisible();
@@ -217,7 +222,7 @@ test("dock has labeled distinct controls and wraps at 800px", async ({ page }) =
 
   // Seeded interactive: the interact control shows its action ("Pass").
   let labels = (await dock.locator(".dock-label").allTextContents()).map((s) => s.trim());
-  for (const want of ["Hide", "Edit", "Pass", "Undo", "Settings", "Done", "Preset", "Close"]) {
+  for (const want of ["Hide", "Edit", "Pass", "Undo", "Settings", "Done", "Close"]) {
     expect(labels).toContain(want);
   }
   // Keep the dock up via edit mode, drop to pass-through: the control now
@@ -413,27 +418,37 @@ test("Game/Focus/Stream swap per-scene geometry and persist it", async ({ page }
   await page.goto("/");
   await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
 
-  // Game: player only.
+  // Game: player only. Slim dock: scenes live in the Settings Scene seg.
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const scenes = dialog.getByRole("group", { name: "Scene" });
   await expect(page.locator('section[data-pane="player"]')).toBeVisible();
   await expect(page.locator('section[data-pane="lyrics"]')).toHaveCount(0);
   await expect(page.locator('section[data-pane="queue"]')).toHaveCount(0);
 
   // Focus swaps in its own arrangement.
-  await page.getByRole("button", { name: "Focus", exact: true }).click();
+  await scenes.getByRole("button", { name: "Focus", exact: true }).click();
   await expect(page.locator('section[data-pane="lyrics"]')).toBeVisible();
-  await expect(page.getByRole("button", { name: "Focus", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(scenes.getByRole("button", { name: "Focus", exact: true })).toHaveAttribute("aria-pressed", "true");
   let saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
   expect(saved.version).toBe(4);
   expect(saved.activeScene).toBe("focus");
 
-  // Per-scene divergence: hide the player in Focus only.
+  // Per-scene divergence: hide the player in Focus only. The dock chip sits
+  // behind the modal overlay, so close Settings first.
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
   await page.getByTitle("Toggle Player pane").click();
   await expect(page.locator('section[data-pane="player"]')).toHaveCount(0);
 
   // Game still has its player; back in Focus the player stays hidden.
-  await page.getByRole("button", { name: "Game", exact: true }).click();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await scenes.getByRole("button", { name: "Game", exact: true }).click();
+  await page.keyboard.press("Escape");
   await expect(page.locator('section[data-pane="player"]')).toBeVisible();
-  await page.getByRole("button", { name: "Focus", exact: true }).click();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await scenes.getByRole("button", { name: "Focus", exact: true }).click();
+  await page.keyboard.press("Escape");
   await expect(page.locator('section[data-pane="player"]')).toHaveCount(0);
 
   saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
@@ -471,8 +486,18 @@ test("pause auto-hide hides the stage after 2.5s; resume restores; Dim ghosts", 
   const app = page.locator(".app");
   const player = page.locator('section[data-pane="player"]');
 
-  await page.getByRole("button", { name: "Auto-hide", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Auto-hide", exact: true })).toHaveAttribute("aria-pressed", "true");
+  // Slim dock: Auto-hide/Dim live in Settings now, scoped to the modal.
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog).toBeVisible();
+  const autoHide = dialog.getByLabel("Auto-hide on pause");
+  const dim = dialog.getByLabel("Dim instead of hiding");
+  await expect(dim).toBeDisabled();
+  await autoHide.check();
+  await expect(autoHide).toBeChecked();
+  await expect(dim).toBeEnabled();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
 
   // Seeded playing: pause, wait out the fixed delay, the stage hides.
   await player.getByRole("button", { name: "Pause", exact: true }).click();
@@ -489,7 +514,11 @@ test("pause auto-hide hides the stage after 2.5s; resume restores; Dim ghosts", 
   );
 
   // Dim ghosts instead of hiding.
-  await page.getByRole("button", { name: "Dim", exact: true }).click();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await dim.check();
+  await expect(dim).toBeChecked();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
   await player.getByRole("button", { name: "Pause", exact: true }).click();
   await expect(app).toHaveAttribute("data-stream", "dimmed", { timeout: 8000 });
 });
@@ -532,9 +561,10 @@ test("narrow browse shows a section select; lists skip off-screen paint", async 
   const browse = page.locator('section[data-pane="browse"]');
   await expect(browse).toBeVisible();
 
-  // Under a 380 px container the seven tab buttons hide and the select shows.
+  // Under a 380 px container the library tab buttons are gone and the
+  // select shows instead (the narrow layout seeds the pane visible).
   await expect(browse.getByLabel("Library section")).toBeVisible();
-  await expect(browse.getByRole("tab", { name: "Library: albums" })).toBeHidden();
+  await expect(browse.locator(".lib-tab")).toHaveCount(0);
   // The wider tablist shell (Library/Search/Profile) is still in the tree.
   await expect(browse.locator('[role="tablist"]')).toBeVisible();
 

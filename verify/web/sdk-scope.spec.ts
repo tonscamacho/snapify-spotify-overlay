@@ -46,7 +46,7 @@ test("account_error drops the tier to free without touching login", async ({ pag
 
   await emitSdkError(page, "account_error: Spotify Premium is required for headless playback.");
 
-  await expect(player.getByRole("button", { name: "GET SPOTIFY FREE" })).toBeVisible({
+  await expect(player.getByRole("button", { name: "GET PREMIUM" })).toBeVisible({
     timeout: 10000,
   });
   await expect(page.locator(".gate")).toHaveCount(0);

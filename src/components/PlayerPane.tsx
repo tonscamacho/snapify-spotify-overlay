@@ -90,6 +90,16 @@ export function writeDeviceChoice(c: DeviceChoice): void {
   }
 }
 
+const DEVICE_OPEN_KEY = "snapify-device-open";
+
+function readDeviceOpen(): boolean {
+  try {
+    return localStorage.getItem(DEVICE_OPEN_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
 /** Local per-episode resume store. Spotify keeps server-side progress for
  *  shows, but a local stamp survives account switches and offline gaps, and
  *  costs one tiny JSON blob. Keyed by episode (or chapter) id. */
@@ -158,6 +168,7 @@ export default function PlayerPane(p: Props) {
   // double-click cannot interleave save/remove out of order.
   const [likeBusy, setLikeBusy] = useState(false);
   const [choice, setChoice] = useState<DeviceChoice | null>(() => readDeviceChoice());
+  const [devicesOpen, setDevicesOpen] = useState(() => readDeviceOpen());
   const [selectedId, setSelectedId] = useState<string>("");
   const [resumeMs, setResumeMs] = useState<number | null>(null);
   const s = p.snapshot;
@@ -418,13 +429,13 @@ export default function PlayerPane(p: Props) {
             <span>{formatMs(p.progressMs)}</span>
             <span>-{formatMs(Math.max(0, track.durationMs - p.progressMs))}</span>
           </div>
-          <p className="upgrade">{UPGRADE_TEXT}</p>
+          <p className="upgrade">Playback needs Premium.</p>
           <button
             className="btn sm primary"
             onClick={() => void openUrl("https://www.spotify.com/premium")}
             title={UPGRADE_TEXT}
           >
-            GET SPOTIFY FREE
+            GET PREMIUM
           </button>
         </div>
       ) : (
@@ -622,19 +633,29 @@ export default function PlayerPane(p: Props) {
           <OpenIcon size={14} />
         </button>
       </div>
-      <div
+      <details
         className="device-panel"
         role="group"
         aria-label="Playback device"
         style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}
+        open={devicesOpen}
+        onToggle={(e) => {
+          const open = (e.currentTarget as HTMLDetailsElement).open;
+          setDevicesOpen(open);
+          try {
+            localStorage.setItem(DEVICE_OPEN_KEY, open ? "1" : "0");
+          } catch {
+            // Private mode. Open state lasts the session.
+          }
+        }}
       >
-        <div className="device-where">
+        <summary className="device-where">
           Sound plays on: <strong>{activeName}</strong>
           {choice?.kind === "sdk" && <span className="dim"> (remembered: this overlay)</span>}
           {choice?.kind === "connect" && choice.deviceId && (
             <span className="dim"> (remembered)</span>
           )}
-        </div>
+        </summary>
         <div className="device-actions" style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <button
             className="btn sm primary"
@@ -679,7 +700,7 @@ export default function PlayerPane(p: Props) {
         <div className="dim">
           Play here: sound from this overlay. Keep there: stay on the chosen device.
         </div>
-      </div>
+      </details>
       <div className="player-foot">
         <SpotifyMark variant="icon" size={21} />
       </div>

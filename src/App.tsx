@@ -20,7 +20,6 @@ import {
   EyeIcon,
   EyeOffIcon,
   GearIcon,
-  GridIcon,
   NoteIcon,
   PencilIcon,
   ThroughIcon,
@@ -48,8 +47,6 @@ import {
   COLLAPSED_PLAYER_H,
   MINI_PLAYER_W,
   PRESETS,
-  SCENE_LABELS,
-  SCENE_NAMES,
   STREAM_HIDE_DELAY_MS,
   clampLayoutToArea,
   clampPaneToArea,
@@ -2276,51 +2273,6 @@ export default function App() {
           </button>
           <button
             className="tbtn"
-            onClick={cyclePreset}
-            title={`Cycle preset (${keybinds.cyclePreset})`}
-            aria-label="Cycle preset"
-          >
-            <GridIcon size={15} />
-            <span className="dock-label">Preset</span>
-          </button>
-          {/* PR8 scenes + streaming-safe: labeled chips like the PR1 dock
-            pattern. Scene buttons swap geometry + preset per scene;
-            Auto-hide pauses the stage 2.5 s after pausing, Dim ghosts it
-            instead of hiding fully. */}
-          <span className="dock-sep" aria-hidden="true" />
-          <div className="dock-group" role="group" aria-label="Scene">
-            {SCENE_NAMES.map((s) => (
-              <button
-                key={s}
-                className={`chip${scene === s ? " chip-on" : ""}`}
-                onClick={() => switchScene(s)}
-                title={`Switch to the ${SCENE_LABELS[s]} scene`}
-                aria-pressed={scene === s}
-              >
-                {SCENE_LABELS[s]}
-              </button>
-            ))}
-          </div>
-          <span className="dock-sep" aria-hidden="true" />
-          <button
-            className={`chip${stream.hideOnPause ? " chip-on" : ""}`}
-            onClick={toggleStreamHide}
-            title="Streaming-safe: hide the overlay 2.5 seconds after pausing; resume restores it"
-            aria-pressed={stream.hideOnPause}
-          >
-            Auto-hide
-          </button>
-          <button
-            className={`chip${stream.dimInstead ? " chip-on" : ""}`}
-            onClick={toggleStreamDim}
-            title="Dim instead of hiding for streaming-safe auto-hide"
-            aria-pressed={stream.dimInstead}
-            disabled={!stream.hideOnPause}
-          >
-            Dim
-          </button>
-          <button
-            className="tbtn"
             onClick={() => void getCurrentWindow().close()}
             title="Close"
             aria-label="Close"
@@ -2337,7 +2289,7 @@ export default function App() {
           onClick={dismissCoach}
           aria-label="Dismiss shortcut hint"
         >
-          Shift+Tab to interact · Esc to pass through — click to dismiss
+          {keybinds.toggleInteract} to interact · Esc to pass through — click to dismiss
         </button>
       )}
 
@@ -2413,6 +2365,13 @@ export default function App() {
         onPreset={previewPreset}
         onApplyPreset={confirmPresetPreview}
         onRevertPreset={cancelPresetPreview}
+        scene={scene}
+        onScene={switchScene}
+        onCyclePreset={cyclePreset}
+        streamHideOnPause={stream.hideOnPause}
+        streamDimInstead={stream.dimInstead}
+        onToggleStreamHide={toggleStreamHide}
+        onToggleStreamDim={toggleStreamDim}
         onUiScale={setUiScale}
         onTheme={(v) => {
           setTheme(v);
