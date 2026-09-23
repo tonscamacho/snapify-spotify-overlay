@@ -50,6 +50,37 @@ fn toggle_visibility_cmd(app: tauri::AppHandle) {
     toggle_visibility(&app);
 }
 
+/// Re-shows a hidden window after login. Login never flips visibility
+/// itself, so a window hidden before auth (dock Hide, tray, hotkey,
+/// `--minimized`) would otherwise stay hidden with the frontend still
+/// believing `visible === true`.
+#[tauri::command]
+fn show_window(app: tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        // Deliberately no set_focus: showing must not steal the game.
+        let _ = app.emit("overlay-visibility-changed", true);
+    }
+}
+
+/// Login gate window behavior. The gate lives inside the same fullscreen
+/// transparent window, so while logged out the window drops always-on-top
+/// (it must not pin itself over the game) and takes focus for the login
+/// click. Once logged in, always-on-top returns and focus stays with
+/// whatever the user was doing.
+#[tauri::command]
+fn set_login_window(app: tauri::AppHandle, logged_out: bool) {
+    if let Some(win) = app.get_webview_window("main") {
+        if logged_out {
+            let _ = win.set_always_on_top(false);
+            let _ = win.show();
+            let _ = win.set_focus();
+        } else {
+            let _ = win.set_always_on_top(true);
+        }
+    }
+}
+
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let visibility =
         MenuItem::with_id(app, "toggle-visibility", "Show / Hide window", true, None::<&str>)?;
@@ -295,6 +326,8 @@ pub fn run() {
             overlay::set_overlay_mode,
             overlay::set_overlay_regions,
             toggle_visibility_cmd,
+            show_window,
+            set_login_window,
             keybinds::get_keybinds,
             keybinds::keybind_startup_errors,
             keybinds::set_keybind,

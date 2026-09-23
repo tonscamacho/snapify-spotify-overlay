@@ -593,6 +593,17 @@ export default function App() {
     },
     [flashErr, noteDegraded],
   );
+  // The login gate shares the main window: while logged out the window
+  // drops always-on-top so it never pins itself over the game, and a
+  // window hidden before auth comes back once the session lands. Called
+  // only from auth resolutions (boot, auth-changed), never from mode
+  // toggles, so edit/interact flips cannot re-show a hidden window.
+  const syncLoginWindow = useCallback((loggedInNow: boolean) => {
+    void invoke("set_login_window", { loggedOut: !loggedInNow }).catch(() => {});
+    if (loggedInNow) {
+      void invoke("show_window").catch(() => {});
+    }
+  }, []);
 
   const refreshAuth = useCallback(async () => {
     try {
@@ -747,6 +758,7 @@ export default function App() {
       .catch(() => {});
     getVersion().then(setAppVersion).catch(() => {});
     void refreshAuth().then((ok) => {
+      syncLoginWindow(ok);
       if (ok) {
         void fetchPlayer().then((alive) => {
           if (!alive) return;
@@ -757,6 +769,7 @@ export default function App() {
     });
     const off1 = listen("auth-changed", () => {
       void refreshAuth().then((ok) => {
+        syncLoginWindow(ok);
         if (ok) {
           void fetchPlayer().then((alive) => {
             if (!alive) return;
@@ -774,7 +787,7 @@ export default function App() {
       void off1.then((f) => f());
       void off2.then((f) => f());
     };
-  }, [refreshAuth, fetchPlayer, fetchDevices, fetchQueue, flashErr, persist]);
+  }, [refreshAuth, fetchPlayer, fetchDevices, fetchQueue, flashErr, persist, syncLoginWindow]);
 
   // Player poll while logged in: 5 s playing, 20 s paused, 30 s with no
   // device. Skipped while hidden; visibilitychange refetches on return.
@@ -1876,6 +1889,10 @@ export default function App() {
       }
       return panes;
     });
+    // The OS click-through shape lags layout by up to 120 ms by design, so
+    // a fast drag outruns it and the leading edge clips until release.
+    // Nudging the scheduler here keeps the shape following the gesture.
+    scheduleRegionReport();
   };
 
   const onStageUp = () => {
@@ -1887,6 +1904,9 @@ export default function App() {
         persist(l, preset);
         return l;
       });
+      // Flush one immediate report so the released pane never sits inside
+      // a stale shape waiting out the debounce.
+      void reportOverlayRegions();
     }
   };
 

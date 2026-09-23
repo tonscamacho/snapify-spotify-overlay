@@ -146,6 +146,7 @@ select:focus-visible,
   display: flex;
   flex-direction: column;
   background: var(--surface);
+  background-clip: padding-box;
   border: 1px solid var(--stroke);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow);
@@ -782,6 +783,7 @@ select:focus-visible,
 .rz {
   position: absolute;
   z-index: 5;
+  background: transparent;
 }
 
 .rz-e,
@@ -832,7 +834,7 @@ select:focus-visible,
 .rz::after {
   content: "";
   position: absolute;
-  inset: -10px;
+  inset: 0;
 }
 
 /* Keyboard-reached handles must show focus: the generic :focus-visible
@@ -881,6 +883,7 @@ select:focus-visible,
   max-width: min(94vw, 760px);
   padding: 6px 10px;
   background: var(--surface);
+  background-clip: padding-box;
   border: 1px solid var(--stroke);
   border-radius: 999px;
   box-shadow: var(--shadow-sm);
