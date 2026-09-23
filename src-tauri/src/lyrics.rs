@@ -576,6 +576,43 @@ mod tests {
     }
 }
 
+#[derive(Clone, serde::Serialize)]
+pub struct LyricsCacheSize {
+    pub entries: usize,
+    pub bytes: u64,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct ClearLyricsCacheResult {
+    pub cleared: usize,
+}
+
+#[tauri::command]
+pub fn lyrics_cache_size(app: AppHandle) -> Result<LyricsCacheSize, String> {
+    let map = read_cache(&app);
+    let entries = map.len();
+    let bytes = cache_path(&app)
+        .and_then(|p| std::fs::metadata(&p).ok())
+        .map(|m| m.len())
+        .unwrap_or(0);
+    Ok(LyricsCacheSize { entries, bytes })
+}
+
+#[tauri::command]
+pub fn clear_lyrics_cache(app: AppHandle) -> Result<ClearLyricsCacheResult, String> {
+    let map = read_cache(&app);
+    let cleared = map.len();
+    if let Some(path) = cache_path(&app) {
+        let empty: HashMap<String, CacheEntry> = HashMap::new();
+        if let Ok(text) = serde_json::to_string(&empty) {
+            // Same temp-file plus rename scheme as `write_cache`; readers
+            // never see a half-written store even on kill mid-clear.
+            let _ = atomic_write_json(&path, &text);
+        }
+    }
+    Ok(ClearLyricsCacheResult { cleared })
+}
+
 #[tauri::command]
 pub async fn get_lyrics(
     app: AppHandle,

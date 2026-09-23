@@ -239,6 +239,59 @@ test("track change replaces translations, leaving no stale lines", async ({
   await expect(pane2.locator(".trans", { hasText: "Halfway home" })).toHaveCount(0);
 });
 
+test("lyrics text size multiplier scales lines from the stored preference", async ({
+  page,
+}) => {
+  await stubTauri(page);
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem("snapify-lyric-scale", "1.3");
+    } catch {
+      // Ignore storage failures in the test browser.
+    }
+  });
+  await page.goto("/");
+  const pane = page.locator('section[data-pane="lyrics"]');
+  const container = pane.locator(".lyrics");
+  await expect(container).toBeVisible();
+  const sizes = await container.evaluate((el) => {
+    const line = el.querySelector("button.line");
+    const num = (v: string) => Number(v.replace("px", ""));
+    return {
+      container: num(getComputedStyle(el).fontSize),
+      line: line ? num(getComputedStyle(line).fontSize) : 0,
+    };
+  });
+  expect(sizes.container).toBeCloseTo(16 * 1.3, 1);
+  expect(sizes.line).toBeCloseTo(14 * 1.3, 1);
+});
+
+test("dyslexia mode widens lyric lines from the stored preference", async ({
+  page,
+}) => {
+  await stubTauri(page);
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem("snapify-dyslexia", "1");
+    } catch {
+      // Ignore storage failures in the test browser.
+    }
+  });
+  await page.goto("/");
+  const pane = page.locator('section[data-pane="lyrics"]');
+  await expect(pane.locator(".lyrics.lyrics-dyslexia")).toBeVisible();
+  const line = pane.locator("button.line:not(.on)").first();
+  const style = await line.evaluate((el) => {
+    const c = getComputedStyle(el);
+    return { weight: c.fontWeight, spacing: c.letterSpacing, height: c.lineHeight, font: c.fontSize };
+  });
+  expect(style.weight).toBe("500");
+  expect(style.spacing).not.toBe("normal");
+  const ratio =
+    Number(style.height.replace("px", "")) / Number(style.font.replace("px", ""));
+  expect(ratio).toBeCloseTo(2, 1);
+});
+
 test("kana lines offer romaji tagged as latin Japanese", async ({ page }) => {
   const cues = [
     { t: 60000, text: "early line" },

@@ -10,6 +10,8 @@ interface Props {
   clickToSeek: boolean;
   wordKaraoke: boolean;
   transLang: TransLang;
+  lyricScale: number;
+  dyslexia: boolean;
   onSeek: (ms: number) => void;
   onRetry: () => void;
 }
@@ -262,7 +264,10 @@ export default function LyricsPane(p: Props) {
           </button>
         )}
       </div>
-      <div className="lyrics">
+      <div
+        className={p.dyslexia ? "lyrics lyrics-dyslexia" : "lyrics"}
+        style={{ fontSize: `${p.lyricScale}em` }}
+      >
         {cues.slice(lo, hi).map((c, k) => {
           const i = lo + k;
           const isActive = i === active;

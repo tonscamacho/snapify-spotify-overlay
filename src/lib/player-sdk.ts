@@ -122,10 +122,6 @@ export async function ensurePlayer(initialVolume?: number): Promise<string | nul
   }
 }
 
-export function getSdkDeviceId(): string | null {
-  return deviceId;
-}
-
 /** Mirror the volume slider into the local player gain. The Web API volume
  *  call moves server-side state; this moves the air in the room. Safe to
  *  call any time: a missing player is a silent no-op. */

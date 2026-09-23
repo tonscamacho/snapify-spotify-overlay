@@ -36,3 +36,6 @@ verify/web/playwright-report/
 *.njsproj
 *.sln
 *.sw?
+
+# Agent skills lockfile, machine-generated
+skills-lock.json

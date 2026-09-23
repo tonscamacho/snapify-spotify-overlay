@@ -9,7 +9,6 @@ import type {
 } from "./types";
 
 const KEY = "snapify-layout-v3";
-const LEGACY_KEYS = ["snapify-layout-v2", "nebula-layout-v1"];
 export const SNAP_EDGE = 8;
 export const SNAP_ZONE = 16;
 export const DEFAULT_OPACITY = 0.92;
@@ -231,17 +230,13 @@ function coerceLayout(parsed: unknown): LayoutState | null {
 }
 
 export function loadLayout(): LayoutState | null {
-  for (const k of [KEY, ...LEGACY_KEYS]) {
-    try {
-      const raw = localStorage.getItem(k);
-      if (!raw) continue;
-      const layout = coerceLayout(JSON.parse(raw) as unknown);
-      if (layout) return layout;
-    } catch {
-      // Corrupt entry. Try the next key.
-    }
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return null;
+    return coerceLayout(JSON.parse(raw) as unknown);
+  } catch {
+    return null;
   }
-  return null;
 }
 
 export function saveLayout(layout: LayoutState): void {
@@ -383,21 +378,17 @@ function coerceSceneLayout(parsed: unknown): SceneLayout | null {
   return v3 ? migrateV3ToV4(v3) : null;
 }
 
-/** Load the v4 scene doc, migrating v3/legacy keys in place. A stored v3
+/** Load the v4 scene doc, migrating a stored v3 arrangement in place. A stored v3
  *  arrangement loads (migrated); only a missing or corrupt entry yields
  *  null so the caller can seed factory scenes. */
 export function loadSceneLayout(): SceneLayout | null {
-  for (const k of [KEY, ...LEGACY_KEYS]) {
-    try {
-      const raw = localStorage.getItem(k);
-      if (!raw) continue;
-      const doc = coerceSceneLayout(JSON.parse(raw) as unknown);
-      if (doc) return doc;
-    } catch {
-      // Corrupt entry. Try the next key.
-    }
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return null;
+    return coerceSceneLayout(JSON.parse(raw) as unknown);
+  } catch {
+    return null;
   }
-  return null;
 }
 
 export function saveSceneLayout(doc: SceneLayout): void {

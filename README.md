@@ -45,6 +45,16 @@ If login reports that port 3000 is busy, close whatever holds the port and try a
 - The queue shows what plays next. Select **Next from** to jump to the playing collection in Browse.
 - Streaming: turn on **Auto-hide on pause** in Settings and the stage hides 2.5 seconds after pausing. Resume restores it at once. **Dim instead of hiding** ghosts it for window capture.
 
+### Stream to Discord without sharing your desktop
+
+Discord window share captures one window only, so the separate Snapify overlay window never appears in it. Screen share shows the overlay but exposes the whole desktop. Route the overlay through OBS instead:
+
+1. Install OBS Studio.
+2. Build one scene with Game Capture for the game plus a Window Capture of the Snapify window layered on top.
+3. Stream from OBS directly, or start OBS Virtual Camera in OBS and select it as the camera in Discord.
+
+Leave **Auto-hide on pause** OFF in Settings for this route, or the stage hides 2.5 seconds after pausing and viewers lose the overlay. Transparency rendering of click-through regions in OBS Window Capture is unverified — try before going live.
+
 ## Panes
 
 - Player. Cover art, title, progress with click to seek, transport, volume, shuffle, repeat, a collapsible device picker, and a heart button that saves to Liked Songs or New Episodes.

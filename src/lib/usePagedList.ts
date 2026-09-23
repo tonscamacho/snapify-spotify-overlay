@@ -12,7 +12,7 @@ export interface Page<T, C> {
  *  One IntersectionObserver sentinel per list; renders only fire on
  *  threshold crossings and page arrivals, never per scroll pixel. */
 /** Single routing point: all throttle detection goes through spotify.ts. */
-export function isThrottledError(m: unknown): boolean {
+function isThrottledError(m: unknown): boolean {
   return isThrottleErrorTyped(m);
 }
 

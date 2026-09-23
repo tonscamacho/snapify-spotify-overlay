@@ -325,6 +325,10 @@ export const api = {
     invoke<
       Array<{ method: string; path: string; result: string; retry_after: number | null }>
     >("request_log_recent", { limit }),
+  lyricsCacheSize: () =>
+    invoke<{ entries: number; bytes: number }>("lyrics_cache_size"),
+  clearLyricsCache: () =>
+    invoke<{ cleared: number }>("clear_lyrics_cache"),
   lyrics: (p: {
     track_id: string;
     track_name: string;

@@ -288,6 +288,8 @@ pub fn run() {
             spotify::request_log_counts,
             spotify::request_log_recent,
             lyrics::get_lyrics,
+            lyrics::lyrics_cache_size,
+            lyrics::clear_lyrics_cache,
             system::autostart_state,
             system::set_autostart,
             overlay::set_overlay_mode,

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { TRANS_LANGS, type TransLang } from "../lib/translate";
+import { api } from "../lib/spotify";
 import type { Density, Surface, Corners, SceneName } from "../lib/types";
 import {
   KEYBIND_LABELS,
@@ -29,6 +30,8 @@ interface Props {
   clickToSeek: boolean;
   wordKaraoke: boolean;
   transLang: TransLang;
+  lyricScale: number;
+  dyslexia: boolean;
   keybinds: KeybindMap;
   startupErrors?: string[] | null;
   appVersion: string;
@@ -56,6 +59,8 @@ interface Props {
   onClickToSeek: (v: boolean) => void;
   onWordKaraoke: (v: boolean) => void;
   onTransLang: (v: TransLang) => void;
+  onLyricScale: (v: number) => void;
+  onDyslexia: (v: boolean) => void;
   onResetLayout: () => void;
   onKeybind: (action: KeybindAction, accelerator: string) => Promise<void>;
   onResetKeybinds: () => void;
@@ -63,6 +68,7 @@ interface Props {
   onDownloadUpdate: () => void;
   onRestartUpdate: () => void;
   onLogout: () => void;
+  onToast?: (kind: "success" | "info" | "error", text: string) => void;
   onClose: () => void;
 }
 
@@ -183,6 +189,69 @@ function updateHint(u: UpdateStatus): string {
 
 export default function SettingsModal(p: Props) {
   const modalRef = useRef<HTMLDivElement>(null);
+  const [usage, setUsage] = useState<{
+    total: number;
+    ok: number;
+    rateLimited: number;
+    quotaExceeded: number;
+  } | null>(null);
+  const [cooldownNote, setCooldownNote] = useState<string | null>(null);
+  const [lyricsCache, setLyricsCache] = useState<{ entries: number; bytes: number } | null>(
+    null,
+  );
+  const [clearingLyrics, setClearingLyrics] = useState(false);
+  // The modal mounts transiently, so one fetch on open covers its lifetime.
+  useEffect(() => {
+    if (!p.open) return;
+    let cancelled = false;
+    void api
+      .requestLogCounts()
+      .then((raw) => {
+        if (cancelled) return;
+        const c = raw as Partial<Record<"total" | "ok" | "rate_limited" | "quota_exceeded", unknown>>;
+        if (
+          typeof c.total !== "number" ||
+          typeof c.ok !== "number" ||
+          typeof c.rate_limited !== "number" ||
+          typeof c.quota_exceeded !== "number"
+        )
+          return;
+        setUsage({ total: c.total, ok: c.ok, rateLimited: c.rate_limited, quotaExceeded: c.quota_exceeded });
+      })
+      .catch(() => {});
+    void api
+      .requestLogRecent(50)
+      .then((raw) => {
+        if (cancelled) return;
+        const entries = raw as Array<{
+          method?: unknown;
+          path?: unknown;
+          result?: unknown;
+          retry_after?: unknown;
+        }>;
+        if (!Array.isArray(entries)) return;
+        const hit = entries.find((e) => e.result === "429-rate" || e.result === "429-quota");
+        if (!hit || typeof hit.method !== "string" || typeof hit.path !== "string") return;
+        const wait =
+          typeof hit.retry_after === "number" && Number.isFinite(hit.retry_after)
+            ? ` waited ${hit.retry_after} s before retrying`
+            : "";
+        setCooldownNote(`Most recent cooldown: ${hit.method} ${hit.path}${wait}, cooling down rather than failing.`);
+      })
+      .catch(() => {});
+    void api
+      .lyricsCacheSize()
+      .then((raw) => {
+        if (cancelled) return;
+        const c = raw as Partial<Record<"entries" | "bytes", unknown>>;
+        if (typeof c.entries !== "number" || typeof c.bytes !== "number") return;
+        setLyricsCache({ entries: c.entries, bytes: c.bytes });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [p.open]);
   useEffect(() => {
     if (!p.open) return;
     modalRef.current?.focus();
@@ -211,6 +280,28 @@ export default function SettingsModal(p: Props) {
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [p.open, p.onClose]);
+  // Confirm-free clear: no dialog, then refresh the size line in place
+  // and toast the count so the press has a visible result.
+  const onClearLyrics = () => {
+    if (clearingLyrics) return;
+    setClearingLyrics(true);
+    void api
+      .clearLyricsCache()
+      .then((res) => {
+        const n = typeof res.cleared === "number" ? res.cleared : 0;
+        p.onToast?.("success", n === 1 ? "Cleared 1 cached track" : `Cleared ${n} cached tracks`);
+        return api.lyricsCacheSize();
+      })
+      .then((raw) => {
+        const c = raw as Partial<Record<"entries" | "bytes", unknown>>;
+        if (typeof c.entries !== "number" || typeof c.bytes !== "number") return;
+        setLyricsCache({ entries: c.entries, bytes: c.bytes });
+      })
+      .catch(() => {})
+      .finally(() => {
+        setClearingLyrics(false);
+      });
+  };
   if (!p.open) return null;
   return (
     <div className="modal-back" onClick={p.onClose}>
@@ -238,6 +329,33 @@ export default function SettingsModal(p: Props) {
           ) : (
             <span className="dim">Logged out</span>
           )}
+        </div>
+        <div className="row">
+          <span>Spotify usage</span>
+          <span className="dim">
+            {usage === null
+              ? "…"
+              : usage.total === 0
+                ? "No requests recorded yet."
+                : `${usage.total} total · ${usage.ok} ok · ${usage.rateLimited} on cooldown · ${usage.quotaExceeded} quota cooldown`}
+          </span>
+        </div>
+        {cooldownNote !== null && usage !== null && usage.total > 0 && (
+          <div className="hint">{cooldownNote}</div>
+        )}
+        <div className="row">
+          <span className="dim">
+            {lyricsCache === null
+              ? "Lyrics cache: …"
+              : `Lyrics cache: ${lyricsCache.entries} tracks, ${Math.round(lyricsCache.bytes / 1024)} KB`}
+          </span>
+          <button
+            className="btn sm"
+            onClick={onClearLyrics}
+            disabled={clearingLyrics || lyricsCache === null || lyricsCache.entries === 0}
+          >
+            {clearingLyrics ? "Clearing…" : "Clear"}
+          </button>
         </div>
         <div className="row">
           <span>Theme</span>
@@ -392,6 +510,18 @@ export default function SettingsModal(p: Props) {
           />
         </div>
         <div className="row">
+          <span>Lyrics text size</span>
+          <input
+            type="range"
+            min={85}
+            max={130}
+            value={Math.round(p.lyricScale * 100)}
+            aria-label="Lyrics text size"
+            aria-valuetext={`${Math.round(p.lyricScale * 100)} percent`}
+            onChange={(e) => p.onLyricScale(Number(e.target.value) / 100)}
+          />
+        </div>
+        <div className="row">
           <span>Launch on login</span>
           <input
             type="checkbox"
@@ -456,6 +586,18 @@ export default function SettingsModal(p: Props) {
             aria-label="Word-by-word karaoke"
             onChange={(e) => p.onWordKaraoke(e.target.checked)}
           />
+        </div>
+        <div className="row">
+          <span>Dyslexia-friendly lyrics</span>
+          <input
+            type="checkbox"
+            checked={p.dyslexia}
+            aria-label="Dyslexia-friendly lyrics"
+            onChange={(e) => p.onDyslexia(e.target.checked)}
+          />
+        </div>
+        <div className="hint">
+          Widens spacing and weight on lyric lines for easier reading.
         </div>
         <div className="row">
           <span>Lyric translation</span>

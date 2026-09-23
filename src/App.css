@@ -562,7 +562,8 @@ select:focus-visible,
   cursor: pointer;
   padding: 6px 10px;
   border-radius: 6px;
-  font-size: 14px;
+  /* em so the lyrics-container size multiplier reaches each line. */
+  font-size: 0.875em;
   line-height: 1.65;
   color: var(--faint);
   transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
@@ -593,7 +594,8 @@ select:focus-visible,
 }
 
 .trans {
-  font-size: 12.5px;
+  /* em so the lyrics-container size multiplier reaches translations. */
+  font-size: 0.78125em;
   font-weight: 400;
   line-height: 1.5;
   color: var(--dim);
@@ -605,6 +607,13 @@ select:focus-visible,
   font-size: 13.5px;
   line-height: 1.75;
   color: var(--dim);
+}
+
+/* Dyslexia-friendly lyrics: wider rhythm plus heavier lines, no webfont. */
+.lyrics-dyslexia .line {
+  line-height: 2;
+  letter-spacing: 0.04em;
+  font-weight: 500;
 }
 
 /* ---------- visualizer ---------- */

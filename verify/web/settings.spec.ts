@@ -125,3 +125,103 @@ test("like chord removes the saved track and toasts", async ({ page }) => {
   expect(calls[calls.length - 1].uris).toEqual([TRACK_URI]);
   await expect(page.locator(".toasts").getByText("Removed from Liked Songs")).toBeVisible();
 });
+
+test("lyrics display rows render with current values", async ({ page }) => {
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog).toBeVisible();
+  const size = dialog.getByRole("slider", { name: "Lyrics text size" });
+  await expect(size).toBeVisible();
+  await expect(size).toHaveValue("100");
+  await expect(
+    dialog.getByRole("checkbox", { name: "Dyslexia-friendly lyrics" }),
+  ).toBeVisible();
+});
+
+test("lyrics display prefs persist across reload", async ({ page }) => {
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog).toBeVisible();
+
+  const size = dialog.getByRole("slider", { name: "Lyrics text size" });
+  await size.evaluate((el: HTMLInputElement) => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    setter?.call(el, "115");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await dialog.getByRole("checkbox", { name: "Dyslexia-friendly lyrics" }).check();
+
+  expect(await page.evaluate(() => localStorage.getItem("snapify-lyric-scale"))).toBe("1.15");
+  expect(await page.evaluate(() => localStorage.getItem("snapify-dyslexia"))).toBe("1");
+
+  await page.reload();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog2 = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog2.getByRole("slider", { name: "Lyrics text size" })).toHaveValue("115");
+  await expect(
+    dialog2.getByRole("checkbox", { name: "Dyslexia-friendly lyrics" }),
+  ).toBeChecked();
+  await expect(
+    page.locator('section[data-pane="lyrics"] .lyrics.lyrics-dyslexia'),
+  ).toBeVisible();
+});
+
+test("spotify usage row shows request counts from the log", async ({ page }) => {
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      __TAURI_INTERNALS__?: {
+        invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+      };
+      __INVOKED__?: Array<{ cmd: string; args: Record<string, unknown> }>;
+    };
+    const internals = w.__TAURI_INTERNALS__;
+    if (!internals) return;
+    const orig = internals.invoke.bind(internals);
+    internals.invoke = (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "request_log_counts" || cmd === "request_log_recent") {
+        w.__INVOKED__?.push({ cmd, args: args ?? {} });
+        if (cmd === "request_log_counts") {
+          return Promise.resolve({
+            total: 14,
+            ok: 12,
+            rate_limited: 1,
+            quota_exceeded: 1,
+            unauthorized: 0,
+            other: 0,
+          });
+        }
+        return Promise.resolve([
+          { method: "GET", path: "/me/player", result: "429-rate", retry_after: 3 },
+        ]);
+      }
+      return orig(cmd, args);
+    };
+  });
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Spotify usage")).toBeVisible();
+  await expect(
+    dialog.getByText("14 total · 12 ok · 1 on cooldown · 1 quota cooldown"),
+  ).toBeVisible();
+  await expect(dialog.getByText(/cooling down rather than failing/)).toBeVisible();
+  await expect(dialog.getByText(/GET \/me\/player/)).toBeVisible();
+  await expect
+    .poll(async () => (await commandsNamed(page, "request_log_counts")).length, { timeout: 10000 })
+    .toBeGreaterThan(0);
+});
+
+test("lyrics cache row shows size and clears through", async ({ page }) => {
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Lyrics cache: 3 tracks, 4 KB")).toBeVisible();
+  await expect
+    .poll(async () => (await commandsNamed(page, "lyrics_cache_size")).length, { timeout: 10000 })
+    .toBeGreaterThan(0);
+  await dialog.getByRole("button", { name: "Clear", exact: true }).click();
+  await expect
+    .poll(async () => (await commandsNamed(page, "clear_lyrics_cache")).length, { timeout: 10000 })
+    .toBeGreaterThan(0);
+  await expect(dialog.getByText("Lyrics cache: 0 tracks, 0 KB")).toBeVisible();
+});

@@ -176,7 +176,6 @@ export default function App() {
   const [lyrics, setLyrics] = useState<LyricsState>({ kind: "idle" });
   const [browse, setBrowse] = useState<BrowseState>(initialBrowse);
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
 
   const [layout, setLayout] = useState<PaneState[]>([]);
   const [preset, setPreset] = useState("full");
@@ -243,6 +242,23 @@ export default function App() {
         : "off";
     } catch {
       return "off";
+    }
+  });
+  const [lyricScale, setLyricScale] = useState(() => {
+    try {
+      const raw = localStorage.getItem("snapify-lyric-scale");
+      if (raw === null || raw.trim() === "") return 1.0;
+      const v = Number(raw);
+      return Number.isFinite(v) ? Math.min(1.3, Math.max(0.85, v)) : 1.0;
+    } catch {
+      return 1.0;
+    }
+  });
+  const [dyslexia, setDyslexia] = useState(() => {
+    try {
+      return localStorage.getItem("snapify-dyslexia") === "1";
+    } catch {
+      return false;
     }
   });
   const [theme, setTheme] = useState<"dark" | "light">(() => {
@@ -499,7 +515,8 @@ export default function App() {
 
   const pushToast = useCallback((kind: "success" | "info" | "error", text: string) => {
     const id = Date.now() + Math.random();
-    setToasts((t) => [...t.slice(-2), { id, kind, text }]);
+    // Render shows only the newest note, so replacing keeps an older timer from clearing the fresh one.
+    setToasts([{ id, kind, text }]);
     window.setTimeout(() => {
       setToasts((t) => t.filter((x) => x.id !== id));
     }, 6500);
@@ -533,9 +550,8 @@ export default function App() {
 
   const flashErr = useCallback(
     (m: string) => {
-      setErr(m);
+      // The toast is the single note, so no mirror state can drift or render twice.
       pushToast("error", m);
-      window.setTimeout(() => setErr((e) => (e === m ? null : e)), 6000);
     },
     [pushToast],
   );
@@ -2059,6 +2075,8 @@ export default function App() {
               clickToSeek={clickToSeek}
               wordKaraoke={wordKaraoke}
               transLang={transLang}
+              lyricScale={lyricScale}
+              dyslexia={dyslexia}
               onSeek={seekCb}
               onRetry={lyricsRetryCb}
             />
@@ -2312,7 +2330,6 @@ export default function App() {
                 className="btn sm"
                 onClick={() => {
                   dismissToast(t.id);
-                  setErr(null);
                   void logout().finally(() => void login());
                 }}
               >
@@ -2329,23 +2346,6 @@ export default function App() {
         ))}
       </div>
 
-      {err && !toasts.length && (
-        <div className="toast toast-error">
-          <span>{err}</span>
-          {/missing permission|new permissions/i.test(err) && (
-            <button
-              className="btn sm"
-              onClick={() => {
-                setErr(null);
-                void logout().finally(() => void login());
-              }}
-            >
-              Reconnect
-            </button>
-          )}
-        </div>
-      )}
-
       {(settingsOpen || settingsClosing) && (
           <SettingsModal
             open={settingsOpen || settingsClosing}
@@ -2361,6 +2361,8 @@ export default function App() {
         clickToSeek={clickToSeek}
         wordKaraoke={wordKaraoke}
         transLang={transLang}
+        lyricScale={lyricScale}
+        dyslexia={dyslexia}
         previewing={previewing}
         onPreset={previewPreset}
         onApplyPreset={confirmPresetPreview}
@@ -2373,6 +2375,23 @@ export default function App() {
         onToggleStreamHide={toggleStreamHide}
         onToggleStreamDim={toggleStreamDim}
         onUiScale={setUiScale}
+        onLyricScale={(v) => {
+          const next = Math.min(1.3, Math.max(0.85, v));
+          setLyricScale(next);
+          try {
+            localStorage.setItem("snapify-lyric-scale", String(next));
+          } catch {
+            // Private mode. Choice lasts the session.
+          }
+        }}
+        onDyslexia={(v) => {
+          setDyslexia(v);
+          try {
+            localStorage.setItem("snapify-dyslexia", v ? "1" : "0");
+          } catch {
+            // Private mode. Choice lasts the session.
+          }
+        }}
         onTheme={(v) => {
           setTheme(v);
           try {
@@ -2453,6 +2472,7 @@ export default function App() {
         onDownloadUpdate={() => void downloadUpdate()}
         onRestartUpdate={restartUpdate}
         onLogout={() => void logout()}
+        onToast={pushToast}
         onClose={closeSettings}
       />
       )}

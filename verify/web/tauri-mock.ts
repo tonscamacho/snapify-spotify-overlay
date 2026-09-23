@@ -79,8 +79,9 @@ function buildInitScript(
     "    });\n" +
     "  }\n" +
     "  window.__TAURI_EMIT_TO_APP__ = dispatch;\n" +
-    "  var player = JSON.parse(JSON.stringify(FIXTURES.player));\n" +
-    "  var keybinds = Object.assign({}, FIXTURES.keybinds);\n" +
+  "  var player = JSON.parse(JSON.stringify(FIXTURES.player));\n" +
+  "  var keybinds = Object.assign({}, FIXTURES.keybinds);\n" +
+  "  var lyricsCache = { entries: 3, bytes: 4096 };\n" +
     "  function emptyPage() { return { items: [], total: 0 }; }\n" +
     "  var mockFaults = {};\n" +
     "  window.__MOCK_FAIL_NEXT__ = function (cmd, error, times) {\n" +
@@ -129,6 +130,8 @@ function buildInitScript(
     "      case 'play_context': return null;\n" +
     "      case 'play_uris': return null;\n" +
     "      case 'get_lyrics': return FIXTURES.lyrics;\n" +
+  "      case 'lyrics_cache_size': return { entries: lyricsCache.entries, bytes: lyricsCache.bytes };\n" +
+  "      case 'clear_lyrics_cache': { var n = lyricsCache.entries; lyricsCache = { entries: 0, bytes: 0 }; return { cleared: n }; }\n" +
     "      case 'get_me': return FIXTURES.me;\n" +
     "      case 'get_my_playlists': {\n" +
     "        var plItems = (FIXTURES.playlists && FIXTURES.playlists.items) || [];\n" +

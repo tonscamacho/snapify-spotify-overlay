@@ -3,12 +3,11 @@ import type { ReactNode } from "react";
 // In-app glyphs mirror `icon pack/svg/ui/` (viewBox 0 0 24, stroke 1.8,
 // round caps): PlayIcon<->play.svg, PauseIcon<->pause.svg, NextIcon<->next.svg,
 // PrevIcon<->prev.svg, ShuffleIcon<->shuffle.svg, RepeatIcon<->repeat.svg,
-// RepeatOneIcon<->repeat-1.svg, VolumeIcon<->volume.svg, ListIcon<->queue.svg,
-// MicIcon<->lyrics-mic.svg, SlidersIcon<->settings.svg, LockIcon<->lock.svg,
-// UnlockIcon<->unlock.svg, MinusIcon<->minimize.svg, XIcon<->close.svg,
+// RepeatOneIcon<->repeat-1.svg, VolumeIcon<->volume.svg,
+// MicIcon<->lyrics-mic.svg, XIcon<->close.svg,
 // NoteIcon<->note.svg, RefreshIcon<->refresh.svg. Dock-only glyphs with no
 // pack counterpart: EyeIcon, EyeOffIcon, PencilIcon, CursorIcon, GearIcon,
-// GridIcon, UndoIcon, ThroughIcon. Keep paths in sync there.
+// UndoIcon, ThroughIcon. Keep paths in sync there.
 
 interface IconProps {
   size?: number;
@@ -102,45 +101,6 @@ export const VolumeIcon = (p: IconProps) => (
   </Base>
 );
 
-export const LockIcon = (p: IconProps) => (
-  <Base {...p}>
-    <rect x="4.5" y="10.5" width="15" height="9.5" rx="2" />
-    <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" />
-  </Base>
-);
-
-export const UnlockIcon = (p: IconProps) => (
-  <Base {...p}>
-    <rect x="4.5" y="10.5" width="15" height="9.5" rx="2" />
-    <path d="M8 10.5V7.5a4 4 0 0 1 7.6-1.7" />
-  </Base>
-);
-
-export const SlidersIcon = (p: IconProps) => (
-  <Base {...p}>
-    <path d="M16.5 4h-2" />
-    <path d="M9.5 4H3.5" />
-    <path d="M20.5 12h-8" />
-    <path d="M7.5 12h-4" />
-    <path d="M20.5 20h-4" />
-    <path d="M11.5 20h-8" />
-    <path d="M14.5 2v4" />
-    <path d="M7.5 10v4" />
-    <path d="M16.5 18v4" />
-    <path
-      d="M19.5 2.8c.11.68.44 1.01 1.12 1.12-.68.11-1.01.44-1.12 1.12-.11-.68-.44-1.01-1.12-1.12.68-.11 1.01-.44 1.12-1.12Z"
-      fill="currentColor"
-      stroke="none"
-    />
-  </Base>
-);
-
-export const MinusIcon = (p: IconProps) => (
-  <Base {...p}>
-    <path d="M5 12h14" />
-  </Base>
-);
-
 export const XIcon = (p: IconProps) => (
   <Base {...p}>
     <path d="M17.5 6.5 6.5 17.5" />
@@ -170,22 +130,6 @@ export const MicIcon = (p: IconProps) => (
     <path d="M9 20.5h6" />
     <path
       d="M18.8 2.9c.11.68.44 1.01 1.12 1.12-.68.11-1.01.44-1.12 1.12-.11-.68-.44-1.01-1.12-1.12.68-.11 1.01-.44 1.12-1.12Z"
-      fill="currentColor"
-      stroke="none"
-    />
-  </Base>
-);
-
-export const ListIcon = (p: IconProps) => (
-  <Base {...p}>
-    <path d="M8.5 6.5h7.6" />
-    <path d="M8.5 12h12" />
-    <path d="M8.5 17.5h12" />
-    <path d="M4 6.5h.01" />
-    <path d="M4 12h.01" />
-    <path d="M4 17.5h.01" />
-    <path
-      d="M19.2 3.1c.12.78.5 1.16 1.28 1.28-.78.12-1.16.5-1.28 1.28-.12-.78-.5-1.16-1.28-1.28.78-.12 1.16-.5 1.28-1.28Z"
       fill="currentColor"
       stroke="none"
     />
@@ -275,15 +219,6 @@ export const GearIcon = (p: IconProps) => (
     <path d="M16.7 16.7l1.8 1.8" />
     <path d="M18.5 5.5l-1.8 1.8" />
     <path d="M7.3 16.7l-1.8 1.8" />
-  </Base>
-);
-
-export const GridIcon = (p: IconProps) => (
-  <Base {...p}>
-    <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
-    <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
-    <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
-    <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
   </Base>
 );
 

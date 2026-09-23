@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export interface OverlayRect {
+interface OverlayRect {
   x: number;
   y: number;
   w: number;
@@ -19,7 +19,7 @@ const SELECTORS = [
   ".hint-chip",
 ] as const;
 
-export function collectOverlayRegions(): OverlayRect[] {
+function collectOverlayRegions(): OverlayRect[] {
   const out: OverlayRect[] = [];
   for (const sel of SELECTORS) {
     const nodes = document.querySelectorAll(sel);

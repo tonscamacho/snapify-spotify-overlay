@@ -46,14 +46,6 @@ export class PendingQueue {
     return [...this.entries.keys()];
   }
 
-  get(key: string): QueuedWrite | undefined {
-    return this.entries.get(key);
-  }
-
-  snapshot(): QueuedWrite[] {
-    return [...this.entries.values()];
-  }
-
   /** Park a write. Same-key repeats replace the stored runner (latest wins)
    *  and report `coalesced: true`. Never duplicates the key. */
   enqueue(
@@ -73,26 +65,6 @@ export class PendingQueue {
     this.entries.set(key, entry);
     this.notify();
     return { entry, coalesced };
-  }
-
-  remove(key: string): boolean {
-    const ok = this.entries.delete(key);
-    if (ok) this.notify();
-    return ok;
-  }
-
-  clear(): void {
-    if (this.entries.size === 0) return;
-    this.entries.clear();
-    this.notify();
-  }
-
-  /** React subscription for the queued-count chip. */
-  subscribe(fn: () => void): () => void {
-    this.listeners.add(fn);
-    return () => {
-      this.listeners.delete(fn);
-    };
   }
 
   private notify(): void {
