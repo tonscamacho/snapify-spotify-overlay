@@ -37,8 +37,8 @@ test("clicking the active line seeks to its cue", async ({ page }) => {
     .toContain(ACTIVE_CUE_T);
 });
 
-// 1 s-spaced cues around the 65 s fixture progress so a ±500 ms nudge
-// visibly moves the active line.
+// 1 s-spaced cues around the 65 s fixture progress; with no calibration
+// stepper the active line follows raw cue timing.
 const OFFSET_CUES: LyricCueFixture[] = [
   { t: 60000, text: "early line" },
   { t: 63000, text: "warming up" },
@@ -77,9 +77,7 @@ async function gotoWithLyrics(page: Page, lyrics: object) {
   await page.goto("/");
 }
 
-test("offset stepper shifts the active line and persists across reload", async ({
-  page,
-}) => {
+test("no sync calibration stepper: cues render raw", async ({ page }) => {
   await gotoWithLyrics(page, {
     trackId: TRACK_ID,
     synced: true,
@@ -91,20 +89,13 @@ test("offset stepper shifts the active line and persists across reload", async (
   const pane = page.locator('section[data-pane="lyrics"]');
 
   await expect(pane.locator("button.line.on")).toContainText("target-line");
-  await expect(pane.getByText("Sync ±0 ms")).toBeVisible();
-
-  await pane.getByRole("button", { name: /shift lyrics later/i }).click();
-  await expect(pane.getByText("Sync +500 ms")).toBeVisible();
-  await expect(pane.locator("button.line.on")).toContainText("line-before");
-
-  await page.reload();
-  const pane2 = page.locator('section[data-pane="lyrics"]');
-  await expect(pane2.getByText("Sync +500 ms")).toBeVisible();
-  await expect(pane2.locator("button.line.on")).toContainText("line-before");
-
-  await pane2.getByRole("button", { name: /reset lyric sync/i }).click();
-  await expect(pane2.getByText("Sync ±0 ms")).toBeVisible();
-  await expect(pane2.locator("button.line.on")).toContainText("target-line");
+  await expect(pane.getByText(/Sync .*ms/)).toHaveCount(0);
+  await expect(
+    pane.getByRole("button", { name: /shift lyrics (earlier|later)/i }),
+  ).toHaveCount(0);
+  await expect(
+    pane.getByRole("button", { name: /reset lyric sync/i }),
+  ).toHaveCount(0);
 });
 
 test("word-timed cues render word highlight, plain cues interpolate", async ({

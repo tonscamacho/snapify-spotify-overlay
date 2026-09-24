@@ -17,8 +17,8 @@ test("volume slider drives the overlay device gain", async ({ page }) => {
   // Arm the headless device first: any later slider move must reach the
   // local gain of the already-constructed player.
   await page.keyboard.press("p");
-  const sdkOption = player.locator("select.device option", { hasText: "Snapify Overlay" });
-  await expect(sdkOption).toHaveCount(1, { timeout: 10000 });
+  const sdkRow = player.locator(".device-cell", { hasText: "Snapify Overlay" });
+  await expect(sdkRow).toHaveCount(1, { timeout: 10000 });
 
   const vol = player.locator("input.vol");
   await vol.focus();

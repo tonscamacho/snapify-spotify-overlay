@@ -26,7 +26,6 @@
   --sp-5: 24px;
   --pad-pane: clamp(8px, 4cqw, 16px);
   --row-py: 8px;
-  --cover: clamp(40px, 18cqw, 56px);
   --thumb: 36px;
   --detail-art: clamp(48px, 20cqw, 64px);
   --fs-title: clamp(14px, 5cqw, 15px);
@@ -247,22 +246,90 @@ select:focus-visible,
 
 /* ---------- player ---------- */
 
-.track-row {
+/* ---------- player card ---------- */
+
+.player-card {
   display: flex;
-  gap: 12px;
-  align-items: center;
-  margin-top: 8px;
-  flex-wrap: wrap;
+  flex-direction: column;
 }
 
-.cover {
-  width: var(--cover);
-  height: var(--cover);
-  aspect-ratio: 1;
-  border-radius: var(--r-sm);
-  flex: none;
+/* Large art on top, full-bleed within the body padding. */
+.art-top {
+  position: relative;
+  margin-top: 8px;
+}
+
+.art-img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
   object-fit: cover;
+  border-radius: var(--r-md);
   background: #232329;
+}
+
+.art-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+}
+
+/* Transport revealed over the art. Opacity only, inside the motion budget;
+   focus-within keeps it keyboard-reachable, hover:none keeps it on touch. */
+.art-overlay {
+  position: absolute;
+  inset: auto 0 0 0;
+  display: flex;
+  justify-content: center;
+  padding: 18px 8px 10px;
+  border-radius: 0 0 var(--r-md) var(--r-md);
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.64), rgba(0, 0, 0, 0));
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease);
+}
+
+.art-top:hover .art-overlay,
+.art-top:focus-within .art-overlay {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .art-overlay {
+    opacity: 1;
+  }
+}
+
+.art-transport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.art-overlay .icon-btn {
+  color: #fff;
+  width: 32px;
+  height: 32px;
+}
+
+.art-overlay .icon-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.art-overlay .icon-btn.is-on {
+  color: var(--signal);
+}
+
+.art-overlay .play-disc {
+  width: 44px;
+  height: 44px;
+}
+
+.card-meta {
+  margin-top: 10px;
+  min-width: 0;
 }
 
 .cover-fallback {
@@ -340,14 +407,6 @@ select:focus-visible,
   font-variant-numeric: tabular-nums;
   color: var(--faint);
   margin-top: 1px;
-}
-
-.transport {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  margin-top: 12px;
 }
 
 .icon-btn {
@@ -428,6 +487,130 @@ select:focus-visible,
   border-top: 1px solid var(--stroke-soft);
   color: var(--faint);
   flex-wrap: wrap;
+  min-width: 0;
+}
+
+.device-now {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+/* Connect card: a small dark card under the device row. In-flow (never a
+   floating overlay) so it can never cover the art transport. */
+.device-pop {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  background: #26262b;
+  border: 1px solid var(--stroke);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-sm);
+  text-align: left;
+}
+
+.device-pop-head {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+
+.device-pop-head strong {
+  color: var(--txt);
+  font-weight: 600;
+}
+
+.device-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+.device-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--txt);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease);
+}
+
+.device-cell > span {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.device-cell:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.device-cell[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.device-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.device-cell.is-active .device-dot {
+  background: var(--signal);
+}
+
+.device-empty {
+  font-size: 12px;
+  color: var(--dim);
+  padding: 6px 2px;
+}
+
+.device-pop-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.device-pop-actions .btn {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.device-pop-foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-top: 1px solid var(--stroke-soft);
+  padding-top: 8px;
+}
+
+.device-pop-foot .dim {
+  flex: 1;
   min-width: 0;
 }
 
@@ -1421,14 +1604,21 @@ select:focus-visible,
   .vol {
     width: 56px;
   }
+  .device-now {
+    display: none;
+  }
+  .art-overlay .icon-btn {
+    width: 28px;
+    height: 28px;
+  }
+  .art-overlay .play-disc {
+    width: 36px;
+    height: 36px;
+  }
 }
 
-/* Wide panes spend the space on art. */
+/* Wide panes keep room for the overlay row. */
 @container (min-width: 480px) {
-  .cover {
-    width: 64px;
-    height: 64px;
-  }
   .browse-thumb {
     width: 44px;
     height: 44px;
@@ -1451,7 +1641,7 @@ select:focus-visible,
   --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
-.app[data-theme="light"] .cover,
+.app[data-theme="light"] .art-img,
 .app[data-theme="light"] .browse-thumb,
 .app[data-theme="light"] .detail-head img {
   background: rgba(0, 0, 0, 0.06);
@@ -1478,6 +1668,18 @@ select:focus-visible,
 .app[data-theme="light"] .icon-btn:hover:not(:disabled) {
   background: rgba(0, 0, 0, 0.05);
   color: #000;
+}
+
+.app[data-theme="light"] .device-pop {
+  background: #fff;
+}
+
+.app[data-theme="light"] .device-cell:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.app[data-theme="light"] .device-cell[aria-pressed="true"] {
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .app[data-theme="light"] .tbtn:hover {
@@ -1797,11 +1999,4 @@ select:focus-visible,
   transform: scale(0.97);
 }
 
-/* Device section toggle reuses panel classes: pointer cursor, faint marker. */
-.device-panel summary {
-  cursor: pointer;
-}
-
-.device-panel summary::marker {
-  color: var(--faint);
-}
+/* ---------- PR8: scenes, stream-safe, collapse, mini, banner ---------- */

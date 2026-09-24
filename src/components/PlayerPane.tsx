@@ -17,6 +17,7 @@ import {
   SeekBackIcon,
   SeekForwardIcon,
   ShuffleIcon,
+  ThroughIcon,
   VolumeIcon,
 } from "./icons";
 import SpotifyMark from "./SpotifyMark";
@@ -143,10 +144,6 @@ export function writeEpisodeResume(episodeId: string, ms: number): void {
 
 const UPGRADE_TEXT =
   "Spotify Premium lets you play any track, podcast episode or audiobook, ad-free and with better audio quality. Go to spotify.com/premium to try it for free.";
-
-function truncate(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s;
-}
 
 function openSpotifyUrl(uri: string, trackId: string): string {
   // Link every Spotify surface back with exactly OPEN SPOTIFY.
@@ -355,13 +352,23 @@ export default function PlayerPane(p: Props) {
     );
   }
 
-  const displayTitle = truncate(track.name, 23);
-  const displayArtist = truncate(track.artists, 18);
   const showResume =
     isEpisodic &&
     resumeMs != null &&
     Math.abs(resumeMs - p.progressMs) > 10000 &&
     resumeMs < track.durationMs - 5000;
+
+  const toggleDevices = () => {
+    setDevicesOpen((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem(DEVICE_OPEN_KEY, next ? "1" : "0");
+      } catch {
+        // Private mode. Open state lasts the session.
+      }
+      return next;
+    });
+  };
 
   return (
     <div className="pane-fill">
@@ -369,51 +376,108 @@ export default function PlayerPane(p: Props) {
       {p.degraded === true && (
         <PaneStateBanner tone="throttled" onRetry={p.onRetry} />
       )}
-      <div className="player-full">
-      <div className="track-row">
+      <div className="player-full player-card">
+      <div className="art-top">
         {track.image ? (
-          <img className="cover" src={track.image} alt="" draggable={false} />
+          <img className="art-img" src={track.image} alt="" draggable={false} />
         ) : (
-          <div className="cover cover-fallback">
-            <NoteIcon size={22} />
+          <div className="art-img art-fallback" aria-hidden="true">
+            <NoteIcon size={28} />
           </div>
         )}
-        <div className="track-meta">
-          <div
-            className="track-title"
-            title={track.name}
-            aria-label={`${track.name} by ${track.artists}`}
-          >
-            <span title={track.name}>{displayTitle}</span>
-          </div>
-          <div className="track-artist" title={`${track.artists} — ${track.album}`}>
-            {track.explicit && (
-              <span className="badge" title="Explicit" aria-label="Explicit">
-                E
-              </span>
-            )}{" "}
-            <span title={track.artists}>{displayArtist}</span>
-            <span className="album-full" title={track.album}>
-              {" "}
-              · {truncate(track.album, 25)}
-            </span>
-          </div>
-          <div className="track-tier">
-            <span className="tier" title={isFree ? UPGRADE_TEXT : "Premium playback"}>
-              {isFree ? "Free" : "Premium"}
-            </span>
+        <div className="art-overlay">
+          <div className="art-transport">
+            {isEpisodic && !isFree && (
+              <button
+                className="icon-btn"
+                onClick={() => p.onSeek(Math.max(0, p.progressMs - 15000))}
+                title="Back 15 seconds"
+                aria-label="Back 15 seconds"
+              >
+                <SeekBackIcon size={16} />
+              </button>
+            )}
+            <button
+              className={`icon-btn${s.shuffle ? " is-on" : ""}`}
+              onClick={p.onShuffle}
+              title={isFree ? UPGRADE_TEXT : "Shuffle"}
+              aria-label="Toggle shuffle"
+              aria-pressed={s.shuffle}
+              disabled={isFree}
+            >
+              <ShuffleIcon size={16} />
+            </button>
+            <button
+              className="icon-btn"
+              onClick={p.onPrev}
+              disabled={p.busy || isFree}
+              title={isFree ? UPGRADE_TEXT : "Previous"}
+              aria-label="Previous track"
+            >
+              <PrevIcon size={18} />
+            </button>
+            {s.isPlaying ? (
+              <button
+                className="play-disc"
+                onClick={p.onPause}
+                disabled={p.busy}
+                title="Pause"
+                aria-label="Pause"
+              >
+                <PauseIcon size={19} />
+              </button>
+            ) : (
+              <button
+                className="play-disc"
+                onClick={p.onPlay}
+                disabled={p.busy}
+                title={isFree ? UPGRADE_TEXT : "Play"}
+                aria-label="Play"
+              >
+                <PlayIcon size={19} />
+              </button>
+            )}
+            <button
+              className="icon-btn"
+              onClick={p.onNext}
+              disabled={p.busy || isFree}
+              title={isFree ? UPGRADE_TEXT : "Next"}
+              aria-label="Next track"
+            >
+              <NextIcon size={18} />
+            </button>
+            <button
+              className={`icon-btn${s.repeat !== "off" ? " is-on" : ""}`}
+              onClick={p.onRepeat}
+              title={isFree ? UPGRADE_TEXT : `Repeat: ${s.repeat}`}
+              aria-label="Cycle repeat mode"
+              aria-pressed={s.repeat !== "off"}
+              disabled={isFree}
+            >
+              {s.repeat === "track" ? <RepeatOneIcon size={16} /> : <RepeatIcon size={16} />}
+            </button>
+            {isEpisodic && !isFree && (
+              <button
+                className="icon-btn"
+                onClick={() => p.onSeek(Math.min(track.durationMs, p.progressMs + 15000))}
+                title="Forward 15 seconds"
+                aria-label="Forward 15 seconds"
+              >
+                <SeekForwardIcon size={16} />
+              </button>
+            )}
+            <button
+              className={`icon-btn${liked ? " is-on" : ""}`}
+              onClick={() => void toggleLike()}
+              disabled={likeBusy}
+              title={liked ? "Remove from library" : "Add to library"}
+              aria-label={liked ? "Remove from library" : "Save to library"}
+              aria-pressed={liked}
+            >
+              <LikePlusIcon size={16} />
+            </button>
           </div>
         </div>
-        <button
-          className={`icon-btn${liked ? " is-on" : ""}`}
-          onClick={() => void toggleLike()}
-          disabled={likeBusy}
-          title={liked ? "Remove from library" : "Add to library"}
-          aria-label={liked ? "Remove from library" : "Save to library"}
-          aria-pressed={liked}
-        >
-          <LikePlusIcon size={17} />
-        </button>
       </div>
 
       {isFree ? (
@@ -465,86 +529,31 @@ export default function PlayerPane(p: Props) {
         </>
       )}
 
-      <div className="transport">
-        {isEpisodic && !isFree && (
-          <button
-            className="icon-btn"
-            onClick={() => p.onSeek(Math.max(0, p.progressMs - 15000))}
-            title="Back 15 seconds"
-            aria-label="Back 15 seconds"
-          >
-            <SeekBackIcon size={17} />
-          </button>
-        )}
-        <button
-          className={`icon-btn${s.shuffle ? " is-on" : ""}`}
-          onClick={p.onShuffle}
-          title={isFree ? UPGRADE_TEXT : "Shuffle"}
-          aria-label="Toggle shuffle"
-          aria-pressed={s.shuffle}
-          disabled={isFree}
+      <div className="track-meta card-meta">
+        <div
+          className="track-title"
+          title={track.name}
+          aria-label={`${track.name} by ${track.artists}`}
         >
-          <ShuffleIcon size={17} />
-        </button>
-        <button
-          className="icon-btn"
-          onClick={p.onPrev}
-          disabled={p.busy || isFree}
-          title={isFree ? UPGRADE_TEXT : "Previous"}
-          aria-label="Previous track"
-        >
-          <PrevIcon size={19} />
-        </button>
-        {s.isPlaying ? (
-          <button
-            className="play-disc"
-            onClick={p.onPause}
-            disabled={p.busy}
-            title="Pause"
-            aria-label="Pause"
-          >
-            <PauseIcon size={19} />
-          </button>
-        ) : (
-          <button
-            className="play-disc"
-            onClick={p.onPlay}
-            disabled={p.busy}
-            title={isFree ? UPGRADE_TEXT : "Play"}
-            aria-label="Play"
-          >
-            <PlayIcon size={19} />
-          </button>
-        )}
-        <button
-          className="icon-btn"
-          onClick={p.onNext}
-          disabled={p.busy || isFree}
-          title={isFree ? UPGRADE_TEXT : "Next"}
-          aria-label="Next track"
-        >
-          <NextIcon size={19} />
-        </button>
-        <button
-          className={`icon-btn${s.repeat !== "off" ? " is-on" : ""}`}
-          onClick={p.onRepeat}
-          title={isFree ? UPGRADE_TEXT : `Repeat: ${s.repeat}`}
-          aria-label="Cycle repeat mode"
-          aria-pressed={s.repeat !== "off"}
-          disabled={isFree}
-        >
-          {s.repeat === "track" ? <RepeatOneIcon size={17} /> : <RepeatIcon size={17} />}
-        </button>
-        {isEpisodic && !isFree && (
-          <button
-            className="icon-btn"
-            onClick={() => p.onSeek(Math.min(track.durationMs, p.progressMs + 15000))}
-            title="Forward 15 seconds"
-            aria-label="Forward 15 seconds"
-          >
-            <SeekForwardIcon size={17} />
-          </button>
-        )}
+          <span title={track.name}>{track.name}</span>
+        </div>
+        <div className="track-artist" title={`${track.artists} — ${track.album}`}>
+          {track.explicit && (
+            <span className="badge" title="Explicit" aria-label="Explicit">
+              E
+            </span>
+          )}{" "}
+          <span title={track.artists}>{track.artists}</span>
+          <span className="album-full" title={track.album}>
+            {" "}
+            · {track.album}
+          </span>
+        </div>
+        <div className="track-tier">
+          <span className="tier" title={isFree ? UPGRADE_TEXT : "Premium playback"}>
+            {isFree ? "Free" : "Premium"}
+          </span>
+        </div>
       </div>
 
       {isEpisodic && (
@@ -590,7 +599,7 @@ export default function PlayerPane(p: Props) {
         </div>
       )}
 
-      <div className="device-row">
+      <div className="device-row card-device">
         <VolumeIcon size={14} />
         <input
           className="vol"
@@ -616,91 +625,101 @@ export default function PlayerPane(p: Props) {
             }
           }}
         />
+        <span className="device-now" title={`Sound plays on: ${activeName}`}>
+          {activeName}
+        </span>
         <button
           className="icon-btn sm"
-          onClick={p.onRefreshDevices}
-          title="Refresh devices"
-          aria-label="Refresh devices"
+          onClick={toggleDevices}
+          title="Connect to a device"
+          aria-label="Choose playback device"
+          aria-expanded={devicesOpen}
         >
-          <RefreshIcon size={14} />
+          <ThroughIcon size={15} />
         </button>
-        <button
-          className="icon-btn sm"
-          onClick={() => void openUrl(openSpotifyUrl(track.uri, track.id))}
-          title="OPEN SPOTIFY"
-          aria-label="Open in Spotify"
-        >
-          <OpenIcon size={14} />
-        </button>
+        {devicesOpen && (
+          <div className="device-pop" role="group" aria-label="Playback device">
+            <div className="device-pop-head">
+              Sound plays on: <strong>{activeName}</strong>
+              {choice?.kind === "sdk" && <span className="dim"> (remembered: this overlay)</span>}
+              {choice?.kind === "connect" && choice.deviceId && (
+                <span className="dim"> (remembered)</span>
+              )}
+            </div>
+            <div className="device-list">
+              {p.sdkDeviceId && (
+                <button
+                  className={`device-cell${p.sdkDeviceId === s.deviceId ? " is-active" : ""}`}
+                  aria-pressed={selectedId === p.sdkDeviceId}
+                  onClick={() => setSelectedId(p.sdkDeviceId as string)}
+                  title="Snapify Overlay"
+                >
+                  <i className="device-dot" aria-hidden="true" />
+                  <span>
+                    Snapify Overlay{p.sdkDeviceId === s.deviceId ? " — active" : ""}
+                  </span>
+                </button>
+              )}
+              {p.devices.map((d) => (
+                <button
+                  key={d.id}
+                  className={`device-cell${d.isActive ? " is-active" : ""}`}
+                  aria-pressed={selectedId === d.id}
+                  onClick={() => setSelectedId(d.id)}
+                  title={d.name}
+                >
+                  <i className="device-dot" aria-hidden="true" />
+                  <span>
+                    {d.name}
+                    {d.isActive ? " — active" : ""}
+                  </span>
+                </button>
+              ))}
+              {!p.sdkDeviceId && p.devices.length === 0 && (
+                <div className="device-empty">No devices — open Spotify</div>
+              )}
+            </div>
+            <div className="device-pop-actions">
+              <button
+                className="btn sm primary"
+                onClick={playHere}
+                title="Play through this overlay (Spotify headless SDK)"
+                aria-label="Play here via this overlay"
+              >
+                Play here
+              </button>
+              <button
+                className="btn sm"
+                onClick={keepThere}
+                disabled={!selectedId}
+                title="Keep playback on the chosen Spotify device (Connect)"
+                aria-label="Keep playback there"
+              >
+                Keep there
+              </button>
+            </div>
+            <div className="device-pop-foot">
+              <button
+                className="icon-btn sm"
+                onClick={p.onRefreshDevices}
+                title="Refresh devices"
+                aria-label="Refresh devices"
+              >
+                <RefreshIcon size={14} />
+              </button>
+              <button
+                className="icon-btn sm"
+                onClick={() => void openUrl(openSpotifyUrl(track.uri, track.id))}
+                title="OPEN SPOTIFY"
+                aria-label="Open in Spotify"
+              >
+                <OpenIcon size={14} />
+              </button>
+              <span className="dim">Play here: sound from this overlay. Keep there: stay on the chosen device.</span>
+            </div>
+          </div>
+        )}
       </div>
-      <details
-        className="device-panel"
-        role="group"
-        aria-label="Playback device"
-        style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}
-        open={devicesOpen}
-        onToggle={(e) => {
-          const open = (e.currentTarget as HTMLDetailsElement).open;
-          setDevicesOpen(open);
-          try {
-            localStorage.setItem(DEVICE_OPEN_KEY, open ? "1" : "0");
-          } catch {
-            // Private mode. Open state lasts the session.
-          }
-        }}
-      >
-        <summary className="device-where">
-          Sound plays on: <strong>{activeName}</strong>
-          {choice?.kind === "sdk" && <span className="dim"> (remembered: this overlay)</span>}
-          {choice?.kind === "connect" && choice.deviceId && (
-            <span className="dim"> (remembered)</span>
-          )}
-        </summary>
-        <div className="device-actions" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <button
-            className="btn sm primary"
-            onClick={playHere}
-            title="Play through this overlay (Spotify headless SDK)"
-            aria-label="Play here via this overlay"
-          >
-            Play here
-          </button>
-          <select
-            className="device"
-            value={selectedId}
-            aria-label="Choose a Spotify device to keep playback on"
-            onChange={(e) => setSelectedId(e.target.value)}
-            style={{ flex: 1, minWidth: 0 }}
-          >
-            <option value="" disabled>
-              {p.devices.length === 0 ? "No devices — open Spotify" : "Choose a device"}
-            </option>
-            {p.sdkDeviceId && (
-              <option value={p.sdkDeviceId}>
-                Snapify Overlay{p.sdkDeviceId === s.deviceId ? " — active" : ""}
-              </option>
-            )}
-            {p.devices.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name}
-                {d.isActive ? " — active" : ""}
-              </option>
-            ))}
-          </select>
-          <button
-            className="btn sm"
-            onClick={keepThere}
-            disabled={!selectedId}
-            title="Keep playback on the chosen Spotify device (Connect)"
-            aria-label="Keep playback there"
-          >
-            Keep there
-          </button>
-        </div>
-        <div className="dim">
-          Play here: sound from this overlay. Keep there: stay on the chosen device.
-        </div>
-      </details>
       <div className="player-foot">
         <SpotifyMark variant="icon" size={21} />
       </div>

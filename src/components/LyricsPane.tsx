@@ -25,33 +25,6 @@ function Meta({ children }: { children: React.ReactNode }) {
   );
 }
 
-const OFFSET_STORE_KEY = "snapify-lyrics-offset-v1";
-const OFFSET_STEP_MS = 500;
-const OFFSET_MAX_MS = 5000;
-
-function clampOffset(v: number): number {
-  if (!Number.isFinite(v)) return 0;
-  return Math.max(-OFFSET_MAX_MS, Math.min(OFFSET_MAX_MS, Math.round(v)));
-}
-
-function loadOffsets(): Record<string, number> {
-  try {
-    const raw = localStorage.getItem(OFFSET_STORE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === "object"
-      ? (parsed as Record<string, number>)
-      : {};
-  } catch {
-    return {};
-  }
-}
-
-function formatOffset(ms: number): string {
-  if (ms === 0) return "±0 ms";
-  return `${ms > 0 ? "+" : ""}${ms} ms`;
-}
-
 export default function LyricsPane(p: Props) {
   const activeRef = useRef<HTMLDivElement | null>(null);
   const reduceMotion = useRef(
@@ -60,45 +33,8 @@ export default function LyricsPane(p: Props) {
       window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
 
-  const trackId = p.lyrics.kind === "ready" ? p.lyrics.data.trackId : null;
-
-  // Per-track user calibration. Local component state + localStorage;
-  // the Rust cache entry carries the same field (applied to served cue
-  // timing, invalidated on duration change via the cache key) once its
-  // setter IPC lands — see the slice report.
-  const [offsetMs, setOffsetMs] = useState(0);
-  useEffect(() => {
-    if (!trackId) {
-      setOffsetMs(0);
-      return;
-    }
-    setOffsetMs(clampOffset(loadOffsets()[trackId] ?? 0));
-  }, [trackId]);
-
-  const nudge = (delta: number) => {
-    if (!trackId) return;
-    const next = clampOffset(offsetMs + delta);
-    setOffsetMs(next);
-    try {
-      const all = loadOffsets();
-      if (next === 0) delete all[trackId];
-      else all[trackId] = next;
-      localStorage.setItem(OFFSET_STORE_KEY, JSON.stringify(all));
-    } catch {
-      // Storage blocked: the nudge still applies for this session.
-    }
-  };
-
-  // Calibration shifts cue (and word) timing; stored cues stay raw.
-  const baseCues = p.lyrics.kind === "ready" ? p.lyrics.data.cues : [];
-  const cues = useMemo(() => {
-    if (offsetMs === 0) return baseCues;
-    return baseCues.map((c) => ({
-      ...c,
-      t: c.t + offsetMs,
-      words: c.words?.map((w) => ({ ...w, t: w.t + offsetMs })),
-    }));
-  }, [baseCues, offsetMs]);
+  // Cues render raw; no per-track calibration shift.
+  const cues = p.lyrics.kind === "ready" ? p.lyrics.data.cues : [];
 
   const synced = p.lyrics.kind === "ready" && p.lyrics.data.synced;
   const active = synced ? activeCueIndex(cues, p.positionMs) : -1;
@@ -235,35 +171,6 @@ export default function LyricsPane(p: Props) {
   return (
     <>
       <Meta>Synced{d.cached ? <span className="cached"> · Cached</span> : ""}</Meta>
-      <div role="group" aria-label="Lyric sync calibration">
-        <span aria-live="polite">Sync {formatOffset(offsetMs)}</span>{" "}
-        <button
-          type="button"
-          className="btn sm"
-          onClick={() => nudge(-OFFSET_STEP_MS)}
-          aria-label="Shift lyrics earlier by 500 milliseconds"
-        >
-          −500 ms
-        </button>{" "}
-        <button
-          type="button"
-          className="btn sm"
-          onClick={() => nudge(OFFSET_STEP_MS)}
-          aria-label="Shift lyrics later by 500 milliseconds"
-        >
-          +500 ms
-        </button>{" "}
-        {offsetMs !== 0 && (
-          <button
-            type="button"
-            className="btn sm"
-            onClick={() => nudge(-offsetMs)}
-            aria-label="Reset lyric sync offset"
-          >
-            Reset
-          </button>
-        )}
-      </div>
       <div
         className={p.dyslexia ? "lyrics lyrics-dyslexia" : "lyrics"}
         style={{ fontSize: `${p.lyricScale}em` }}
