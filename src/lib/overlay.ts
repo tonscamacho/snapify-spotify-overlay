@@ -20,6 +20,17 @@ const SELECTORS = [
 ] as const;
 
 function collectOverlayRegions(): OverlayRect[] {
+  // While a pane drag is live the OS window region (SetWindowRgn) clips
+  // painting as well as input, and tight per-pane reports lag the gesture
+  // by up to 120 ms by design. Reporting the full viewport for the drag
+  // keeps the moving pane inside the applied shape, so the leading edge
+  // never clips. The signature dedupes repeat fullscreen reports to one
+  // invoke; release re-tightens via reportOverlayRegions.
+  if (dragCover) {
+    const w = typeof window !== "undefined" ? window.innerWidth : 0;
+    const h = typeof window !== "undefined" ? window.innerHeight : 0;
+    if (w >= 2 && h >= 2) return [{ x: 0, y: 0, w: Math.round(w), h: Math.round(h) }];
+  }
   const out: OverlayRect[] = [];
   for (const sel of SELECTORS) {
     const nodes = document.querySelectorAll(sel);
@@ -59,6 +70,15 @@ let lastSignature: string | null = null;
 /** Test seam: forget the last report so the next call always invokes. */
 export function resetOverlayRegionDiff(): void {
   lastSignature = null;
+}
+
+/** True while a pointer drag holds a pane. While set, region reports
+ *  cover the full viewport so the OS shape cannot clip the gesture.
+ *  Cleared on release; the release report re-tightens to per-pane rects. */
+let dragCover = false;
+
+export function setOverlayDragCover(on: boolean): void {
+  dragCover = on;
 }
 
 // Startup timing, frontend half of the Rust `note_boot` /

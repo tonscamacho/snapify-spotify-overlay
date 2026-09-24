@@ -28,7 +28,7 @@ import {
 } from "./components/icons";
 import { api, parsePlayer, toThrottleError } from "./lib/spotify";
 import { PendingQueue, flushDelayMs } from "./lib/pendingQueue";
-import { reportOverlayMode, reportOverlayRegions, watchRegionElementSizes } from "./lib/overlay";
+import { reportOverlayMode, reportOverlayRegions, setOverlayDragCover, watchRegionElementSizes } from "./lib/overlay";
 import { ensurePlayer, setSdkVolume } from "./lib/player-sdk";
 import { initialBrowse } from "./lib/browse";
 import type { TransLang } from "./lib/translate";
@@ -1770,6 +1770,13 @@ export default function App() {
         return panes;
       });
     }
+    // The OS window region clips painting as well as input, and tight
+    // reports lag the gesture by up to 120 ms. Holding the full viewport
+    // for the drag keeps the moving pane inside the applied shape, so a
+    // fast move never outruns it and clips the leading edge. Repeat
+    // fullscreen reports dedupe to one invoke; release re-tightens.
+    setOverlayDragCover(true);
+    void reportOverlayRegions();
   };
 
   const dragRaf = useRef(0);
@@ -1779,6 +1786,7 @@ export default function App() {
       if (dragRaf.current) window.cancelAnimationFrame(dragRaf.current);
       if (guidesTimer.current) window.clearTimeout(guidesTimer.current);
       if (kbBurstTimer.current) window.clearTimeout(kbBurstTimer.current);
+      setOverlayDragCover(false);
     },
     [],
   );
@@ -1904,8 +1912,9 @@ export default function App() {
         persist(l, preset);
         return l;
       });
-      // Flush one immediate report so the released pane never sits inside
-      // a stale shape waiting out the debounce.
+      // The drag held the full viewport; drop it so empty pixels go back
+      // to click-through, then flush one tight report for the landed pane.
+      setOverlayDragCover(false);
       void reportOverlayRegions();
     }
   };
@@ -2210,6 +2219,7 @@ export default function App() {
             className="stage"
             onPointerMove={onStageMove}
             onPointerUp={onStageUp}
+            onPointerCancel={onStageUp}
             onDoubleClick={(e) => {
               // Reachable only while editing: passive mode passes all
               // mouse events to the game below, so re-entry is via the
