@@ -93,6 +93,7 @@ test("throttled play queues, shows chip, and flushes once", async ({ page }) => 
 test("device panel names where sound plays", async ({ page }) => {
   const player = page.locator('section[data-pane="player"]');
   await expect(player.getByText(TRACK_NAME)).toBeVisible();
+  await player.getByRole("button", { name: "Choose playback device" }).click();
   const panel = player.getByRole("group", { name: "Playback device" });
   await expect(panel).toBeVisible();
   await expect(panel).toContainText("Sound plays on:");
@@ -105,6 +106,7 @@ test("device panel names where sound plays", async ({ page }) => {
 test("Play here moves sound onto the overlay and remembers it", async ({ page }) => {
   const player = page.locator('section[data-pane="player"]');
   await expect(player.getByText(TRACK_NAME)).toBeVisible();
+  await player.getByRole("button", { name: "Choose playback device" }).click();
   const panel = player.getByRole("group", { name: "Playback device" });
 
   await panel.getByRole("button", { name: "Play here via this overlay" }).click();
@@ -125,6 +127,7 @@ test("Play here moves sound onto the overlay and remembers it", async ({ page })
 test("Keep there transfers to the chosen device and remembers it", async ({ page }) => {
   const player = page.locator('section[data-pane="player"]');
   await expect(player.getByText(TRACK_NAME)).toBeVisible();
+  await player.getByRole("button", { name: "Choose playback device" }).click();
   const panel = player.getByRole("group", { name: "Playback device" });
 
   await panel.getByRole("button", { name: "Keep playback there" }).click();

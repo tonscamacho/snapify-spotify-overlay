@@ -95,9 +95,9 @@ const DEVICE_OPEN_KEY = "snapify-device-open";
 
 function readDeviceOpen(): boolean {
   try {
-    return localStorage.getItem(DEVICE_OPEN_KEY) !== "0";
+    return localStorage.getItem(DEVICE_OPEN_KEY) === "1";
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -466,16 +466,6 @@ export default function PlayerPane(p: Props) {
                 <SeekForwardIcon size={16} />
               </button>
             )}
-            <button
-              className={`icon-btn${liked ? " is-on" : ""}`}
-              onClick={() => void toggleLike()}
-              disabled={likeBusy}
-              title={liked ? "Remove from library" : "Add to library"}
-              aria-label={liked ? "Remove from library" : "Save to library"}
-              aria-pressed={liked}
-            >
-              <LikePlusIcon size={16} />
-            </button>
           </div>
         </div>
       </div>
@@ -530,12 +520,24 @@ export default function PlayerPane(p: Props) {
       )}
 
       <div className="track-meta card-meta">
-        <div
-          className="track-title"
-          title={track.name}
-          aria-label={`${track.name} by ${track.artists}`}
-        >
-          <span title={track.name}>{track.name}</span>
+        <div className="title-row">
+          <div
+            className="track-title"
+            title={track.name}
+            aria-label={`${track.name} by ${track.artists}`}
+          >
+            <span title={track.name}>{track.name}</span>
+          </div>
+          <button
+            className={`like-check${liked ? " is-on" : ""}`}
+            onClick={() => void toggleLike()}
+            disabled={likeBusy}
+            title={liked ? "Remove from library" : "Add to library"}
+            aria-label={liked ? "Remove from library" : "Save to library"}
+            aria-pressed={liked}
+          >
+            <LikePlusIcon size={14} />
+          </button>
         </div>
         <div className="track-artist" title={`${track.artists} — ${track.album}`}>
           {track.explicit && (
@@ -547,11 +549,6 @@ export default function PlayerPane(p: Props) {
           <span className="album-full" title={track.album}>
             {" "}
             · {track.album}
-          </span>
-        </div>
-        <div className="track-tier">
-          <span className="tier" title={isFree ? UPGRADE_TEXT : "Premium playback"}>
-            {isFree ? "Free" : "Premium"}
           </span>
         </div>
       </div>
@@ -600,6 +597,18 @@ export default function PlayerPane(p: Props) {
       )}
 
       <div className="device-row card-device">
+        <button
+          className="device-toggle"
+          onClick={toggleDevices}
+          title="Connect to a device"
+          aria-label="Choose playback device"
+          aria-expanded={devicesOpen}
+        >
+          <ThroughIcon size={14} />
+          <span className="device-now" title={`Sound plays on: ${activeName}`}>
+            {activeName}
+          </span>
+        </button>
         <VolumeIcon size={14} />
         <input
           className="vol"
@@ -625,18 +634,6 @@ export default function PlayerPane(p: Props) {
             }
           }}
         />
-        <span className="device-now" title={`Sound plays on: ${activeName}`}>
-          {activeName}
-        </span>
-        <button
-          className="icon-btn sm"
-          onClick={toggleDevices}
-          title="Connect to a device"
-          aria-label="Choose playback device"
-          aria-expanded={devicesOpen}
-        >
-          <ThroughIcon size={15} />
-        </button>
         {devicesOpen && (
           <div className="device-pop" role="group" aria-label="Playback device">
             <div className="device-pop-head">
@@ -719,9 +716,6 @@ export default function PlayerPane(p: Props) {
             </div>
           </div>
         )}
-      </div>
-      <div className="player-foot">
-        <SpotifyMark variant="icon" size={21} />
       </div>
       </div>
       {/* Mini player row (PR8): art + title + play/pause only. Rendered
