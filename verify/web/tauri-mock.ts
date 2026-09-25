@@ -87,6 +87,14 @@ function buildInitScript(
     "  window.__MOCK_FAIL_NEXT__ = function (cmd, error, times) {\n" +
     "    mockFaults[cmd] = { error: error, remaining: times || 1 };\n" +
     "  };\n" +
+    // Slow-cloud injector (Track B): holds the next N invocations of one
+    // command for ms before answering, so specs can prove the UI reacts
+    // (optimistic state, per-action busy) before the cloud resolves.
+    // Mock-side only; the invoke contract is untouched.
+    "  var mockDelays = {};\n" +
+    "  window.__MOCK_DELAY_NEXT__ = function (cmd, ms, times) {\n" +
+    "    mockDelays[cmd] = { ms: ms, remaining: times || 1 };\n" +
+    "  };\n" +
     "  async function invoke(cmd, args) {\n" +
     "    args = args || {};\n" +
     "    window.__INVOKED__.push({ cmd: cmd, args: args });\n" +
@@ -94,6 +102,11 @@ function buildInitScript(
     "    if (fault && fault.remaining > 0) {\n" +
     "      fault.remaining -= 1;\n" +
     "      throw new Error(fault.error);\n" +
+    "    }\n" +
+    "    var dl = mockDelays[cmd];\n" +
+    "    if (dl && dl.remaining > 0) {\n" +
+    "      dl.remaining -= 1;\n" +
+    "      await new Promise(function (r) { setTimeout(r, dl.ms); });\n" +
     "    }\n" +
     "    switch (cmd) {\n" +
     "      case 'auth_status': return { logged_in: true, awaiting_callback: false };\n" +
@@ -284,5 +297,20 @@ export async function failNext(page: Page, cmd: string, error: string, times = 1
       w.__MOCK_FAIL_NEXT__?.(c as string, e as string, n as number);
     },
     [cmd, error, times] as unknown as [string, string, number],
+  );
+}
+
+/** Hold the next N invocations of one command for ms before answering.
+ *  Used for slow-cloud fixtures: the mock answers late, so the spec can
+ *  prove the UI reacted (optimistic flip, per-action busy) first. */
+export async function delayNext(page: Page, cmd: string, ms: number, times = 1): Promise<void> {
+  await page.evaluate(
+    ([c, m, n]) => {
+      const w = window as unknown as {
+        __MOCK_DELAY_NEXT__?: (cmd: string, ms: number, times: number) => void;
+      };
+      w.__MOCK_DELAY_NEXT__?.(c as string, m as number, n as number);
+    },
+    [cmd, ms, times] as unknown as [string, number, number],
   );
 }
