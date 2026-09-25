@@ -84,9 +84,21 @@ fn cooldown_state() -> &'static tokio::sync::Mutex<Cooldown> {
     })
 }
 
-fn spotify_gate() -> &'static tokio::sync::Semaphore {
-    static GATE: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
-    GATE.get_or_init(|| tokio::sync::Semaphore::new(1))
+/// Split read/write gates (Track B): player/queue/library reads take the
+/// read permit while transport writes take the write permit, so a slow
+/// library page never parks a play/pause/next/previous press behind it
+/// (and a slow write never stalls a poll). Token refresh and the 429
+/// cooldown still serialize through shared state in `call_inner`, so this
+/// only removes head-of-line blocking, never coherence. No command
+/// signature changes: the two-side `invoke` contract is untouched.
+fn spotify_read_gate() -> &'static tokio::sync::Semaphore {
+    static READ_GATE: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+    READ_GATE.get_or_init(|| tokio::sync::Semaphore::new(1))
+}
+
+fn spotify_write_gate() -> &'static tokio::sync::Semaphore {
+    static WRITE_GATE: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+    WRITE_GATE.get_or_init(|| tokio::sync::Semaphore::new(1))
 }
 
 struct InflightSlot {
@@ -332,10 +344,16 @@ async fn call_inner(
             None
         };
         let res = {
-            let _permit = spotify_gate()
-                .acquire()
-                .await
-                .map_err(|e| e.to_string())?;
+            // Reads and writes serialize on separate permits: transport
+            // takes the fast lane past a parked library read, and polls
+            // never wait behind a slow write. GET is the read set; every
+            // PUT/POST/DELETE is a write.
+            let gate = if method == Method::GET {
+                spotify_read_gate()
+            } else {
+                spotify_write_gate()
+            };
+            let _permit = gate.acquire().await.map_err(|e| e.to_string())?;
             send(
                 method.clone(),
                 path,
