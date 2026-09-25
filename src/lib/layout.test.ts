@@ -8,7 +8,9 @@ import {
   defaultSceneLayout,
   defaultSceneLayoutFor,
   defaultScenes,
+  effectiveArea,
   getPaneMin,
+  isCompactPane,
   LAYOUT_UNDO_DEPTH,
   loadSceneLayout,
   loadStreamSettings,
@@ -66,6 +68,22 @@ describe("getPaneMin", () => {
   });
 });
 
+describe("compact helpers", () => {
+  it("flags panes below 360px wide or below their content floor", () => {
+    expect(isCompactPane(340, 196, "player")).toBe(true);
+    expect(isCompactPane(400, 150, "player")).toBe(true);
+    expect(isCompactPane(400, 200, "player")).toBe(false);
+    expect(isCompactPane(400, 300, "browse")).toBe(true);
+    expect(isCompactPane(400, 340, "browse")).toBe(false);
+  });
+
+  it("clamps uiScale into 0.85–1.30 and divides the area", () => {
+    expect(effectiveArea(400, 300, 1.3)).toMatchObject({ w: 400 / 1.3, h: 300 / 1.3 });
+    expect(effectiveArea(400, 300, 99)).toMatchObject({ w: 400 / 1.3, h: 300 / 1.3 });
+    expect(effectiveArea(400, 300, 0.1)).toMatchObject({ w: 400 / 0.85, h: 300 / 0.85 });
+  });
+});
+
 describe("defaultLayoutFor", () => {
   it("docks lyrics top-right and player bottom-right on a 1920x1080 canvas", () => {
     const l = defaultLayoutFor(1920, 1080);
@@ -89,10 +107,26 @@ describe("defaultLayoutFor", () => {
     });
   });
 
-  it("floors tiny areas to an 800x600 canvas", () => {
-    const l = defaultLayoutFor(100, 100);
-    expect(l.panes[0]).toMatchObject({ x: 356, y: 24, w: 420, h: 420 });
-    expect(l.panes[1]).toMatchObject({ x: 416, y: 346, w: 360, h: 230 });
+  it("selects the compact preset below 640px instead of the full preset", () => {
+    const l = defaultLayoutFor(400, 300);
+    expect(l.preset).toBe("compact");
+    expect(l.panes).toHaveLength(2);
+    // Player on top, browse below, everything inside the 400x300 stage.
+    expect(l.panes[0]).toMatchObject({ id: "player", x: 8, y: 8, w: 340, h: 136 });
+    expect(l.panes[1]).toMatchObject({ id: "browse", x: 8, y: 152, w: 384, h: 140 });
+    for (const pane of l.panes) {
+      expect(pane.x + pane.w).toBeLessThanOrEqual(400);
+      expect(pane.y + pane.h).toBeLessThanOrEqual(300);
+    }
+  });
+
+  it("scales the canvas by uiScale before placing the full preset", () => {
+    // 1280x800 at 1.3 => 984x615 logical: still the full preset, but
+    // placed inside the logical stage instead of the CSS pixels.
+    const l = defaultLayoutFor(1280, 800, 1.3);
+    expect(l.preset).toBe("full");
+    expect(l.panes[0]).toMatchObject({ x: 540, y: 24, w: 420, h: 420 });
+    expect(l.panes[1]).toMatchObject({ x: 600, y: 361, w: 360, h: 230 });
   });
 
   it("shrinks the lyrics pane when the canvas is short", () => {
@@ -125,10 +159,19 @@ describe("clampLayoutToArea", () => {
     expect(out.panes[0]).toMatchObject({ x: 1580, y: 810, w: 340, h: 230 });
   });
 
-  it("anchors at zero when the area is narrower than the minimum", () => {
+  it("yields to the compact floor instead of overflowing a tiny area", () => {
     const l = layout([pane({ x: 50, y: 50, w: 340, h: 230 })]);
     const out = clampLayoutToArea(l, 200, 600);
-    expect(out.panes[0]).toMatchObject({ x: 0, w: 280 });
+    expect(out.panes[0]).toMatchObject({ x: 16, w: 184 });
+  });
+
+  it("keeps a browse pane inside a 400x300 stage", () => {
+    const l = layout([
+      { ...pane({ x: 8, y: 8, w: 384, h: 140 }), id: "b", type: "browse" },
+    ]);
+    const out = clampLayoutToArea(l, 400, 300);
+    expect(out.panes[0].x + out.panes[0].w).toBeLessThanOrEqual(400);
+    expect(out.panes[0].y + out.panes[0].h).toBeLessThanOrEqual(300);
   });
 
   it("divides the area by uiScale before clamping", () => {
