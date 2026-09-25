@@ -31,6 +31,56 @@ export function getPaneMin(type: PaneType): { w: number; h: number } {
   return PANE_MIN[type] ?? { w: MIN_W, h: MIN_H };
 }
 
+/** Compact content floors (Track A). When the stage itself is smaller than
+ *  the full PANE_MIN, clampPaneToArea yields down to these instead of
+ *  overflowing the stage; the App marks such panes data-compact so CSS
+ *  sheds cover art and secondary metadata first. */
+export const COMPACT_PANE_MIN: Record<PaneType, { w: number; h: number }> = {
+  player: { w: 200, h: 132 },
+  lyrics: { w: 200, h: 140 },
+  queue: { w: 200, h: 132 },
+  visualizer: { w: 200, h: 120 },
+  browse: { w: 220, h: 140 },
+};
+
+export function getCompactPaneMin(type: PaneType): { w: number; h: number } {
+  return COMPACT_PANE_MIN[type] ?? { w: MIN_W, h: MIN_H };
+}
+
+/** Compact width breakpoint: below 360 px a pane sheds cover art first,
+ *  then secondary metadata. Height compactness is per-type (below the
+ *  pane's own full minimum height). */
+export const COMPACT_W = 360;
+
+/** Windows under 640 px logical width never take the full preset. */
+export const SMALL_WINDOW_W = 640;
+
+/** True when a pane box is squeezed below its comfortable chrome. The App
+ *  reflects this as data-compact so CSS (which cannot query height) can
+ *  shed secondary chrome. Pure. */
+export function isCompactPane(w: number, h: number, type: PaneType): boolean {
+  const full = getPaneMin(type);
+  return w < COMPACT_W || h < full.h;
+}
+
+/** Clamp a uiScale into the supported 0.85–1.30 range. Pure. */
+export function clampUiScale(k: unknown): number {
+  const n = typeof k === "number" && Number.isFinite(k) ? k : 1;
+  return Math.min(1.3, Math.max(0.85, n));
+}
+
+/** Logical stage area for a CSS-pixel window at a uiScale. Layout state
+ *  stays in logical px while the stage renders under a zoom wrapper, so
+ *  presets and tiers always decide on these divided dims. Pure. */
+export function effectiveArea(
+  areaW: number,
+  areaH: number,
+  uiScale = 1,
+): { w: number; h: number } {
+  const k = clampUiScale(uiScale) || 1;
+  return { w: areaW / k, h: areaH / k };
+}
+
 function pane(id: string, type: PaneType, x: number, y: number, w: number, h: number, z: number): PaneState {
   return { id, type, x, y, w, h, opacity: DEFAULT_OPACITY, visible: true, collapsed: false, z };
 }
@@ -151,11 +201,54 @@ export function defaultLayout(): LayoutState {
 
 /**
  * First-run arrangement for a fullscreen canvas: lyrics top-right,
- * player bottom-right, the rest cascading top-left.
+ * player bottom-right, the rest cascading top-left. Areas are logical
+ * (CSS px divided by uiScale); windows under 640 px logical width take
+ * the small-window preset (player on top, browse below) instead of the
+ * full preset so a 400x300 window fits by construction.
  */
-export function defaultLayoutFor(areaW: number, areaH: number): LayoutState {
-  const W = Math.max(800, Math.floor(areaW));
-  const H = Math.max(600, Math.floor(areaH));
+export function defaultLayoutFor(areaW: number, areaH: number, uiScale = 1): LayoutState {
+  const eff = effectiveArea(areaW, areaH, uiScale);
+  const ew = Math.floor(eff.w);
+  const eh = Math.floor(eff.h);
+  if (ew < SMALL_WINDOW_W) {
+    const m = 8;
+    const availW = Math.max(0, ew - m * 2);
+    const cb = getCompactPaneMin("browse");
+    const cp = getCompactPaneMin("player");
+    const pw = Math.min(340, availW);
+    const ph = Math.min(170, Math.max(cp.h, eh - m * 2 - cb.h - m));
+    const by = m + ph + m;
+    return {
+      version: 3,
+      preset: "compact",
+      panes: [
+        {
+          id: "player",
+          type: "player",
+          x: m,
+          y: m,
+          w: pw,
+          h: Math.max(0, ph),
+          opacity: DEFAULT_OPACITY,
+          visible: true,
+          z: 2,
+        },
+        {
+          id: "browse",
+          type: "browse",
+          x: m,
+          y: by,
+          w: availW,
+          h: Math.max(0, eh - by - m),
+          opacity: DEFAULT_OPACITY,
+          visible: true,
+          z: 1,
+        },
+      ],
+    };
+  }
+  const W = Math.max(800, ew);
+  const H = Math.max(600, eh);
   const lyricsW = 420;
   const playerW = 360;
   const playerH = 230;
@@ -476,18 +569,26 @@ export function saveStreamSettings(s: StreamSettings): void {
 }
 
 /** Clamp one pane fully inside an area, shrinking it first when the area
- *  itself is smaller. Position bounds use the pane's own clamped size, so
- *  a wide pane cannot strand its right edge off-screen. */
+ *  itself is smaller. At full-size areas the per-type content floor holds;
+ *  when the stage itself is smaller, yield down to the compact floor (the
+ *  App marks the pane data-compact so CSS sheds chrome to match) so the
+ *  pane never exceeds the stage. Position bounds use the pane's own
+ *  clamped size, so a wide pane cannot strand its right edge off-screen. */
 export function clampPaneToArea(
   p: PaneState,
   areaW: number,
   areaH: number,
 ): PaneState {
-  const min = getPaneMin(p.type);
+  const full = getPaneMin(p.type);
+  const cmin = getCompactPaneMin(p.type);
   const W = Math.floor(areaW);
   const H = Math.floor(areaH);
-  const w = Math.min(Math.max(min.w, Math.round(p.w)), Math.max(min.w, W - 16));
-  const h = Math.min(Math.max(min.h, Math.round(p.h)), Math.max(min.h, H - 16));
+  const availW = W - 16;
+  const availH = H - 16;
+  const floorW = availW < full.w ? Math.min(cmin.w, Math.max(0, availW)) : full.w;
+  const floorH = availH < full.h ? Math.min(cmin.h, Math.max(0, availH)) : full.h;
+  const w = Math.min(Math.max(floorW, Math.round(p.w)), Math.max(floorW, availW));
+  const h = Math.min(Math.max(floorH, Math.round(p.h)), Math.max(floorH, availH));
   return {
     ...p,
     w,

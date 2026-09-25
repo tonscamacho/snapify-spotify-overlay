@@ -27,9 +27,9 @@ import {
   XIcon,
 } from "./components/icons";
 import { api, parsePlayer, toThrottleError } from "./lib/spotify";
-import { PendingQueue, flushDelayMs } from "./lib/pendingQueue";
+import { ActionGate, PendingQueue, flushDelayMs, shiftQueueForNext } from "./lib/pendingQueue";
 import { reportOverlayMode, reportOverlayRegions, setOverlayDragCover, watchRegionElementSizes } from "./lib/overlay";
-import { ensurePlayer, setSdkVolume } from "./lib/player-sdk";
+import { ensurePlayer, isSdkReady, sdkPause, sdkResume, setSdkVolume } from "./lib/player-sdk";
 import { initialBrowse } from "./lib/browse";
 import type { TransLang } from "./lib/translate";
 import {
@@ -55,6 +55,7 @@ import {
   defaultSceneLayout,
   defaultSceneLayoutFor,
   getPaneMin,
+  isCompactPane,
   loadSceneLayout,
   loadStreamSettings,
   pushLayoutUndo,
@@ -127,6 +128,26 @@ const HANDLE_LABELS: Record<Handle, string> = {
 /** Arrow-key nudge step for keyboard move/resize, in logical px. */
 const KB_STEP = 8;
 
+/** Transport runner options. `transport` selects the per-action
+ *  single-flight slot; unslotted writes (volume/shuffle/repeat/browse)
+ *  fire at once. `transferMove` marks device moves so a press that lands
+ *  mid-transfer parks until the move settles (its target is stale). */
+type TransportKind = "play" | "pause" | "next" | "prev" | "seek" | "other";
+interface RunOpts {
+  after?: () => void;
+  transport?: TransportKind;
+  optimistic?: () => void;
+  needsRefresh?: boolean;
+  queueKey?: string;
+  queueLabel?: string;
+  transferMove?: boolean;
+}
+
+/** Targeted fast re-fetch after transport (Track B): one fetch near 400 ms,
+ *  one confirm near 1.5 s. The existing slow poll stays as fallback. */
+const FAST_REFETCH_MS = 400;
+const CONFIRM_REFETCH_MS = 1500;
+
 /** Focused pane for keyboard geometry: the pane holding DOM focus, else
  *  the topmost visible pane so Alt+Arrows always has a target. */
 function resolveKeyboardPane(panes: PaneState[]): PaneState | null {
@@ -175,7 +196,15 @@ export default function App() {
   const [queueContext, setQueueContext] = useState<QueueContext | null>(null);
   const [lyrics, setLyrics] = useState<LyricsState>({ kind: "idle" });
   const [browse, setBrowse] = useState<BrowseState>(initialBrowse);
-  const [busy, setBusy] = useState(false);
+  // Per-action busy flags (Track B): a slow next disables only next, never
+  // play/pause/previous. Play and pause share one flag as two faces of the
+  // same toggle. Seek and unslotted writes never gate input.
+  const [busyPrev, setBusyPrev] = useState(false);
+  const [busyPlayPause, setBusyPlayPause] = useState(false);
+  const [busyNext, setBusyNext] = useState(false);
+  // Cloud-confirm pending mark (Track B): set on press, cleared on confirm
+  // or rollback. Display only; never gates input.
+  const [pendingAction, setPendingAction] = useState<"play" | "pause" | "next" | "prev" | null>(null);
 
   const [layout, setLayout] = useState<PaneState[]>([]);
   const [preset, setPreset] = useState("full");
@@ -226,6 +255,14 @@ export default function App() {
   const settingsTimer = useRef(0);
   const [guides, setGuides] = useState<{ v: number[]; h: number[] }>({ v: [], h: [] });
   const [uiScale, setUiScale] = useState(1);
+  // Live viewport (CSS px) for the JS stage tiers. Container queries size
+  // panes by width, but height tiers and the uiScale-aware narrow/short
+  // cutoffs need the window size at render time; the resize listener below
+  // keeps this fresh so stage-short/stage-narrow never go stale.
+  const [viewport, setViewport] = useState(() => ({
+    w: typeof window !== "undefined" ? window.innerWidth : 1280,
+    h: typeof window !== "undefined" ? window.innerHeight : 800,
+  }));
   const [clickToSeek, setClickToSeek] = useState(true);
   const [wordKaraoke, setWordKaraoke] = useState(() => {
     try {
@@ -313,6 +350,15 @@ export default function App() {
   useEffect(() => {
     snapRef.current = snap;
   }, [snap]);
+  // Rollback snapshot for optimistic transport reads the live queue without
+  // re-subscribing the hoisted callbacks.
+  const queueRef = useRef<{ current: QueueItem | null; upcoming: QueueItem[] }>({
+    current: null,
+    upcoming: [],
+  });
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
   useEffect(() => {
     keybindsRef.current = keybinds;
   }, [keybinds]);
@@ -616,8 +662,11 @@ export default function App() {
     }
   }, []);
 
-  const fetchPlayer = useCallback(async () => {
-    const seq = snapSeq.current;
+  const fetchPlayer = useCallback(async (expectedSeq?: number) => {
+    // Track B: confirm fetches pass the transport id taken at press time.
+    // A stale confirm (a newer press already landed) applies nothing, so a
+    // slow cloud response never overwrites newer optimistic state.
+    const seq = expectedSeq ?? snapSeq.current;
     try {
       const raw = await invoke<unknown>("get_player");
       if (seq !== snapSeq.current) return true;
@@ -793,8 +842,30 @@ export default function App() {
   // device. Skipped while hidden; visibilitychange refetches on return.
   // Progress interpolates locally between polls from snap.progressMs.
   const snapSeq = useRef(0);
-  const transportRef = useRef(false);
-  const pendingSeekRef = useRef<(() => Promise<unknown>) | null>(null);
+  // Per-action single-flight gates (Track B): play+pause share "playPause",
+  // next/prev/seek each fly alone. Same-slot repeats park as trailing
+  // (latest wins); different slots run concurrently.
+  const gateRef = useRef<ActionGate | null>(null);
+  if (!gateRef.current) gateRef.current = new ActionGate();
+  // Live handle for trailing/parked retries: trailing thunks fire through
+  // the newest `run` without a callback cycle.
+  const runRef = useRef<(fn: () => Promise<unknown>, opts?: RunOpts) => Promise<void>>(() =>
+    Promise.resolve(),
+  );
+  // Rollback snapshot for the latest optimistic press (Track B).
+  const rollbackRef = useRef<{
+    seq: number;
+    snap: PlayerSnapshot;
+    queue: { current: QueueItem | null; upcoming: QueueItem[] };
+  } | null>(null);
+  // Device moves serialize against transport (Track B): a press landing
+  // mid-transfer parks until the move settles, with one toast per episode.
+  const transferInflightRef = useRef(false);
+  const postTransferRef = useRef<(() => void) | null>(null);
+  const postTransferToastedRef = useRef(false);
+  // Confirm-fetch timers for the fast re-fetch pair (Track B). Cleared on
+  // the next transport and on unmount; stale timers no-op via snapSeq.
+  const confirmTimers = useRef<number[]>([]);
   // PR3 pending write queue: throttled writes park here, coalesced by key,
   // and flush once on cooldown end. Count drives the queued chip.
   const pendingQueueRef = useRef<PendingQueue | null>(null);
@@ -910,6 +981,7 @@ export default function App() {
   useEffect(() => {
     const onResize = () => {
       scheduleRegionReport();
+      setViewport({ w: window.innerWidth, h: window.innerHeight });
     };
     window.addEventListener("resize", onResize);
     const stopWatching = watchRegionElementSizes(scheduleRegionReport);
@@ -1021,36 +1093,158 @@ export default function App() {
     },
     [],
   );
-  const run = useCallback(
-    async (
-      fn: () => Promise<unknown>,
-      opts?: {
-        after?: () => void;
-        transport?: "play" | "pause" | "next" | "prev" | "seek" | "other";
-        optimistic?: () => void;
-        needsRefresh?: boolean;
-        queueKey?: string;
-        queueLabel?: string;
-      },
-    ) => {
+  // Shared throttle routing for every write path (Track B): throttled
+  // writes park in the pending queue (coalesced by key) and flush once on
+  // cooldown end; anything else toasts at once. Retries fire through the
+  // live `run` so they re-enter gating, optimistic state, and rollback.
+  // Returns true when the write parked (caller keeps optimistic state).
+  const parkOrFlash = useCallback(
+    (e: unknown, fn: () => Promise<unknown>, opts?: RunOpts) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      const throttle = toThrottleError(msg);
+      if (!throttle) {
+        flashErrThrottledAware(msg);
+        return false;
+      }
+      const q = pendingQueueRef.current;
+      if (!q) {
+        flashErrThrottledAware(msg);
+        return false;
+      }
       const kind = opts?.transport ?? "other";
-      if (kind === "seek" && transportRef.current) {
-        pendingSeekRef.current = fn;
+      const key = opts?.queueKey ?? kind;
+      q.enqueue(key, () => runRef.current(fn, opts), opts?.queueLabel ?? key);
+      setPendingCount(q.size());
+      noteDegraded(msg);
+      schedulePendingFlush(throttle.retryAfterSec);
+      return true;
+    },
+    [flashErrThrottledAware, noteDegraded, schedulePendingFlush],
+  );
+  // One confirm attempt: skipped when superseded or hidden, clears the
+  // pending mark on success. The final attempt clears it regardless so a
+  // failed confirm never leaves a stuck mark; the next poll corrects state.
+  const confirmFetch = useCallback(
+    async (mySeq: number, isFinal: boolean) => {
+      if (mySeq !== snapSeq.current) return;
+      if (!document.hidden) {
+        const ok = await fetchPlayer(mySeq);
+        if (mySeq !== snapSeq.current) return;
+        if (ok || isFinal) setPendingAction(null);
+      } else if (isFinal) {
+        // Hidden windows rely on the visible poll (visibilitychange
+        // re-polls on return); drop the mark instead of going stale.
+        if (mySeq === snapSeq.current) setPendingAction(null);
+      }
+    },
+    [fetchPlayer],
+  );
+  // Targeted fast re-fetch after transport (Track B): one fetch near
+  // 400 ms, one confirm near 1.5 s. Replaces the previous press — only the
+  // latest pair matters — and the slow poll stays as fallback.
+  const scheduleConfirm = useCallback(
+    (mySeq: number) => {
+      for (const t of confirmTimers.current) window.clearTimeout(t);
+      confirmTimers.current = [
+        window.setTimeout(() => {
+          void confirmFetch(mySeq, false);
+        }, FAST_REFETCH_MS),
+        window.setTimeout(() => {
+          void confirmFetch(mySeq, true);
+        }, CONFIRM_REFETCH_MS),
+      ];
+    },
+    [confirmFetch],
+  );
+  useEffect(
+    () => () => {
+      for (const t of confirmTimers.current) window.clearTimeout(t);
+    },
+    [],
+  );
+  const run = useCallback(
+    async (fn: () => Promise<unknown>, opts?: RunOpts) => {
+      const kind = opts?.transport ?? "other";
+      const slot =
+        kind === "play" || kind === "pause"
+          ? "playPause"
+          : kind === "next" || kind === "prev" || kind === "seek"
+            ? kind
+            : null;
+      // Unslotted writes (volume/shuffle/repeat/browse/transfer bodies):
+      // fire at once, never gated, throttle-aware like before. A transfer
+      // move raises the flag so concurrent presses park (stale target)
+      // instead of racing the device move.
+      if (!slot) {
+        if (opts?.transferMove) transferInflightRef.current = true;
+        try {
+          await fn();
+          opts?.after?.();
+          if (opts?.needsRefresh) await fetchPlayer();
+        } catch (e) {
+          parkOrFlash(e, fn, opts);
+        } finally {
+          if (opts?.transferMove) {
+            transferInflightRef.current = false;
+            postTransferToastedRef.current = false;
+            const parked = postTransferRef.current;
+            postTransferRef.current = null;
+            if (parked) parked();
+          }
+        }
         return;
       }
-      if (kind !== "seek" && kind !== "other" && transportRef.current) return;
-      const isTransport = kind !== "other";
-      if (isTransport) {
-        transportRef.current = true;
-        snapSeq.current += 1;
+      // A press mid-transfer targets a stale device: keep only the latest
+      // and toast once per episode. Everything else coalesces per slot.
+      if (transferInflightRef.current) {
+        postTransferRef.current = () => {
+          void runRef.current(fn, opts);
+        };
+        if (!postTransferToastedRef.current) {
+          postTransferToastedRef.current = true;
+          pushToast("info", "Moving playback — your press is queued.");
+        }
+        return;
       }
-      setBusy(true);
+      const gate = gateRef.current;
+      if (!gate || !gate.enter(slot)) {
+        // Same action already in flight: coalesce to the latest press
+        // (Track B). Kept, not dropped, so no toast.
+        gate?.parkTrailing(slot, () => runRef.current(fn, opts));
+        return;
+      }
+      const setSlot = (v: boolean) => {
+        // Seek never shows busy: the bar stays live and no button gates.
+        if (slot === "playPause") setBusyPlayPause(v);
+        else if (slot === "next") setBusyNext(v);
+        else if (slot === "prev") setBusyPrev(v);
+      };
+      setSlot(true);
+      // Monotonic id (Track B): the optimistic state is tagged, and late
+      // cloud responses plus stale confirms never overwrite newer presses.
+      // Reuses snapSeq so in-flight polls invalidate the same way.
+      const mySeq = ++snapSeq.current;
+      rollbackRef.current = { seq: mySeq, snap: snapRef.current, queue: queueRef.current };
+      // Optimistic visual first: synchronous setStates land in the same
+      // frame as the press (under 200 ms); the cloud only confirms later.
+      // Next also bumps the visible queue index; previous has no knowable
+      // target, so it shows the pending mark only.
       opts?.optimistic?.();
+      if (kind === "next") {
+        setQueue((q) => shiftQueueForNext(q));
+        setSnap((prev) => ({ ...prev, progressMs: 0, fetchedAt: Date.now() }));
+        setPendingAction("next");
+      } else if (kind === "prev") {
+        setSnap((prev) => ({ ...prev, progressMs: 0, fetchedAt: Date.now() }));
+        setPendingAction("prev");
+      } else if (kind === "play" || kind === "pause") {
+        setPendingAction(kind);
+      }
       try {
         const res = await fn();
         opts?.after?.();
-        if (opts?.needsRefresh) await fetchPlayer();
-        if ((kind === "next" || kind === "prev") && !snap.deviceId && !sdkDeviceId) {
+        if (opts?.needsRefresh) await fetchPlayer(mySeq);
+        if ((kind === "next" || kind === "prev") && !snapRef.current.deviceId && !sdkDeviceId) {
           const empty =
             !!res && typeof res === "object" && (res as Record<string, unknown>)["empty"] === true;
           if (empty) {
@@ -1058,64 +1252,38 @@ export default function App() {
             pushToast("info", "No active Spotify device — choose one in Settings.");
           }
         }
+        // Fast re-fetch pair (Track B): ~400 ms fast, ~1.5 s confirm.
+        scheduleConfirm(mySeq);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        const throttle = toThrottleError(msg);
-        if (throttle) {
-          // Throttled writes park instead of dropping: coalesced by key so
-          // a double-pressed play flushes once after the cooldown.
-          const q = pendingQueueRef.current;
-          if (q) {
-            const key = opts?.queueKey ?? kind;
-            const label = opts?.queueLabel ?? key;
-            const retryFn = fn;
-            const retryAfter = opts?.after;
-            const retryTransport = opts?.transport;
-            const retryRefresh = opts?.needsRefresh;
-            const retryKey = opts?.queueKey;
-            const retryLabel = opts?.queueLabel;
-            q.enqueue(
-              key,
-              () =>
-                run(retryFn, {
-                  after: retryAfter,
-                  transport: retryTransport,
-                  needsRefresh: retryRefresh,
-                  queueKey: retryKey,
-                  queueLabel: retryLabel,
-                }),
-              label,
-            );
-            setPendingCount(q.size());
-            noteDegraded(msg);
-            schedulePendingFlush(throttle.retryAfterSec);
-          } else {
-            flashErrThrottledAware(msg);
+        // Throttled writes park (optimistic state stays until the flush
+        // confirms); hard failures roll back to the pre-press snapshot.
+        const parked = parkOrFlash(e, fn, opts);
+        if (!parked && mySeq === snapSeq.current) {
+          const rb = rollbackRef.current;
+          if (rb && rb.seq === mySeq) {
+            setSnap(rb.snap);
+            setQueue(rb.queue);
           }
-        } else {
-          flashErrThrottledAware(msg);
+          setPendingAction(null);
         }
       } finally {
-        if (isTransport) transportRef.current = false;
-        setBusy(false);
-        if (!transportRef.current && pendingSeekRef.current) {
-          const queued = pendingSeekRef.current;
-          pendingSeekRef.current = null;
-          void run(queued, { transport: "seek", queueKey: "seek", queueLabel: "seek" });
-        }
+        setSlot(false);
+        const trailing = gate.release(slot);
+        if (trailing) void trailing();
       }
     },
     [
       fetchPlayer,
-      flashErrThrottledAware,
-      noteDegraded,
-      schedulePendingFlush,
-      snap.deviceId,
-      sdkDeviceId,
       fetchDevices,
       pushToast,
+      sdkDeviceId,
+      scheduleConfirm,
+      parkOrFlash,
     ],
   );
+  useEffect(() => {
+    runRef.current = run;
+  }, [run]);
 
   // Flush parked writes once on cooldown end. The queue snapshot clears
   // before firing, so a timer re-fire cannot double-fire; a still-throttled
@@ -1140,9 +1308,23 @@ export default function App() {
     () =>
       void (async () => {
         const seed = (snapRef.current.volume ?? 50) / 100;
-        const target = snap.deviceId ?? sdkDeviceId ?? (await ensurePlayer(seed));
-        if (target) setSdkDeviceId((cur) => cur ?? target);
+        // Warm shortcut (Track B): a known live device plays at once. The
+        // full ensurePlayer path (SDK load, up to 8 s waitReady, connect,
+        // transfer) runs only when no device is known or the SDK device
+        // went stale since it was remembered.
+        let target = snapRef.current.deviceId;
+        if (!target && sdkDeviceId && isSdkReady()) target = sdkDeviceId;
+        if (!target) {
+          target = await ensurePlayer(seed);
+          if (target) setSdkDeviceId((cur) => cur ?? target);
+        }
         setSdkVolume(seed);
+        // Local fast lane (Track B probe): when the overlay device is the
+        // destination and the SDK is live, resume locally now; the cloud
+        // play below still confirms, so a local miss self-corrects.
+        if (target && target === sdkDeviceId && isSdkReady()) {
+          void sdkResume().catch(() => {});
+        }
         await run(() => api.play(target), {
           transport: "play",
           queueKey: "play",
@@ -1150,18 +1332,22 @@ export default function App() {
           optimistic: () => setSnap((prev) => ({ ...prev, isPlaying: true })),
         });
       })(),
-    [snap.deviceId, sdkDeviceId, run],
+    [sdkDeviceId, run],
   );
-  const pauseCb = useCallback(
-    () =>
-      void run(() => api.pause(snap.deviceId ?? sdkDeviceId), {
-        transport: "pause",
-        queueKey: "pause",
-        queueLabel: "Pause",
-        optimistic: () => setSnap((prev) => ({ ...prev, isPlaying: false })),
-      }),
-    [snap.deviceId, sdkDeviceId, run],
-  );
+  const pauseCb = useCallback(() => {
+    const target = snapRef.current.deviceId ?? sdkDeviceId;
+    // Local fast lane (Track B probe): pause the overlay device at once
+    // when the SDK is live; the cloud pause below still confirms.
+    if (target && target === sdkDeviceId && isSdkReady()) {
+      void sdkPause().catch(() => {});
+    }
+    void run(() => api.pause(target), {
+      transport: "pause",
+      queueKey: "pause",
+      queueLabel: "Pause",
+      optimistic: () => setSnap((prev) => ({ ...prev, isPlaying: false })),
+    });
+  }, [sdkDeviceId, run]);
   const nextCb = useCallback(
     () =>
       void run(() => api.next(snap.deviceId ?? sdkDeviceId), {
@@ -1271,6 +1457,7 @@ export default function App() {
       void run(() => api.transfer(id, false), {
         queueKey: `transfer:${id}`,
         queueLabel: "Transfer",
+        transferMove: true,
         after: () => {
           void fetchDevices();
           setSdkVolume((snapRef.current.volume ?? 50) / 100);
@@ -1297,6 +1484,7 @@ export default function App() {
         await run(() => api.transfer(id, snapRef.current.isPlaying), {
           queueKey: "transfer:sdk",
           queueLabel: "Transfer",
+          transferMove: true,
           after: () => {
             void fetchDevices();
           },
@@ -2011,6 +2199,10 @@ export default function App() {
   const renderPane = (pane: PaneState) => {
     if (!pane.visible) return null;
     const collapsed = pane.collapsed === true;
+    // Compact flag for the CSS height tier (container queries cannot test
+    // height): below 360 px wide or below the pane's own content floor the
+    // pane sheds cover art and secondary metadata first.
+    const compactPane = isCompactPane(pane.w, pane.h, pane.type);
     return (
       <section
         key={`${preset}:${pane.id}`}
@@ -2018,6 +2210,7 @@ export default function App() {
         data-pane={pane.type}
         data-pane-id={pane.id}
         data-density={density}
+        data-compact={compactPane ? "true" : undefined}
         data-collapsed={collapsed ? "true" : undefined}
         tabIndex={-1}
         style={{
@@ -2072,16 +2265,21 @@ export default function App() {
             <MemoPlayerPane
               snapshot={snap}
               progressMs={progressMs}
-              busy={busy}
+              busyPrev={busyPrev}
+              busyPlayPause={busyPlayPause}
+              busyNext={busyNext}
+              pendingAction={pendingAction}
               tier={tier}
               sdkDeviceId={sdkDeviceId}
               queuedCount={pendingCount}
               degraded={degradedUi}
               onRetry={retryPlayerCb}
-              // Compact (mini row in DOM) when collapsed or narrow enough
-              // for the 280 px container query; +2 px pane border, so the
-              // React gate and the CSS switch agree with no dead zone.
-              compact={pane.collapsed === true || pane.w <= MINI_PLAYER_W + 2}
+              // Compact (mini row in DOM) when collapsed, narrow enough
+              // for the 280 px container query, or shorter than the full
+              // player chrome (< 160 px, only after the clamp yields to the
+              // compact floor); +2 px pane border, so the React gate and
+              // the CSS switch agree with no dead zone.
+              compact={pane.collapsed === true || pane.w <= MINI_PLAYER_W + 2 || pane.h < 160}
               onPlay={playCb}
               onPause={pauseCb}
               onNext={nextCb}
@@ -2187,12 +2385,22 @@ export default function App() {
     );
   };
 
+  // Effective stage area (CSS px divided by uiScale): drives the JS
+  // stage tiers. Narrow/short move the dock off fixed-top and split the
+  // toast/hint anchors so they never cover each other or the transport.
+  const effStageW = viewport.w / (uiScale || 1);
+  const effStageH = viewport.h / (uiScale || 1);
+  const stageNarrow = effStageW < 480;
+  const stageShort = effStageH < 420;
+
   return (
     <div
       className="app"
       data-theme={theme}
       data-surface={surface}
       data-corners={corners}
+      data-narrow={stageNarrow ? "true" : undefined}
+      data-short={stageShort ? "true" : undefined}
       data-stream={streamHidden ? (stream.dimInstead ? "dimmed" : "hidden") : undefined}
     >
       {!loggedIn ? (
@@ -2212,7 +2420,7 @@ export default function App() {
       ) : (
         <div style={{ zoom: uiScale } as React.CSSProperties}>
           <div
-            className="stage"
+            className={`stage${stageNarrow ? " stage-narrow" : ""}${stageShort ? " stage-short" : ""}`}
             onPointerMove={onStageMove}
             onPointerUp={onStageUp}
             onPointerCancel={onStageUp}
@@ -2483,10 +2691,11 @@ export default function App() {
           pushUndoSnapshot();
           previewBaseRef.current = null;
           setPreviewing(false);
-          const fresh = defaultLayoutFor(window.innerWidth, window.innerHeight);
-          setLayout(fresh.panes);
+          const fresh = defaultLayoutFor(window.innerWidth, window.innerHeight, uiScaleRef.current);
+          const panes = clampLayoutToArea(fresh, window.innerWidth, window.innerHeight, uiScaleRef.current).panes;
+          setLayout(panes);
           setPreset(fresh.preset);
-          persist(fresh.panes, fresh.preset);
+          persist(panes, fresh.preset);
         }}
         keybinds={keybinds}
         startupErrors={keybindStartup}

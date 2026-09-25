@@ -144,3 +144,25 @@ export function teardownPlayer(): void {
   deviceId = null;
   ready = false;
 }
+
+/** True once the headless player connected and registered its device id.
+ *  Lets warm transport presses skip the full ensurePlayer path (Track B):
+ *  a known live device plays at once, while a missing or stale device
+ *  still runs SDK load, waitReady, connect, and transfer. */
+export function isSdkReady(): boolean {
+  return ready && deviceId !== null;
+}
+
+/** Local fast lane for play/pause (Track B probe). Resolves the audible
+ *  state on the overlay device at once; callers still confirm through the
+ *  cloud, so a local miss self-corrects on the next fetch. Rejects when
+ *  the SDK player is not live. Next/previous stay cloud-only. */
+export async function sdkResume(): Promise<void> {
+  if (!player || !ready) throw new Error("SDK player not ready");
+  await player.resume();
+}
+
+export async function sdkPause(): Promise<void> {
+  if (!player || !ready) throw new Error("SDK player not ready");
+  await player.pause();
+}

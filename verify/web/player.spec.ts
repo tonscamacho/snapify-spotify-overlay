@@ -1,5 +1,5 @@
-import { test, expect } from "@playwright/test";
-import { stubTauri, commandsNamed, failNext } from "./tauri-mock";
+import { test, expect, type Page } from "@playwright/test";
+import { stubTauri, commandsNamed, delayNext, failNext } from "./tauri-mock";
 import { TRACK_NAME, buildFixtures } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
@@ -21,6 +21,93 @@ test("stage renders past the login gate with the playing track", async ({ page }
   await expect(player.getByText(TRACK_NAME)).toBeVisible();
   await expect(player.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
   await page.screenshot({ path: "verify/web/test-results/player.png" });
+});
+
+function emitShortcut(page: Page, event: string) {
+  return page.evaluate((name: string) => {
+    const w = window as unknown as {
+      __TAURI_EMIT_TO_APP__?: (event: string, payload: unknown) => void;
+    };
+    w.__TAURI_EMIT_TO_APP__?.(name, null);
+  }, event);
+}
+
+test("pause flips to Play in under 200ms even when the cloud is slow", async ({ page }) => {
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME)).toBeVisible();
+  await expect(player.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
+
+  // Slow cloud: pause answers after 1.2 s. The icon must flip at once
+  // (optimistic state), not after the cloud resolves.
+  await delayNext(page, "pause", 1200, 1);
+  const t0 = Date.now();
+  await player.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect(player.getByRole("button", { name: "Play", exact: true })).toBeVisible();
+  expect(Date.now() - t0).toBeLessThan(200);
+
+  // Cloud confirms later: exactly one pause, still showing Play.
+  await expect
+    .poll(async () => (await commandsNamed(page, "pause")).length, { timeout: 10000 })
+    .toBe(1);
+  await expect(player.getByRole("button", { name: "Play", exact: true })).toBeVisible();
+});
+
+test("failed pause rolls back to Pause with an error note", async ({ page }) => {
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME)).toBeVisible();
+
+  await failNext(page, "pause", "spotify 503 Service Unavailable: boom", 1);
+  await player.getByRole("button", { name: "Pause", exact: true }).click();
+
+  // The press fired, then the hard failure rolled the optimistic flip
+  // back: Pause is showing again and the error is noted app-wide.
+  await expect
+    .poll(async () => (await commandsNamed(page, "pause")).length, { timeout: 10000 })
+    .toBe(1);
+  await expect(player.getByRole("button", { name: "Pause", exact: true })).toBeVisible({
+    timeout: 10000,
+  });
+  await expect(page.locator(".toasts")).toContainText("boom", { timeout: 10000 });
+});
+
+test("rapid next presses coalesce in order; other buttons stay live", async ({ page }) => {
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME)).toBeVisible();
+  const next = player.getByRole("button", { name: "Next track" });
+
+  // Slow cloud: every next answers after 600 ms, so a button press plus
+  // two global-chord presses overlap in flight. (Buttons gate on busy;
+  // chords are the real way two presses overlap.) The first runs, the
+  // chords coalesce to one trailing run (latest wins): exactly two
+  // invokes, in order, none silently dropped.
+  await delayNext(page, "next_track", 600, 5);
+  await next.click();
+  // Per-action busy: only next gates while in flight. The old global busy
+  // disabled every transport button here.
+  await expect(next).toBeDisabled();
+  await expect(player.getByRole("button", { name: "Previous track" })).toBeEnabled();
+  await expect(player.getByRole("button", { name: "Pause", exact: true })).toBeEnabled();
+  // Pending mark: the card dims until the cloud confirms.
+  const dimmed = await player
+    .locator(".player-card")
+    .evaluate((el) => Number(getComputedStyle(el).opacity));
+  expect(dimmed).toBeLessThan(1);
+  await emitShortcut(page, "shortcut-next");
+  await emitShortcut(page, "shortcut-next");
+  await expect
+    .poll(async () => (await commandsNamed(page, "next_track")).length, { timeout: 10000 })
+    .toBe(2);
+  // No stuck disabled state once the pair settles and confirms.
+  await expect(next).toBeEnabled({ timeout: 10000 });
+  await expect(player.getByRole("button", { name: "Previous track" })).toBeEnabled();
+  await expect
+    .poll(
+      async () =>
+        Number(
+          await player.locator(".player-card").evaluate((el) => getComputedStyle(el).opacity),
+        ),
+      { timeout: 10000 },
+    ).toBe(1);
 });
 
 test("pause then play invoke the matching commands", async ({ page }) => {

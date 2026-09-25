@@ -2083,3 +2083,256 @@ select:focus-visible,
 }
 
 /* ---------- PR8: scenes, stream-safe, collapse, mini, banner ---------- */
+
+/* ---------- Track A: responsive tiers (400x300 → 1280x800, uiScale 0.85–1.30) ----------
+   Compact tiers shed secondary chrome before titles clip. No new motion is
+   added (transform/opacity only elsewhere), and the reduced-motion block
+   above still applies. Compact floors mirror COMPACT_PANE_MIN in
+   src/lib/layout.ts — keep the two in sync. */
+
+/* Tight tier: secondary metadata goes before titles clip. */
+@container (max-width: 480px) {
+  .album-full {
+    display: none;
+  }
+  .browse-tabs {
+    gap: 4px;
+  }
+  .times {
+    font-size: 10px;
+  }
+}
+
+/* Compact tier: cover art first, then secondary metadata. Title, artist,
+   and transport stay reachable. */
+@container (max-width: 360px) {
+  .detail-head img,
+  .browse-thumb {
+    display: none;
+  }
+  .row-mark {
+    display: none;
+  }
+  .detail-head .dim {
+    display: none;
+  }
+  .search-wrap {
+    gap: 6px;
+  }
+  .pane-subhead {
+    font-size: 12px;
+  }
+}
+
+/* Height compactness comes from JS (data-compact): container queries
+   cannot test height. Same shedding as the 360 px width tier, scoped to
+   the browse pane whose cover/metadata dominate short boxes. */
+.pane[data-compact="true"] {
+  min-width: 200px;
+  min-height: 120px;
+}
+
+.pane[data-pane="player"][data-compact="true"] {
+  min-width: 200px;
+  min-height: 132px;
+}
+
+.pane[data-pane="lyrics"][data-compact="true"] {
+  min-width: 200px;
+  min-height: 140px;
+}
+
+.pane[data-pane="queue"][data-compact="true"] {
+  min-width: 200px;
+  min-height: 132px;
+}
+
+.pane[data-pane="visualizer"][data-compact="true"] {
+  min-width: 200px;
+  min-height: 120px;
+}
+
+.pane[data-pane="browse"][data-compact="true"] {
+  min-width: 220px;
+  min-height: 140px;
+}
+
+/* Collapse wins over compact: the 64 px mini row keeps its floor. */
+.pane[data-pane][data-collapsed="true"][data-compact="true"] {
+  min-height: 0;
+}
+
+.pane[data-pane="browse"][data-compact="true"] .detail-head img,
+.pane[data-pane="browse"][data-compact="true"] .browse-thumb,
+.pane[data-pane="browse"][data-compact="true"] .row-mark,
+.pane[data-pane="browse"][data-compact="true"] .detail-head .dim,
+.pane[data-pane="browse"][data-compact="true"] .album-full {
+  display: none;
+}
+
+.pane[data-compact="true"] .empty {
+  padding: 8px 6px;
+}
+
+.pane[data-compact="true"] .empty-icon {
+  display: none;
+}
+
+.pane[data-compact="true"] .empty-sub {
+  margin: 2px 0 8px;
+}
+
+.pane[data-compact="true"] .skel-row {
+  height: 34px;
+  margin: 4px 0;
+}
+
+.pane[data-compact="true"] .skel-head {
+  height: 52px;
+}
+
+.pane[data-compact="true"] .search-wrap {
+  margin-bottom: 6px;
+}
+
+/* Short stages (JS: effective height under 420 px): slim the chrome,
+   shrink the art, hide the volume row. Transport, title, artist,
+   and the progress bar stay. */
+.stage-short .pane-handle {
+  padding: 6px 12px 0;
+  min-height: 22px;
+}
+
+.stage-short .art-top.art-compact {
+  width: min(44%, 120px);
+}
+
+.stage-short .volume-row {
+  display: none;
+}
+
+.stage-short .empty-icon {
+  display: none;
+}
+
+/* Narrow stages (JS: effective width under 480 px): keep the edit slider
+   and the library select from eating their rows. */
+.stage-narrow .pane-op {
+  width: 60px;
+}
+
+.stage-narrow .browse-tab-select {
+  max-width: 46vw;
+}
+
+/* One scroller per pane. The queue owns a virtualized viewport, so its
+   pane body is a flex column with no scroll of its own; every other pane
+   scrolls the body while inner lists fill without nesting. */
+.pane[data-pane="queue"] .pane-body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.queue-scroll {
+  min-height: 0;
+}
+
+.queue-scroll.queue-fill {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.queue-scroll:focus-visible {
+  outline: 2px solid #0a84ff;
+  outline-offset: -2px;
+}
+
+/* Search input pins while the list scrolls; in the search view the tab
+   row stands down so the two stuck bars never overlap. :has is
+   progressive enhancement: without it the tabs stay sticky as before. */
+.search-wrap {
+  position: sticky;
+  top: calc(var(--pad-pane) * -1);
+  z-index: 3;
+  background: var(--surface);
+  margin-inline: calc(var(--pad-pane) * -1);
+  padding: 8px var(--pad-pane);
+}
+
+.pane-body:has(.search-wrap) .browse-tabs {
+  position: static;
+  margin-inline: 0;
+  padding: 2px 0 0;
+}
+
+/* Dock, toasts, and hint (Track A3). Wide defaults are untouched; below
+   the narrow/short cutoffs the dock leaves fixed-top for a bottom icon
+   row, and toasts/hint split to opposite corners above it so the three
+   never cover each other or the transport. */
+.app[data-narrow="true"] .dock,
+.app[data-short="true"] .dock {
+  top: auto;
+  bottom: 10px;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  overflow-x: auto;
+  scrollbar-width: none;
+  max-width: 94vw;
+}
+
+.app[data-narrow="true"] .dock::-webkit-scrollbar,
+.app[data-short="true"] .dock::-webkit-scrollbar {
+  display: none;
+}
+
+.app[data-narrow="true"] .dock .tbtn,
+.app[data-short="true"] .dock .tbtn {
+  width: 30px;
+  flex: none;
+  padding: 0;
+  justify-content: center;
+}
+
+.app[data-narrow="true"] .dock .dock-label,
+.app[data-short="true"] .dock .dock-label {
+  display: none;
+}
+
+.app[data-narrow="true"] .chip,
+.app[data-short="true"] .chip {
+  flex: none;
+  padding: 5px 8px;
+}
+
+.app[data-narrow="true"] .dock-sep,
+.app[data-short="true"] .dock-sep {
+  margin: 0 2px;
+}
+
+.app[data-narrow="true"] .toasts,
+.app[data-short="true"] .toasts {
+  left: auto;
+  right: 10px;
+  transform: none;
+  bottom: 62px;
+  align-items: flex-end;
+}
+
+.app[data-narrow="true"] .toast,
+.app[data-short="true"] .toast {
+  max-width: min(44vw, 300px);
+}
+
+.app[data-narrow="true"] .hint-chip,
+.app[data-short="true"] .hint-chip {
+  left: 10px;
+  transform: none;
+  bottom: 62px;
+  max-width: 44vw;
+  font-size: 11px;
+  padding: 7px 12px;
+  white-space: normal;
+}

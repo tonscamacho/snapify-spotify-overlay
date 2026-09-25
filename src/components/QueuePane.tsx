@@ -125,12 +125,11 @@ export default function QueuePane(p: Props) {
       ) : (
         <div
           ref={scrollRef}
-          className="queue-scroll"
+          className="queue-scroll queue-fill"
           role="list"
           aria-label="Upcoming queue"
           tabIndex={0}
           onScroll={onScroll}
-          style={{ overflowY: "auto", maxHeight: VIEW_MAX_H }}
         >
           <ol
             ref={listRef}
