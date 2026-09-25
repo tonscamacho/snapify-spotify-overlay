@@ -23,7 +23,16 @@ import { PaneStateBanner } from "./BrowsePane";
 interface Props {
   snapshot: PlayerSnapshot;
   progressMs: number;
-  busy: boolean;
+  /** Legacy global busy. The per-action flags win when set; a slow next
+   *  must never disable play/pause/previous (Track B). */
+  busy?: boolean;
+  busyPrev?: boolean;
+  busyPlayPause?: boolean;
+  busyNext?: boolean;
+  /** Cloud-confirm pending mark (Track B): the press applied locally and
+   *  Spotify has not confirmed yet. Display only — dims the card while
+   *  pending and clears on confirm or rollback. Never gates input. */
+  pendingAction?: "play" | "pause" | "next" | "prev" | null;
   tier?: "premium" | "free";
   sdkDeviceId?: string | null;
   queuedCount?: number;
@@ -157,6 +166,13 @@ export default function PlayerPane(p: Props) {
   const shownVol = vol ?? s.volume ?? 50;
   const tier = p.tier ?? "premium";
   const isFree = tier === "free";
+  // Per-action busy (Track B): each transport button reads only its own
+  // flag, falling back to the legacy global. The pending mark dims the
+  // card (no new DOM, so no layout shift at 400x300) until cloud confirm.
+  const busyPrev = p.busyPrev ?? p.busy ?? false;
+  const busyPlayPause = p.busyPlayPause ?? p.busy ?? false;
+  const busyNext = p.busyNext ?? p.busy ?? false;
+  const pending = p.pendingAction ?? null;
   const isEpisodic = track ? uriIsEpisodic(track.uri) : false;
   const progressRef = useRef(p.progressMs);
   progressRef.current = p.progressMs;
@@ -344,7 +360,12 @@ export default function PlayerPane(p: Props) {
       {p.degraded === true && (
         <PaneStateBanner tone="throttled" onRetry={p.onRetry} />
       )}
-      <div className="player-full player-card">
+      <div
+        className="player-full player-card"
+        aria-busy={pending !== null}
+        title={pending !== null ? "Confirming with Spotify…" : undefined}
+        style={pending !== null ? { opacity: 0.55, transition: "opacity 150ms" } : undefined}
+      >
       <div className="art-top art-compact">
         {track.image ? (
           <img className="art-img" src={track.image} alt="" draggable={false} />
@@ -378,7 +399,7 @@ export default function PlayerPane(p: Props) {
             <button
               className="icon-btn"
               onClick={p.onPrev}
-              disabled={p.busy || isFree}
+              disabled={busyPrev || isFree}
               title={isFree ? UPGRADE_TEXT : "Previous"}
               aria-label="Previous track"
             >
@@ -388,7 +409,7 @@ export default function PlayerPane(p: Props) {
               <button
                 className="play-disc"
                 onClick={p.onPause}
-                disabled={p.busy}
+                disabled={busyPlayPause}
                 title="Pause"
                 aria-label="Pause"
               >
@@ -398,7 +419,7 @@ export default function PlayerPane(p: Props) {
               <button
                 className="play-disc"
                 onClick={p.onPlay}
-                disabled={p.busy}
+                disabled={busyPlayPause}
                 title={isFree ? UPGRADE_TEXT : "Play"}
                 aria-label="Play"
               >
@@ -408,7 +429,7 @@ export default function PlayerPane(p: Props) {
             <button
               className="icon-btn"
               onClick={p.onNext}
-              disabled={p.busy || isFree}
+              disabled={busyNext || isFree}
               title={isFree ? UPGRADE_TEXT : "Next"}
               aria-label="Next track"
             >
@@ -595,7 +616,11 @@ export default function PlayerPane(p: Props) {
         a 280 px container query or the collapsed flag swaps it in for
         the full player (see App.css). */}
       {p.compact === true && (
-        <div className="mini-row">
+        <div
+          className="mini-row"
+          aria-busy={pending !== null}
+          style={pending !== null ? { opacity: 0.55, transition: "opacity 150ms" } : undefined}
+        >
         {track.image ? (
           <img className="mini-cover" src={track.image} alt="" draggable={false} />
         ) : (
@@ -613,7 +638,7 @@ export default function PlayerPane(p: Props) {
           <button
             className="play-disc mini-play"
             onClick={p.onPause}
-            disabled={p.busy}
+            disabled={busyPlayPause}
             title="Pause"
             aria-label="Pause"
           >
@@ -623,7 +648,7 @@ export default function PlayerPane(p: Props) {
           <button
             className="play-disc mini-play"
             onClick={p.onPlay}
-            disabled={p.busy || isFree}
+            disabled={busyPlayPause || isFree}
             title={isFree ? UPGRADE_TEXT : "Play"}
             aria-label="Play"
           >
