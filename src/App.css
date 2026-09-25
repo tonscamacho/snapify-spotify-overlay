@@ -251,12 +251,19 @@ select:focus-visible,
 .player-card {
   display: flex;
   flex-direction: column;
+  gap: 2px;
 }
 
-/* Large art on top, full-bleed within the body padding. */
+/* Compact miniplayer art: a modest centered square with dark breathing
+   room around it, never full-bleed. Transport overlays the art. */
 .art-top {
   position: relative;
   margin-top: 4px;
+}
+
+.art-top.art-compact {
+  width: min(52%, 148px);
+  margin: 10px auto 0;
 }
 
 .art-img {
@@ -522,79 +529,74 @@ select:focus-visible,
   cursor: default;
 }
 
-/* Connect costs one slim row unless opened: the toggle (icon + device
-   name) plus the volume slider share a single line; the device
-   card drops in-flow below only while open. */
-.device-row {
-  display: flex;
+/* Compact times: elapsed + remaining flank a slim bar that takes the row. */
+.times-flank {
   align-items: center;
   gap: 8px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--stroke-soft);
-  color: var(--faint);
-  flex-wrap: wrap;
-  min-width: 0;
 }
 
-.device-toggle {
+.times-flank .bar {
   flex: 1;
   min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 0;
-  background: transparent;
-  border: none;
-  border-radius: var(--r-sm);
-  color: var(--dim);
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
+  margin-top: 0;
 }
 
-.device-toggle:hover {
-  color: var(--txt);
+/* Hover marquee for long titles. JS adds .is-marquee only while the
+   pointer hovers an overflowing title (scrollWidth > clientWidth) and
+   sets --marquee-dist to the overflow width; short titles never animate.
+   Transform-only keyframes; reduced-motion kills it (plain ellipsis). */
+.track-title.is-marquee {
+  text-overflow: clip;
 }
 
-.device-now {
-  flex: 1;
-  min-width: 0;
-  font-size: 12px;
-  color: var(--dim);
+.track-title.is-marquee .marquee-inner {
+  display: inline-block;
+  animation: title-marquee 6s linear infinite alternate;
+}
+
+@keyframes title-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(-1 * var(--marquee-dist, 0px)));
+  }
+}
+
+/* Small green destination line: text only, no controls. */
+.device-line {
+  font-size: 11px;
+  color: var(--signal);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  text-align: left;
+  margin-top: 1px;
 }
 
-/* Connect card: a small dark card under the device row. In-flow (never a
-   floating overlay) so it can never cover the art transport. */
-.device-pop {
-  flex-basis: 100%;
+.volume-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  color: var(--faint);
+}
+
+.volume-row .vol {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+
+/* Playback device section (Settings dialog). Reuses the device list,
+   cell, empty, actions, and foot rows from the old player panel. */
+.settings-device {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 8px;
   padding: 10px;
   background: #26262b;
   border: 1px solid var(--stroke);
   border-radius: var(--r-md);
-  box-shadow: var(--shadow-sm);
-  text-align: left;
-}
-
-.device-pop-head {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--dim);
-}
-
-.device-pop-head strong {
-  color: var(--txt);
-  font-weight: 600;
 }
 
 .device-list {
@@ -1734,8 +1736,12 @@ select:focus-visible,
   color: #000;
 }
 
-.app[data-theme="light"] .device-pop {
+.app[data-theme="light"] .settings-device {
   background: #fff;
+}
+
+.app[data-theme="light"] .device-line {
+  color: #0e7a3d;
 }
 
 .app[data-theme="light"] .device-cell:hover {
@@ -1744,10 +1750,6 @@ select:focus-visible,
 
 .app[data-theme="light"] .device-cell[aria-pressed="true"] {
   background: rgba(0, 0, 0, 0.08);
-}
-
-.app[data-theme="light"] .device-toggle:hover {
-  color: #000;
 }
 
 .app[data-theme="light"] .like-check:hover:not(:disabled) {
@@ -1895,6 +1897,9 @@ select:focus-visible,
   *::before,
   *::after {
     transition: none !important;
+  }
+  .track-title.is-marquee .marquee-inner {
+    animation: none;
   }
 }
 

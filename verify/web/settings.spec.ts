@@ -211,6 +211,36 @@ test("spotify usage row shows request counts from the log", async ({ page }) => 
     .toBeGreaterThan(0);
 });
 
+test("playback device section lists, transfers, and remembers", async ({ page }) => {
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const panel = dialog.getByRole("group", { name: "Playback device" });
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("Sound plays on:");
+  await expect(panel).toContainText("Verify Speaker");
+  await expect(panel.getByRole("button", { name: "Play here via this overlay" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Keep playback there" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Refresh devices" })).toBeVisible();
+  await page.screenshot({ path: "verify/web/test-results/settings-device.png" });
+
+  // Selecting the listed device and keeping there transfers to it.
+  await panel.locator(".device-cell", { hasText: "Verify Speaker" }).click();
+  await panel.getByRole("button", { name: "Keep playback there" }).click();
+  await expect
+    .poll(async () => (await commandsNamed(page, "transfer_playback")).length, { timeout: 10000 })
+    .toBeGreaterThan(0);
+  expect(await page.evaluate(() => localStorage.getItem("snapify-device-choice"))).toContain(
+    "dev-verify-1",
+  );
+
+  await page.reload();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const panel2 = page
+    .getByRole("dialog", { name: "Settings" })
+    .getByRole("group", { name: "Playback device" });
+  await expect(panel2).toContainText("remembered");
+});
+
 test("lyrics cache row shows size and clears through", async ({ page }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
   const dialog = page.getByRole("dialog", { name: "Settings" });

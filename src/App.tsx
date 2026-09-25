@@ -1055,7 +1055,7 @@ export default function App() {
             !!res && typeof res === "object" && (res as Record<string, unknown>)["empty"] === true;
           if (empty) {
             void fetchDevices();
-            pushToast("info", "No active Spotify device — choose one in the player.");
+            pushToast("info", "No active Spotify device — choose one in Settings.");
           }
         }
       } catch (e) {
@@ -2071,7 +2071,6 @@ export default function App() {
           {pane.type === "player" && (
             <MemoPlayerPane
               snapshot={snap}
-              devices={devices}
               progressMs={progressMs}
               busy={busy}
               tier={tier}
@@ -2091,9 +2090,6 @@ export default function App() {
               onVolume={volumeCb}
               onShuffle={shuffleCb}
               onRepeat={repeatCb}
-              onTransfer={transferCb}
-              onPlayHere={playHereCb}
-              onRefreshDevices={fetchDevices}
               onToast={pushToast}
             />
           )}
@@ -2504,6 +2500,13 @@ export default function App() {
         onLogout={() => void logout()}
         onToast={pushToast}
         onClose={closeSettings}
+        devices={devices}
+        sdkDeviceId={sdkDeviceId}
+        activeDeviceId={snap.deviceId}
+        activeDeviceName={snap.deviceName}
+        onTransfer={transferCb}
+        onPlayHere={playHereCb}
+        onRefreshDevices={fetchDevices}
       />
       )}
     </div>

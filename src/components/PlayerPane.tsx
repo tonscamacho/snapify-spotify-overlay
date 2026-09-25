@@ -1,23 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { DeviceInfo, PlayerSnapshot } from "../lib/types";
+import type { PlayerSnapshot } from "../lib/types";
 import { formatMs } from "../lib/lrc";
 import { api } from "../lib/spotify";
 import {
   LikePlusIcon,
   NextIcon,
   NoteIcon,
-  OpenIcon,
   PauseIcon,
   PlayIcon,
   PrevIcon,
-  RefreshIcon,
   RepeatIcon,
   RepeatOneIcon,
   SeekBackIcon,
   SeekForwardIcon,
   ShuffleIcon,
-  ThroughIcon,
   VolumeIcon,
 } from "./icons";
 import SpotifyMark from "./SpotifyMark";
@@ -25,7 +22,6 @@ import { PaneStateBanner } from "./BrowsePane";
 
 interface Props {
   snapshot: PlayerSnapshot;
-  devices: DeviceInfo[];
   progressMs: number;
   busy: boolean;
   tier?: "premium" | "free";
@@ -49,10 +45,6 @@ interface Props {
   onVolume: (v: number) => void;
   onShuffle: () => void;
   onRepeat: () => void;
-  onTransfer: (id: string) => void;
-  /** Build the headless SDK player and move playback onto it. */
-  onPlayHere: () => void;
-  onRefreshDevices: () => void;
   onToast?: (kind: "success" | "info" | "error", text: string) => void;
 }
 
@@ -88,16 +80,6 @@ export function writeDeviceChoice(c: DeviceChoice): void {
     localStorage.setItem(DEVICE_CHOICE_KEY, JSON.stringify(c));
   } catch {
     // Private mode. Choice lasts the session.
-  }
-}
-
-const DEVICE_OPEN_KEY = "snapify-device-open";
-
-function readDeviceOpen(): boolean {
-  try {
-    return localStorage.getItem(DEVICE_OPEN_KEY) === "1";
-  } catch {
-    return false;
   }
 }
 
@@ -164,10 +146,12 @@ export default function PlayerPane(p: Props) {
   // Like in flight: the heart is disabled until the write settles so a
   // double-click cannot interleave save/remove out of order.
   const [likeBusy, setLikeBusy] = useState(false);
-  const [choice, setChoice] = useState<DeviceChoice | null>(() => readDeviceChoice());
-  const [devicesOpen, setDevicesOpen] = useState(() => readDeviceOpen());
-  const [selectedId, setSelectedId] = useState<string>("");
   const [resumeMs, setResumeMs] = useState<number | null>(null);
+  // Marquee: true only while the pointer hovers an overflowing title.
+  // Overflow is measured on enter (scrollWidth > clientWidth); short
+  // titles never set it so they stay static ellipsis.
+  const [marquee, setMarquee] = useState(false);
+  const titleRef = useRef<HTMLDivElement>(null);
   const s = p.snapshot;
   const track = s.track;
   const shownVol = vol ?? s.volume ?? 50;
@@ -219,41 +203,35 @@ export default function PlayerPane(p: Props) {
     return () => window.clearInterval(t);
   }, [isEpisodic, track?.id, s.isPlaying]);
 
-  // Restore the remembered destination as the panel selection when the
-  // device list arrives. Selection only: no silent transfer on boot.
-  // Without a memory, the active device is the starting selection so Keep
-  // there is a one-click confirm, not a hunt through the dropdown.
+  // Marquee settles back to ellipsis on track change.
   useEffect(() => {
-    if (selectedId) return;
-    if (
-      choice?.kind === "connect" &&
-      choice.deviceId &&
-      p.devices.some((d) => d.id === choice.deviceId)
-    ) {
-      setSelectedId(choice.deviceId);
-    } else if (s.deviceId) {
-      setSelectedId(s.deviceId);
-    }
-  }, [p.devices, s.deviceId, choice, selectedId]);
+    setMarquee(false);
+  }, [track?.id]);
 
-  const activeName =
+  // Text-only destination line. Device switching lives in Settings; the
+  // pane only names where sound plays.
+  const deviceLine =
     s.deviceName ??
     (p.sdkDeviceId && s.deviceId === p.sdkDeviceId ? "Snapify Overlay" : null) ??
-    (p.devices.length === 0 ? "No devices — open Spotify" : "Choose a device");
+    "Choose a device";
 
-  const playHere = () => {
-    const next: DeviceChoice = { kind: "sdk" };
-    setChoice(next);
-    writeDeviceChoice(next);
-    p.onPlayHere();
+  const startMarquee = () => {
+    const el = titleRef.current;
+    if (!el) return;
+    try {
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    } catch {
+      // No matchMedia: fall through to measuring.
+    }
+    if (el.scrollWidth > el.clientWidth + 1) {
+      const dist = el.scrollWidth - el.clientWidth;
+      el.style.setProperty("--marquee-dist", `${dist + 16}px`);
+      setMarquee(true);
+    }
   };
 
-  const keepThere = () => {
-    if (!selectedId) return;
-    const next: DeviceChoice = { kind: "connect", deviceId: selectedId };
-    setChoice(next);
-    writeDeviceChoice(next);
-    p.onTransfer(selectedId);
+  const stopMarquee = () => {
+    setMarquee(false);
   };
 
   const commitSeek = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -358,17 +336,7 @@ export default function PlayerPane(p: Props) {
     Math.abs(resumeMs - p.progressMs) > 10000 &&
     resumeMs < track.durationMs - 5000;
 
-  const toggleDevices = () => {
-    setDevicesOpen((v) => {
-      const next = !v;
-      try {
-        localStorage.setItem(DEVICE_OPEN_KEY, next ? "1" : "0");
-      } catch {
-        // Private mode. Open state lasts the session.
-      }
-      return next;
-    });
-  };
+  const progressPct = track.durationMs > 0 ? Math.min(100, (p.progressMs / track.durationMs) * 100) : 0;
 
   return (
     <div className="pane-fill">
@@ -377,7 +345,7 @@ export default function PlayerPane(p: Props) {
         <PaneStateBanner tone="throttled" onRetry={p.onRetry} />
       )}
       <div className="player-full player-card">
-      <div className="art-top">
+      <div className="art-top art-compact">
         {track.image ? (
           <img className="art-img" src={track.image} alt="" draggable={false} />
         ) : (
@@ -472,15 +440,11 @@ export default function PlayerPane(p: Props) {
 
       {isFree ? (
         <div className="free-bar" role="note" aria-label="Playback restricted">
-          <div className="bar info-only" aria-hidden="true">
-            <i
-              style={{
-                width: `${track.durationMs > 0 ? Math.min(100, (p.progressMs / track.durationMs) * 100) : 0}%`,
-              }}
-            />
-          </div>
-          <div className="times">
+          <div className="times times-flank">
             <span>{formatMs(p.progressMs)}</span>
+            <div className="bar info-only" aria-hidden="true">
+              <i style={{ width: `${progressPct}%` }} />
+            </div>
             <span>-{formatMs(Math.max(0, track.durationMs - p.progressMs))}</span>
           </div>
           <p className="upgrade">Playback needs Premium.</p>
@@ -493,7 +457,8 @@ export default function PlayerPane(p: Props) {
           </button>
         </div>
       ) : (
-        <>
+        <div className="times times-flank">
+          <span>{formatMs(p.progressMs)}</span>
           <div
             className="bar"
             role="slider"
@@ -506,27 +471,25 @@ export default function PlayerPane(p: Props) {
             onClick={commitSeek}
             onKeyDown={onSeekKey}
           >
-            <i
-              style={{
-                width: `${track.durationMs > 0 ? Math.min(100, (p.progressMs / track.durationMs) * 100) : 0}%`,
-              }}
-            />
+            <i style={{ width: `${progressPct}%` }} />
           </div>
-          <div className="times">
-            <span>{formatMs(p.progressMs)}</span>
-            <span>-{formatMs(Math.max(0, track.durationMs - p.progressMs))}</span>
-          </div>
-        </>
+          <span>-{formatMs(Math.max(0, track.durationMs - p.progressMs))}</span>
+        </div>
       )}
 
       <div className="track-meta card-meta">
-        <div className="title-row">
+        <div
+          className="title-row"
+          onMouseEnter={startMarquee}
+          onMouseLeave={stopMarquee}
+        >
           <div
-            className="track-title"
+            ref={titleRef}
+            className={`track-title${marquee ? " is-marquee" : ""}`}
             title={track.name}
             aria-label={`${track.name} by ${track.artists}`}
           >
-            <span title={track.name}>{track.name}</span>
+            <span className="marquee-inner" title={track.name}>{track.name}</span>
           </div>
           <button
             className={`like-check${liked ? " is-on" : ""}`}
@@ -550,6 +513,9 @@ export default function PlayerPane(p: Props) {
             {" "}
             · {track.album}
           </span>
+        </div>
+        <div className="device-line" title={`Sound plays on: ${deviceLine}`}>
+          {deviceLine}
         </div>
       </div>
 
@@ -596,19 +562,7 @@ export default function PlayerPane(p: Props) {
         </div>
       )}
 
-      <div className="device-row card-device">
-        <button
-          className="device-toggle"
-          onClick={toggleDevices}
-          title="Connect to a device"
-          aria-label="Choose playback device"
-          aria-expanded={devicesOpen}
-        >
-          <ThroughIcon size={14} />
-          <span className="device-now" title={`Sound plays on: ${activeName}`}>
-            {activeName}
-          </span>
-        </button>
+      <div className="volume-row">
         <VolumeIcon size={14} />
         <input
           className="vol"
@@ -634,88 +588,6 @@ export default function PlayerPane(p: Props) {
             }
           }}
         />
-        {devicesOpen && (
-          <div className="device-pop" role="group" aria-label="Playback device">
-            <div className="device-pop-head">
-              Sound plays on: <strong>{activeName}</strong>
-              {choice?.kind === "sdk" && <span className="dim"> (remembered: this overlay)</span>}
-              {choice?.kind === "connect" && choice.deviceId && (
-                <span className="dim"> (remembered)</span>
-              )}
-            </div>
-            <div className="device-list">
-              {p.sdkDeviceId && (
-                <button
-                  className={`device-cell${p.sdkDeviceId === s.deviceId ? " is-active" : ""}`}
-                  aria-pressed={selectedId === p.sdkDeviceId}
-                  onClick={() => setSelectedId(p.sdkDeviceId as string)}
-                  title="Snapify Overlay"
-                >
-                  <i className="device-dot" aria-hidden="true" />
-                  <span>
-                    Snapify Overlay{p.sdkDeviceId === s.deviceId ? " — active" : ""}
-                  </span>
-                </button>
-              )}
-              {p.devices.map((d) => (
-                <button
-                  key={d.id}
-                  className={`device-cell${d.isActive ? " is-active" : ""}`}
-                  aria-pressed={selectedId === d.id}
-                  onClick={() => setSelectedId(d.id)}
-                  title={d.name}
-                >
-                  <i className="device-dot" aria-hidden="true" />
-                  <span>
-                    {d.name}
-                    {d.isActive ? " — active" : ""}
-                  </span>
-                </button>
-              ))}
-              {!p.sdkDeviceId && p.devices.length === 0 && (
-                <div className="device-empty">No devices — open Spotify</div>
-              )}
-            </div>
-            <div className="device-pop-actions">
-              <button
-                className="btn sm primary"
-                onClick={playHere}
-                title="Play through this overlay (Spotify headless SDK)"
-                aria-label="Play here via this overlay"
-              >
-                Play here
-              </button>
-              <button
-                className="btn sm"
-                onClick={keepThere}
-                disabled={!selectedId}
-                title="Keep playback on the chosen Spotify device (Connect)"
-                aria-label="Keep playback there"
-              >
-                Keep there
-              </button>
-            </div>
-            <div className="device-pop-foot">
-              <button
-                className="icon-btn sm"
-                onClick={p.onRefreshDevices}
-                title="Refresh devices"
-                aria-label="Refresh devices"
-              >
-                <RefreshIcon size={14} />
-              </button>
-              <button
-                className="icon-btn sm"
-                onClick={() => void openUrl(openSpotifyUrl(track.uri, track.id))}
-                title="OPEN SPOTIFY"
-                aria-label="Open in Spotify"
-              >
-                <OpenIcon size={14} />
-              </button>
-              <span className="dim">Play here: sound from this overlay. Keep there: stay on the chosen device.</span>
-            </div>
-          </div>
-        )}
       </div>
       </div>
       {/* Mini player row (PR8): art + title + play/pause only. Rendered

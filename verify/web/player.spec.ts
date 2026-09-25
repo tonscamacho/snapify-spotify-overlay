@@ -90,24 +90,35 @@ test("throttled play queues, shows chip, and flushes once", async ({ page }) => 
   expect((await commandsNamed(page, "play")).length).toBe(2);
 });
 
-test("device panel names where sound plays", async ({ page }) => {
+test("device block lives in Settings, not the player pane", async ({ page }) => {
   const player = page.locator('section[data-pane="player"]');
   await expect(player.getByText(TRACK_NAME)).toBeVisible();
-  await player.getByRole("button", { name: "Choose playback device" }).click();
-  const panel = player.getByRole("group", { name: "Playback device" });
+  // No Connect controls in the pane: only the text-only destination line.
+  await expect(player.getByRole("group", { name: "Playback device" })).toHaveCount(0);
+  await expect(player.getByRole("button", { name: "Choose playback device" })).toHaveCount(0);
+  await expect(player.locator(".device-line")).toContainText("Verify Speaker");
+});
+
+test("device section names where sound plays", async ({ page }) => {
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME)).toBeVisible();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const panel = dialog.getByRole("group", { name: "Playback device" });
   await expect(panel).toBeVisible();
   await expect(panel).toContainText("Sound plays on:");
   await expect(panel).toContainText("Verify Speaker");
   await expect(panel.getByRole("button", { name: "Play here via this overlay" })).toBeVisible();
   await expect(panel.getByRole("button", { name: "Keep playback there" })).toBeVisible();
-  await page.screenshot({ path: "verify/web/test-results/player-device.png" });
+  await page.screenshot({ path: "verify/web/test-results/settings-device.png" });
 });
 
 test("Play here moves sound onto the overlay and remembers it", async ({ page }) => {
   const player = page.locator('section[data-pane="player"]');
   await expect(player.getByText(TRACK_NAME)).toBeVisible();
-  await player.getByRole("button", { name: "Choose playback device" }).click();
-  const panel = player.getByRole("group", { name: "Playback device" });
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const panel = dialog.getByRole("group", { name: "Playback device" });
 
   await panel.getByRole("button", { name: "Play here via this overlay" }).click();
   await expect
@@ -120,15 +131,17 @@ test("Play here moves sound onto the overlay and remembers it", async ({ page })
   expect(stored).toContain('"sdk"');
 
   await page.reload();
-  const panel2 = page.locator('section[data-pane="player"]').getByRole("group", { name: "Playback device" });
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const panel2 = page.getByRole("dialog", { name: "Settings" }).getByRole("group", { name: "Playback device" });
   await expect(panel2).toContainText("remembered: this overlay");
 });
 
 test("Keep there transfers to the chosen device and remembers it", async ({ page }) => {
   const player = page.locator('section[data-pane="player"]');
   await expect(player.getByText(TRACK_NAME)).toBeVisible();
-  await player.getByRole("button", { name: "Choose playback device" }).click();
-  const panel = player.getByRole("group", { name: "Playback device" });
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const panel = dialog.getByRole("group", { name: "Playback device" });
 
   await panel.getByRole("button", { name: "Keep playback there" }).click();
   await expect
@@ -138,8 +151,44 @@ test("Keep there transfers to the chosen device and remembers it", async ({ page
   expect(stored).toContain("dev-verify-1");
 
   await page.reload();
-  const panel2 = page.locator('section[data-pane="player"]').getByRole("group", { name: "Playback device" });
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const panel2 = page.getByRole("dialog", { name: "Settings" }).getByRole("group", { name: "Playback device" });
   await expect(panel2).toContainText("remembered");
+});
+
+test("long titles marquee on hover", async ({ page }) => {
+  const seed = buildFixtures();
+  const base = seed.player as Record<string, unknown>;
+  const longName = "A Very Long Fixture Anthem Title That Must Overflow The Narrow Player Card";
+  const item = {
+    ...(base["item"] as Record<string, unknown>),
+    id: "verify-long-01",
+    name: longName,
+    uri: "spotify:track:verify-long-01",
+  };
+  await stubTauri(page, { fixtures: { player: { ...base, item } } });
+  await page.goto("/");
+  const player = page.locator('section[data-pane="player"]');
+  const title = player.locator(".track-title");
+  await expect(title).toContainText(longName.slice(0, 24));
+
+  await player.locator(".title-row").hover();
+  await expect(title).toHaveClass(/is-marquee/, { timeout: 5000 });
+  const dist = await title.evaluate((el) => getComputedStyle(el).getPropertyValue("--marquee-dist"));
+  expect(parseFloat(dist)).toBeGreaterThan(0);
+
+  // Leaving settles back to plain ellipsis.
+  await page.mouse.move(4, 4);
+  await expect(title).not.toHaveClass(/is-marquee/, { timeout: 5000 });
+});
+
+test("short titles never marquee", async ({ page }) => {
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME)).toBeVisible();
+  const title = player.locator(".track-title");
+  await player.locator(".title-row").hover();
+  await page.waitForTimeout(700);
+  await expect(title).not.toHaveClass(/is-marquee/);
 });
 
 test("player collapses to the 64px mini row and persists", async ({ page }) => {

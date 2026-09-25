@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { TRANS_LANGS, type TransLang } from "../lib/translate";
 import { api } from "../lib/spotify";
-import type { Density, Surface, Corners, SceneName } from "../lib/types";
+import type { Density, Surface, Corners, SceneName, DeviceInfo } from "../lib/types";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { readDeviceChoice, writeDeviceChoice, type DeviceChoice } from "./PlayerPane";
 import {
   KEYBIND_LABELS,
   KEYBIND_ORDER,
@@ -12,7 +14,7 @@ import {
 } from "../lib/keybinds";
 import type { UpdateStatus } from "../lib/updater";
 import { SCENE_NAMES, SCENE_LABELS } from "../lib/layout";
-import { XIcon } from "./icons";
+import { XIcon, RefreshIcon, OpenIcon } from "./icons";
 
 interface Props {
   open: boolean;
@@ -70,6 +72,14 @@ interface Props {
   onLogout: () => void;
   onToast?: (kind: "success" | "info" | "error", text: string) => void;
   onClose: () => void;
+  devices: DeviceInfo[];
+  sdkDeviceId?: string | null;
+  activeDeviceId?: string | null;
+  activeDeviceName?: string | null;
+  onTransfer: (id: string) => void;
+  /** Build the headless SDK player and move playback onto it. */
+  onPlayHere: () => void;
+  onRefreshDevices: () => void;
 }
 
 function KeybindRow({
@@ -185,6 +195,142 @@ function updateHint(u: UpdateStatus): string {
     case "error":
       return u.message;
   }
+}
+
+function DeviceSection(p: {
+  devices: DeviceInfo[];
+  sdkDeviceId?: string | null;
+  activeDeviceId?: string | null;
+  activeDeviceName?: string | null;
+  onTransfer: (id: string) => void;
+  onPlayHere: () => void;
+  onRefreshDevices: () => void;
+}) {
+  const [choice, setChoice] = useState<DeviceChoice | null>(() => readDeviceChoice());
+  const [selectedId, setSelectedId] = useState<string>("");
+
+  // Restore the remembered destination as the selection when the device
+  // list arrives. Selection only: no silent transfer on boot. Without a
+  // memory, the active device is the starting selection so Keep there is
+  // a one-click confirm.
+  useEffect(() => {
+    if (selectedId) return;
+    if (
+      choice?.kind === "connect" &&
+      choice.deviceId &&
+      p.devices.some((d) => d.id === choice.deviceId)
+    ) {
+      setSelectedId(choice.deviceId);
+    } else if (p.activeDeviceId) {
+      setSelectedId(p.activeDeviceId);
+    } else if (p.sdkDeviceId) {
+      setSelectedId(p.sdkDeviceId);
+    }
+  }, [p.devices, p.activeDeviceId, p.sdkDeviceId, choice, selectedId]);
+
+  const activeName =
+    p.activeDeviceName ??
+    (p.sdkDeviceId && p.activeDeviceId === p.sdkDeviceId ? "Snapify Overlay" : null) ??
+    (p.devices.length === 0 ? "No devices — open Spotify" : "Choose a device");
+
+  const playHere = () => {
+    const next: DeviceChoice = { kind: "sdk" };
+    setChoice(next);
+    writeDeviceChoice(next);
+    p.onPlayHere();
+  };
+
+  const keepThere = () => {
+    if (!selectedId) return;
+    const next: DeviceChoice = { kind: "connect", deviceId: selectedId };
+    setChoice(next);
+    writeDeviceChoice(next);
+    p.onTransfer(selectedId);
+  };
+
+  return (
+    <div className="settings-device" role="group" aria-label="Playback device">
+      <div className="row">
+        <span>Playback device</span>
+        <span className="dim">
+          Sound plays on: <strong>{activeName}</strong>
+          {choice?.kind === "sdk" && " (remembered: this overlay)"}
+          {choice?.kind === "connect" && choice.deviceId && " (remembered)"}
+        </span>
+      </div>
+      <div className="device-list">
+        {p.sdkDeviceId && (
+          <button
+            className={`device-cell${p.sdkDeviceId === p.activeDeviceId ? " is-active" : ""}`}
+            aria-pressed={selectedId === p.sdkDeviceId}
+            onClick={() => setSelectedId(p.sdkDeviceId as string)}
+            title="Snapify Overlay"
+          >
+            <i className="device-dot" aria-hidden="true" />
+            <span>
+              Snapify Overlay{p.sdkDeviceId === p.activeDeviceId ? " — active" : ""}
+            </span>
+          </button>
+        )}
+        {p.devices.map((d) => (
+          <button
+            key={d.id}
+            className={`device-cell${d.isActive ? " is-active" : ""}`}
+            aria-pressed={selectedId === d.id}
+            onClick={() => setSelectedId(d.id)}
+            title={d.name}
+          >
+            <i className="device-dot" aria-hidden="true" />
+            <span>
+              {d.name}
+              {d.isActive ? " — active" : ""}
+            </span>
+          </button>
+        ))}
+        {!p.sdkDeviceId && p.devices.length === 0 && (
+          <div className="device-empty">No devices — open Spotify</div>
+        )}
+      </div>
+      <div className="device-pop-actions">
+        <button
+          className="btn sm primary"
+          onClick={playHere}
+          title="Play through this overlay (Spotify headless SDK)"
+          aria-label="Play here via this overlay"
+        >
+          Play here
+        </button>
+        <button
+          className="btn sm"
+          onClick={keepThere}
+          disabled={!selectedId}
+          title="Keep playback on the chosen Spotify device (Connect)"
+          aria-label="Keep playback there"
+        >
+          Keep there
+        </button>
+      </div>
+      <div className="device-pop-foot">
+        <button
+          className="icon-btn sm"
+          onClick={p.onRefreshDevices}
+          title="Refresh devices"
+          aria-label="Refresh devices"
+        >
+          <RefreshIcon size={14} />
+        </button>
+        <button
+          className="icon-btn sm"
+          onClick={() => void openUrl("https://open.spotify.com")}
+          title="OPEN SPOTIFY"
+          aria-label="Open in Spotify"
+        >
+          <OpenIcon size={14} />
+        </button>
+        <span className="dim">Play here: sound from this overlay. Keep there: stay on the chosen device.</span>
+      </div>
+    </div>
+  );
 }
 
 export default function SettingsModal(p: Props) {
@@ -330,6 +476,15 @@ export default function SettingsModal(p: Props) {
             <span className="dim">Logged out</span>
           )}
         </div>
+        <DeviceSection
+          devices={p.devices}
+          sdkDeviceId={p.sdkDeviceId}
+          activeDeviceId={p.activeDeviceId}
+          activeDeviceName={p.activeDeviceName}
+          onTransfer={p.onTransfer}
+          onPlayHere={p.onPlayHere}
+          onRefreshDevices={p.onRefreshDevices}
+        />
         <div className="row">
           <span>Spotify usage</span>
           <span className="dim">
