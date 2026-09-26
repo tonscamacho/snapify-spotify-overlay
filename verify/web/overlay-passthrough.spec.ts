@@ -193,11 +193,40 @@ test("130% UI scale keeps reported regions aligned with panes", async ({ page })
   await expect(scale).toHaveAttribute("aria-valuetext", "130 percent");
 
   // The zoom reflow changes resolved rects, so the diff must re-report.
+  // Reports are trailing-debounced (120 ms): under parallel load the first
+  // new report can be an intermediate stale reflow, not the final. Poll
+  // until the latest report matches the live pane rect (quiescence) instead
+  // of asserting on the first new report.
   await expect
-    .poll(async () => (await commandsNamed(page, "set_overlay_regions")).length, {
-      timeout: 10000,
-    })
-    .toBeGreaterThan(before);
+    .poll(
+      async () => {
+        const reports = await commandsNamed(page, "set_overlay_regions");
+        if (reports.length <= before) return "waiting-for-report";
+        const last = reports[reports.length - 1] as unknown as {
+          regions: Array<{ x: number; y: number; w: number; h: number }>;
+        };
+        const pane = await page.locator('section[data-pane="player"]').evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          return {
+            x: Math.round(r.left),
+            y: Math.round(r.top),
+            w: Math.round(r.width),
+            h: Math.round(r.height),
+          };
+        });
+        const ok = (last.regions ?? []).some(
+          (rg) =>
+            Math.abs(rg.x - pane.x) <= 1 &&
+            Math.abs(rg.y - pane.y) <= 1 &&
+            Math.abs(rg.w - pane.w) <= 1 &&
+            Math.abs(rg.h - pane.h) <= 1,
+        );
+        if (ok) return "aligned";
+        return `pane ${JSON.stringify(pane)} vs regions ${JSON.stringify(last.regions)}`;
+      },
+      { timeout: 10000 },
+    )
+    .toBe("aligned");
 
   const reports = await commandsNamed(page, "set_overlay_regions");
   const last = reports[reports.length - 1] as unknown as {
