@@ -381,3 +381,163 @@ test("one banner type covers player and visualizer while throttled", async ({ pa
   await expect(viz.getByText(bannerCopy)).toHaveCount(0);
   await expect(player.getByText(bannerCopy)).toHaveCount(0);
 });
+
+test("transport row: equal optical size, shared baseline, proportional play disc", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME)).toBeVisible();
+
+  const row = player.locator(".art-transport");
+  await expect(row).toHaveCount(1);
+  // Default track fixture: exactly the five transport buttons.
+  await expect(row.locator("button")).toHaveCount(5);
+
+  const metrics = await row.evaluate((el) => {
+    const btns = Array.from(el.querySelectorAll("button")).map((b) => {
+      const r = b.getBoundingClientRect();
+      const svg = b.querySelector("svg");
+      const sr = svg?.getBoundingClientRect();
+      const cs = getComputedStyle(b);
+      return {
+        label: b.getAttribute("aria-label"),
+        cls: b.className,
+        w: r.width,
+        h: r.height,
+        centerY: r.top + r.height / 2,
+        svgW: sr?.width ?? -1,
+        svgH: sr?.height ?? -1,
+        radius: cs.borderRadius,
+      };
+    });
+    const cs = getComputedStyle(el);
+    return { btns, gap: cs.gap, align: cs.alignItems, justify: cs.justifyContent };
+  });
+
+  // Shared flex baseline, centered under the art.
+  expect(metrics.align).toBe("center");
+  expect(metrics.justify).toBe("center");
+
+  // All five glyphs render at one optical size.
+  for (const b of metrics.btns) {
+    expect(Math.round(b.svgW)).toBe(18);
+    expect(Math.round(b.svgH)).toBe(18);
+  }
+
+  // One baseline: button vertical centers agree within a pixel.
+  const centers = metrics.btns.map((b) => b.centerY);
+  expect(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(1);
+
+  // Boxes: four 32x32 icon buttons + one proportional play circle.
+  const discs = metrics.btns.filter((b) => b.cls.includes("play-disc"));
+  const icons = metrics.btns.filter((b) => b.cls.includes("icon-btn"));
+  expect(discs).toHaveLength(1);
+  expect(icons).toHaveLength(4);
+  for (const b of icons) {
+    expect(Math.round(b.w)).toBe(32);
+    expect(Math.round(b.h)).toBe(32);
+  }
+  expect(Math.round(discs[0].w)).toBe(40);
+  expect(Math.round(discs[0].h)).toBe(40);
+  expect(Math.abs(discs[0].w - discs[0].h)).toBeLessThanOrEqual(1);
+  expect(discs[0].radius).toContain("50%");
+
+  // No progress/volume shift: volume glyph stays 14, sliders still live.
+  const volW = await player
+    .locator(".volume-row svg")
+    .evaluate((el) => el.getBoundingClientRect().width);
+  expect(Math.round(volW)).toBe(14);
+  await expect(player.locator(".volume-row .vol")).toBeVisible();
+  await expect(player.locator(".times").first()).toBeVisible();
+
+  // Visual pass: reveal the overlay and capture the transport row.
+  await page.evaluate(() => {
+    const o = document.querySelector(".art-overlay") as HTMLElement | null;
+    if (o) o.style.opacity = "1";
+  });
+  await page.screenshot({ path: "verify/web/test-results/pr4-after-800.png" });
+});
+
+test("transport row holds at narrow width and across light/glass", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  // Narrow-but-full player: container query shrinks chrome, compact gate
+  // (<=282px) stays off so the five-button row is still rendered.
+  await stubTauri(page, {
+    layout: {
+      version: 3,
+      preset: "custom",
+      panes: [
+        { id: "player", type: "player", x: 24, y: 200, w: 300, h: 260, opacity: 0.92, visible: true, z: 1 },
+      ],
+    },
+  });
+  await page.goto("/");
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME)).toBeVisible();
+  const row = player.locator(".art-transport");
+  await expect(row.locator("button")).toHaveCount(5);
+
+  const narrow = await row.evaluate((el) => {
+    const btns = Array.from(el.querySelectorAll("button")).map((b) => {
+      const r = b.getBoundingClientRect();
+      const svg = b.querySelector("svg");
+      const sr = svg?.getBoundingClientRect();
+      return {
+        cls: b.className,
+        w: r.width,
+        h: r.height,
+        centerY: r.top + r.height / 2,
+        svgW: sr?.width ?? -1,
+      };
+    });
+    return { btns };
+  });
+  const narrowIcons = narrow.btns.filter((b) => b.cls.includes("icon-btn"));
+  const narrowDiscs = narrow.btns.filter((b) => b.cls.includes("play-disc"));
+  for (const b of narrowIcons) {
+    expect(Math.round(b.w)).toBe(28);
+    expect(Math.round(b.h)).toBe(28);
+    expect(Math.round(b.svgW)).toBe(16);
+  }
+  expect(Math.round(narrowDiscs[0].w)).toBe(36);
+  expect(Math.round(narrowDiscs[0].h)).toBe(36);
+  expect(Math.round(narrowDiscs[0].svgW)).toBe(16);
+  const nCenters = narrow.btns.map((b) => b.centerY);
+  expect(Math.max(...nCenters) - Math.min(...nCenters)).toBeLessThanOrEqual(1);
+  await page.evaluate(() => {
+    const o = document.querySelector(".art-overlay") as HTMLElement | null;
+    if (o) o.style.opacity = "1";
+  });
+  await page.screenshot({ path: "verify/web/test-results/pr4-after-narrow.png" });
+
+  // Light theme: recolor preserved, disc stays a circle on baseline.
+  await page.evaluate(() => {
+    document.querySelector(".app")?.setAttribute("data-theme", "light");
+    const o = document.querySelector(".art-overlay") as HTMLElement | null;
+    if (o) o.style.opacity = "1";
+  });
+  const lightDisc = await row.evaluate((el) => {
+    const d = el.querySelector(".play-disc") as HTMLElement;
+    const r = d.getBoundingClientRect();
+    return { w: r.width, h: r.height, bg: getComputedStyle(d).backgroundColor };
+  });
+  expect(Math.round(lightDisc.w)).toBe(Math.round(lightDisc.h));
+  expect(lightDisc.bg).not.toBe("");
+  await page.screenshot({ path: "verify/web/test-results/pr4-after-light.png" });
+
+  // Glass surface: scoping untouched, row still aligned.
+  await page.evaluate(() => {
+    document.querySelector(".app")?.setAttribute("data-surface", "glass");
+    const o = document.querySelector(".art-overlay") as HTMLElement | null;
+    if (o) o.style.opacity = "1";
+  });
+  const glassCenters = await row.evaluate((el) =>
+    Array.from(el.querySelectorAll("button")).map((b) => {
+      const r = b.getBoundingClientRect();
+      return r.top + r.height / 2;
+    }),
+  );
+  expect(Math.max(...glassCenters) - Math.min(...glassCenters)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: "verify/web/test-results/pr4-after-glass.png" });
+});

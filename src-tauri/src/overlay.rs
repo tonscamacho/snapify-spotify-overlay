@@ -8,6 +8,11 @@ pub struct OverlayRect {
     pub y: f64,
     pub w: f64,
     pub h: f64,
+    /// CSS-px corner radius (0 = square). Pill selectors (`.dock`,
+    /// `.hint-chip`) report `h/2` so the OS region can use a round rect;
+    /// all other selectors report 0 and keep the rectangular path.
+    #[serde(default)]
+    pub radius: f64,
 }
 
 /// Frontend-reported window origin in CSS px (`window.screenX/Y`).
@@ -41,27 +46,91 @@ struct OverlayInner {
 
 const MAX_REGIONS: usize = 64;
 
+/// OS region entry in physical pixels. `ew`/`eh` are the round-rect
+/// ellipse dimensions (0,0 = square). For a pill with CSS radius `h/2`,
+/// `ew == h_phys` yields a stadium matching the painted pill.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PhysRgn {
+    l: i32,
+    t: i32,
+    r: i32,
+    b: i32,
+    ew: i32,
+    eh: i32,
+}
+
+/// Maps a CSS-px corner radius to physical-px ellipse dimensions.
+/// Returns (0,0) for square (missing/tiny/non-finite radius); otherwise
+/// clamps to half the physical box so a `999px` pill clamps to `h/2`
+/// without overflowing narrow rects.
+fn radius_ellipse(radius_css: f64, scale: f64, w_phys: i32, h_phys: i32) -> (i32, i32) {
+    if !(radius_css.is_finite() && scale.is_finite() && scale > 0.0) {
+        return (0, 0);
+    }
+    if radius_css < 0.5 || w_phys <= 0 || h_phys <= 0 {
+        return (0, 0);
+    }
+    let rp = (radius_css * scale).round() as i32;
+    if rp <= 0 {
+        return (0, 0);
+    }
+    let max_r = (w_phys.min(h_phys) / 2).max(0);
+    let clamped = rp.min(max_r);
+    if clamped <= 0 {
+        return (0, 0);
+    }
+    (clamped * 2, clamped * 2)
+}
+
+fn phys_regions(
+    regions: &[OverlayRect],
+    scale: f64,
+    dx: f64,
+    dy: f64,
+) -> Vec<PhysRgn> {
+    if !(scale.is_finite() && scale > 0.0) {
+        return Vec::new();
+    }
+    // Whole-physical-px rounding: the maximized decorations:false frame
+    // offset is integral, but snapping here guarantees fractional DWM
+    // offsets can never leave a 1px fringe between region and paint.
+    let dxr = dx.round();
+    let dyr = dy.round();
+    regions
+        .iter()
+        .filter(|r| {
+            r.w > 0.0
+                && r.h > 0.0
+                && r.w.is_finite()
+                && r.h.is_finite()
+                && r.x.is_finite()
+                && r.y.is_finite()
+        })
+        .take(MAX_REGIONS)
+        .filter_map(|r| {
+            let l = (r.x * scale + dxr).round() as i32;
+            let t = (r.y * scale + dyr).round() as i32;
+            let rr = ((r.x + r.w) * scale + dxr).round() as i32;
+            let b = ((r.y + r.h) * scale + dyr).round() as i32;
+            if rr > l && b > t {
+                let (ew, eh) = radius_ellipse(r.radius, scale, rr - l, b - t);
+                Some(PhysRgn { l, t, r: rr, b, ew, eh })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 fn phys_rects(
     regions: &[OverlayRect],
     scale: f64,
     dx: f64,
     dy: f64,
 ) -> Vec<(i32, i32, i32, i32)> {
-    regions
+    phys_regions(regions, scale, dx, dy)
         .iter()
-        .filter(|r| r.w > 0.0 && r.h > 0.0 && r.x.is_finite() && r.y.is_finite())
-        .take(MAX_REGIONS)
-        .filter_map(|r| {
-            let l = (r.x * scale + dx).round() as i32;
-            let t = (r.y * scale + dy).round() as i32;
-            let rr = ((r.x + r.w) * scale + dx).round() as i32;
-            let b = ((r.y + r.h) * scale + dy).round() as i32;
-            if rr > l && b > t {
-                Some((l, t, rr, b))
-            } else {
-                None
-            }
-        })
+        .map(|p| (p.l, p.t, p.r, p.b))
         .collect()
 }
 
@@ -89,19 +158,29 @@ extern "system" {
 #[link(name = "gdi32")]
 extern "system" {
     fn CreateRectRgn(l: i32, t: i32, r: i32, b: i32) -> isize;
+    fn CreateRoundRectRgn(l: i32, t: i32, r: i32, b: i32, w: i32, h: i32) -> isize;
     fn CombineRgn(h_dest: isize, h_src1: isize, h_src2: isize, mode: i32) -> i32;
     fn DeleteObject(h: isize) -> i32;
 }
 
 #[cfg(windows)]
-fn set_window_region(hwnd: isize, rects: &[(i32, i32, i32, i32)]) {
+fn set_window_region(hwnd: isize, rects: &[PhysRgn]) {
     unsafe {
         let acc = CreateRectRgn(0, 0, 0, 0);
         if acc == 0 {
             return;
         }
-        for (l, t, r, b) in rects {
-            let part = CreateRectRgn(*l, *t, *r, *b);
+        for p in rects {
+            // Rounded OS shape for pills (dock/hint-chip): the rectangular
+            // region left grey corner pixels outside the painted stadium.
+            // Non-pill rects keep ew/eh == 0 and take the rect path.
+            let mut part = 0;
+            if p.ew > 0 && p.eh > 0 {
+                part = CreateRoundRectRgn(p.l, p.t, p.r, p.b, p.ew, p.eh);
+            }
+            if part == 0 {
+                part = CreateRectRgn(p.l, p.t, p.r, p.b);
+            }
             if part == 0 {
                 continue;
             }
@@ -116,6 +195,9 @@ fn set_window_region(hwnd: isize, rects: &[(i32, i32, i32, i32)]) {
 }
 
 fn frame_offset(win: &tauri::WebviewWindow) -> (f64, f64) {
+    // Maximized decorations:false windows report inner == outer (0,0), but
+    // the caller snaps via dx.round()/dy.round() in phys_regions so any
+    // fractional DWM offset still lands on whole physical pixels.
     match (win.inner_position(), win.outer_position()) {
         (Ok(inner), Ok(outer)) => (
             f64::from(inner.x - outer.x),
@@ -271,8 +353,38 @@ fn apply_region(app: &AppHandle) {
         }
     }
     if !interactive {
-        if let Ok(mut guard) = state.inner.lock() {
-            guard.applied_sig = None;
+        // Passive must clear any stale interactive shape (fullscreen drag
+        // cover or dock rect). The old early-return left the last
+        // SetWindowRgn applied for the whole passive session, which both
+        // kept a ghost clickable shape and clipped paint (grey halo).
+        // SetWindowRgn(NULL) removes the clip; the passive signature
+        // dedupes repeat clears to one OS call and can never equal an
+        // interactive signature, so the reset bypasses the rect dedupe and
+        // a late regions push while passive cannot reinstall a stale rect.
+        let (dpr, origin) = match state.inner.lock() {
+            Ok(g) => (g.last_dpr, g.last_origin.map(|o| (o.x, o.y))),
+            Err(_) => return,
+        };
+        let sig = apply_signature(false, dpr, origin, &[]);
+        {
+            let mut guard = match state.inner.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            if guard.applied_sig.as_deref() == Some(sig.as_str()) {
+                return;
+            }
+            guard.applied_sig = Some(sig);
+        }
+        #[cfg(windows)]
+        {
+            let hwnd = match win.hwnd() {
+                Ok(h) => h.0 as isize,
+                Err(_) => return,
+            };
+            unsafe {
+                SetWindowRgn(hwnd, 0, 1);
+            }
         }
         return;
     }
@@ -281,7 +393,9 @@ fn apply_region(app: &AppHandle) {
         return;
     }
     let (dx, dy) = frame_offset(&win);
-    let rects = phys_rects(&regions, scale, dx, dy);
+    let phys = phys_regions(&regions, scale, dx, dy);
+    let rects: Vec<(i32, i32, i32, i32)> =
+        phys.iter().map(|p| (p.l, p.t, p.r, p.b)).collect();
     let (dpr, origin) = match state.inner.lock() {
         Ok(g) => (g.last_dpr, g.last_origin.map(|o| (o.x, o.y))),
         Err(_) => return,
@@ -303,7 +417,7 @@ fn apply_region(app: &AppHandle) {
             Ok(h) => h.0 as isize,
             Err(_) => return,
         };
-        set_window_region(hwnd, &rects);
+        set_window_region(hwnd, &phys);
     }
 }
 
@@ -336,7 +450,21 @@ pub fn set_overlay_regions(
         let mut guard = state.inner.lock().map_err(|e| e.to_string())?;
         guard.regions = regions
             .into_iter()
-            .filter(|r| r.w > 0.0 && r.h > 0.0)
+            .filter(|r| {
+                r.w > 0.0
+                    && r.h > 0.0
+                    && r.w.is_finite()
+                    && r.h.is_finite()
+                    && r.x.is_finite()
+                    && r.y.is_finite()
+            })
+            .map(|mut r| {
+                // Sanitize pill radius: non-finite/negative becomes square.
+                if !(r.radius.is_finite() && r.radius >= 0.0) {
+                    r.radius = 0.0;
+                }
+                r
+            })
             .take(MAX_REGIONS)
             .collect();
         // Additive tags only: conversion still uses the live window scale
@@ -360,7 +488,10 @@ pub fn set_overlay_regions(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_signature, atomic_write_json, backup_path_for, phys_rects, read_json_guarded};
+    use super::{
+        apply_signature, atomic_write_json, backup_path_for, phys_rects, phys_regions,
+        radius_ellipse, read_json_guarded,
+    };
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -385,6 +516,7 @@ mod tests {
             y: 20.0,
             w: 100.0,
             h: 50.0,
+            radius: 0.0,
         }];
         assert_eq!(phys_rects(&regions, 1.5, -7.0, 0.0), vec![(8, 30, 158, 105)]);
     }
@@ -396,6 +528,7 @@ mod tests {
             y: 20.0,
             w: 100.0,
             h: 50.0,
+            radius: 0.0,
         }];
         assert_eq!(phys_rects(&regions, 1.25, -7.0, 0.0), vec![(6, 25, 131, 88)]);
         assert_eq!(phys_rects(&regions, 2.0, -7.0, 0.0), vec![(13, 40, 213, 140)]);
@@ -424,9 +557,9 @@ mod tests {
     #[test]
     fn degenerate_rects_never_reach_the_os() {
         let regions = vec![
-            super::OverlayRect { x: 0.0, y: 0.0, w: 0.0, h: 10.0 },
-            super::OverlayRect { x: 5.0, y: 5.0, w: -3.0, h: 4.0 },
-            super::OverlayRect { x: f64::NAN, y: 0.0, w: 4.0, h: 4.0 },
+            super::OverlayRect { x: 0.0, y: 0.0, w: 0.0, h: 10.0, radius: 0.0 },
+            super::OverlayRect { x: 5.0, y: 5.0, w: -3.0, h: 4.0, radius: 0.0 },
+            super::OverlayRect { x: f64::NAN, y: 0.0, w: 4.0, h: 4.0, radius: 0.0 },
         ];
         assert!(phys_rects(&regions, 1.0, 0.0, 0.0).is_empty());
     }
@@ -451,6 +584,145 @@ mod tests {
     #[test]
     fn empty_region_list_means_passthrough() {
         assert!(phys_rects(&[], 1.0, 0.0, 0.0).is_empty());
+    }
+
+    #[test]
+    fn nonfinite_wh_never_reaches_the_os() {
+        let regions = vec![
+            super::OverlayRect { x: 0.0, y: 0.0, w: f64::NAN, h: 10.0, radius: 0.0 },
+            super::OverlayRect { x: 0.0, y: 0.0, w: 10.0, h: f64::INFINITY, radius: 0.0 },
+            super::OverlayRect { x: 0.0, y: f64::INFINITY, w: 10.0, h: 10.0, radius: 0.0 },
+        ];
+        assert!(phys_rects(&regions, 1.0, 0.0, 0.0).is_empty());
+        assert!(phys_regions(&regions, 1.0, 0.0, 0.0).is_empty());
+    }
+
+    #[test]
+    fn zero_area_after_rounding_is_dropped() {
+        // 0.4 CSS px at 1.0 scale rounds to zero physical pixels.
+        let regions = vec![super::OverlayRect {
+            x: 10.0, y: 10.0, w: 0.4, h: 0.4, radius: 0.0,
+        }];
+        assert!(phys_rects(&regions, 1.0, 0.0, 0.0).is_empty());
+    }
+
+    #[test]
+    fn invalid_scale_yields_empty() {
+        let regions = vec![super::OverlayRect {
+            x: 10.0, y: 20.0, w: 100.0, h: 50.0, radius: 0.0,
+        }];
+        assert!(phys_rects(&regions, 0.0, 0.0, 0.0).is_empty());
+        assert!(phys_rects(&regions, f64::NAN, 0.0, 0.0).is_empty());
+        assert!(phys_rects(&regions, f64::INFINITY, 0.0, 0.0).is_empty());
+    }
+
+    #[test]
+    fn frame_offset_snaps_to_whole_device_px() {
+        // A fractional DWM offset must not leave a 1px fringe: dx is
+        // snapped before scaling so 0.6 behaves like 1.0 and 0.4 like 0.0.
+        let regions = vec![super::OverlayRect {
+            x: 10.0, y: 20.0, w: 100.0, h: 50.0, radius: 0.0,
+        }];
+        assert_eq!(
+            phys_rects(&regions, 1.0, 0.6, 0.6),
+            phys_rects(&regions, 1.0, 1.0, 1.0)
+        );
+        assert_eq!(
+            phys_rects(&regions, 1.0, 0.4, -0.4),
+            phys_rects(&regions, 1.0, 0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn pill_radius_maps_to_stadium_ellipse() {
+        // Dock-like pill: h=44 CSS px, radius=h/2=22. At 1.0 scale the
+        // ellipse must equal the physical height (stadium shape).
+        let regions = vec![super::OverlayRect {
+            x: 100.0, y: 12.0, w: 400.0, h: 44.0, radius: 22.0,
+        }];
+        let phys = phys_regions(&regions, 1.0, 0.0, 0.0);
+        assert_eq!(phys.len(), 1);
+        assert_eq!((phys[0].r - phys[0].l, phys[0].b - phys[0].t), (400, 44));
+        assert_eq!((phys[0].ew, phys[0].eh), (44, 44));
+    }
+
+    #[test]
+    fn pill_radius_scales_with_dpr() {
+        let regions = vec![super::OverlayRect {
+            x: 100.0, y: 12.0, w: 400.0, h: 44.0, radius: 22.0,
+        }];
+        let phys = phys_regions(&regions, 1.5, 0.0, 0.0);
+        assert_eq!(phys.len(), 1);
+        let h_phys = phys[0].b - phys[0].t;
+        // 44 * 1.5 = 66 physical px; ellipse must match the scaled height.
+        assert_eq!(h_phys, 66);
+        assert_eq!((phys[0].ew, phys[0].eh), (66, 66));
+    }
+
+    #[test]
+    fn radius_clamps_and_square_falls_back() {
+        // Zero radius stays square.
+        assert_eq!(radius_ellipse(0.0, 1.0, 400, 44), (0, 0));
+        // Tiny sub-pixel radius stays square.
+        assert_eq!(radius_ellipse(0.2, 1.0, 400, 44), (0, 0));
+        // Non-finite radius stays square.
+        assert_eq!(radius_ellipse(f64::NAN, 1.0, 400, 44), (0, 0));
+        // Oversized 999px pill radius clamps to half the physical height.
+        assert_eq!(radius_ellipse(999.0, 1.0, 400, 44), (44, 44));
+        // Narrow rect clamps to half the width.
+        assert_eq!(radius_ellipse(22.0, 1.0, 20, 44), (20, 20));
+        // Double-DPI clamp tracks the scaled box.
+        assert_eq!(radius_ellipse(999.0, 2.0, 800, 88), (88, 88));
+    }
+
+    #[test]
+    fn phys_regions_geometry_matches_rects() {
+        let regions = vec![
+            super::OverlayRect { x: 10.0, y: 20.0, w: 100.0, h: 50.0, radius: 0.0 },
+            super::OverlayRect { x: 100.0, y: 12.0, w: 400.0, h: 44.0, radius: 22.0 },
+        ];
+        let tuples = phys_rects(&regions, 1.5, -7.0, 0.0);
+        let phys = phys_regions(&regions, 1.5, -7.0, 0.0);
+        assert_eq!(tuples.len(), 2);
+        assert_eq!(phys.len(), 2);
+        for (i, (l, t, r, b)) in tuples.iter().enumerate() {
+            assert_eq!((phys[i].l, phys[i].t, phys[i].r, phys[i].b), (*l, *t, *r, *b));
+        }
+        // Square stays square, pill carries an ellipse.
+        assert_eq!((phys[0].ew, phys[0].eh), (0, 0));
+        assert!(phys[1].ew > 0 && phys[1].eh > 0);
+    }
+
+    #[test]
+    fn overlay_rect_radius_defaults_to_zero() {
+        // Old frontend payloads without `radius` must still deserialize.
+        let r: super::OverlayRect = serde_json::from_str(
+            r#"{"x":1.0,"y":2.0,"w":3.0,"h":4.0}"#,
+        )
+        .expect("radius defaults");
+        assert_eq!(r.radius, 0.0);
+    }
+
+    #[test]
+    fn passive_sig_clears_and_settles() {
+        let empty: Vec<(i32, i32, i32, i32)> = vec![];
+        // Passive clear can never equal an interactive apply, so the reset
+        // bypasses the rect dedupe even when the last interactive region
+        // was also empty.
+        assert_ne!(
+            apply_signature(false, None, None, &empty),
+            apply_signature(true, None, None, &empty)
+        );
+        // Identical passive reports settle to one OS call.
+        assert_eq!(
+            apply_signature(false, Some(1.0), Some((0, 0)), &empty),
+            apply_signature(false, Some(1.0), Some((0, 0)), &empty)
+        );
+        // A DPR hop while passive still re-clears (harmless single call).
+        assert_ne!(
+            apply_signature(false, Some(1.0), Some((0, 0)), &empty),
+            apply_signature(false, Some(2.0), Some((0, 0)), &empty)
+        );
     }
 
     #[test]

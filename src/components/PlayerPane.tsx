@@ -383,7 +383,7 @@ export default function PlayerPane(p: Props) {
                 title="Back 15 seconds"
                 aria-label="Back 15 seconds"
               >
-                <SeekBackIcon size={16} />
+                <SeekBackIcon size={18} />
               </button>
             )}
             <button
@@ -394,7 +394,7 @@ export default function PlayerPane(p: Props) {
               aria-pressed={s.shuffle}
               disabled={isFree}
             >
-              <ShuffleIcon size={16} />
+              <ShuffleIcon size={18} />
             </button>
             <button
               className="icon-btn"
@@ -413,7 +413,7 @@ export default function PlayerPane(p: Props) {
                 title="Pause"
                 aria-label="Pause"
               >
-                <PauseIcon size={19} />
+                <PauseIcon size={18} />
               </button>
             ) : (
               <button
@@ -423,7 +423,7 @@ export default function PlayerPane(p: Props) {
                 title={isFree ? UPGRADE_TEXT : "Play"}
                 aria-label="Play"
               >
-                <PlayIcon size={19} />
+                <PlayIcon size={18} />
               </button>
             )}
             <button
@@ -443,7 +443,7 @@ export default function PlayerPane(p: Props) {
               aria-pressed={s.repeat !== "off"}
               disabled={isFree}
             >
-              {s.repeat === "track" ? <RepeatOneIcon size={16} /> : <RepeatIcon size={16} />}
+              {s.repeat === "track" ? <RepeatOneIcon size={18} /> : <RepeatIcon size={18} />}
             </button>
             {isEpisodic && !isFree && (
               <button
@@ -452,7 +452,7 @@ export default function PlayerPane(p: Props) {
                 title="Forward 15 seconds"
                 aria-label="Forward 15 seconds"
               >
-                <SeekForwardIcon size={16} />
+                <SeekForwardIcon size={18} />
               </button>
             )}
           </div>

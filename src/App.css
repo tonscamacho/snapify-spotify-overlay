@@ -310,7 +310,7 @@ select:focus-visible,
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -318,6 +318,33 @@ select:focus-visible,
   color: #fff;
   width: 32px;
   height: 32px;
+  flex: none;
+  padding: 0;
+}
+
+/* Equal optical glyph size: one shared svg box for all five transport
+   glyphs on a single flex baseline. Stroked Shuffle/Repeat read thin
+   next to filled Prev/Next/Play, so the shared stroke-width bump lifts
+   their optical weight (filled paths carry stroke="none" and are
+   unaffected). flex:none locks the boxes so narrow panes cannot shrink
+   the disc into an oval. */
+.art-transport svg {
+  display: block;
+}
+
+.art-transport .icon-btn svg,
+.art-transport .play-disc svg {
+  width: 18px;
+  height: 18px;
+}
+
+.art-transport .icon-btn svg path,
+.art-transport .icon-btn svg circle,
+.art-transport .icon-btn svg rect,
+.art-transport .play-disc svg path,
+.art-transport .play-disc svg circle,
+.art-transport .play-disc svg rect {
+  stroke-width: 2;
 }
 
 .art-overlay .icon-btn:hover:not(:disabled) {
@@ -330,8 +357,13 @@ select:focus-visible,
 }
 
 .art-overlay .play-disc {
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  margin: 0 2px;
+  border-radius: 50%;
 }
 
 .card-meta {
@@ -1207,6 +1239,7 @@ select:focus-visible,
   transform: translateX(-50%);
   border: 1px solid var(--stroke);
   background: var(--surface);
+  background-clip: padding-box;
   color: var(--dim);
   font-size: 12px;
   line-height: 1.5;
@@ -1246,6 +1279,7 @@ select:focus-visible,
   max-height: calc(100vh - 80px);
   overflow-y: auto;
   background: var(--surface);
+  background-clip: padding-box;
   border: 1px solid var(--stroke);
   border-radius: var(--r-lg);
   padding: 16px 18px 18px;
@@ -1409,6 +1443,7 @@ select:focus-visible,
   align-items: center;
   gap: 8px;
   background: var(--surface);
+  background-clip: padding-box;
   border: 1px solid var(--stroke);
   color: var(--txt);
   font-size: 12.5px;
@@ -1676,10 +1711,22 @@ select:focus-visible,
   .art-overlay .icon-btn {
     width: 28px;
     height: 28px;
+    flex: none;
+    padding: 0;
   }
   .art-overlay .play-disc {
     width: 36px;
     height: 36px;
+    flex: none;
+    aspect-ratio: 1 / 1;
+    padding: 0;
+    margin: 0 2px;
+    border-radius: 50%;
+  }
+  .art-transport .icon-btn svg,
+  .art-transport .play-disc svg {
+    width: 16px;
+    height: 16px;
   }
 }
 

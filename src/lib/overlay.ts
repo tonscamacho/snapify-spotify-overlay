@@ -5,6 +5,8 @@ interface OverlayRect {
   y: number;
   w: number;
   h: number;
+  /** CSS-px corner radius (0 = square). Pills report h/2 for round-rect. */
+  radius?: number;
 }
 
 const SELECTORS = [
@@ -19,6 +21,11 @@ const SELECTORS = [
   ".hint-chip",
 ] as const;
 
+/** Pill selectors use a stadium OS region (CreateRoundRectRgn, radius h/2)
+ *  so rectangular corners cannot leave a grey halo. All other selectors
+ *  stay rectangular (radius 0). */
+const PILL_SELECTORS: ReadonlySet<string> = new Set([".dock", ".hint-chip"]);
+
 function collectOverlayRegions(): OverlayRect[] {
   // While a pane drag is live the OS window region (SetWindowRgn) clips
   // painting as well as input, and tight per-pane reports lag the gesture
@@ -29,7 +36,7 @@ function collectOverlayRegions(): OverlayRect[] {
   if (dragCover) {
     const w = typeof window !== "undefined" ? window.innerWidth : 0;
     const h = typeof window !== "undefined" ? window.innerHeight : 0;
-    if (w >= 2 && h >= 2) return [{ x: 0, y: 0, w: Math.round(w), h: Math.round(h) }];
+    if (w >= 2 && h >= 2) return [{ x: 0, y: 0, w: Math.round(w), h: Math.round(h), radius: 0 }];
   }
   const out: OverlayRect[] = [];
   for (const sel of SELECTORS) {
@@ -45,11 +52,19 @@ function collectOverlayRegions(): OverlayRect[] {
       }
       const r = html.getBoundingClientRect();
       if (r.width < 2 || r.height < 2) continue;
+      const w = Math.round(r.width);
+      const h = Math.round(r.height);
+      // Pill inset: the OS region is a round-rect with radius h/2, so no
+      // corner pixel outside the painted stadium stays in the region.
+      const radius = PILL_SELECTORS.has(sel)
+        ? Math.max(0, Math.round(Math.min(r.width, r.height) / 2))
+        : 0;
       out.push({
         x: Math.round(r.left),
         y: Math.round(r.top),
-        w: Math.round(r.width),
-        h: Math.round(r.height),
+        w,
+        h,
+        radius,
       });
       if (out.length >= 64) return out;
     }
@@ -58,7 +73,7 @@ function collectOverlayRegions(): OverlayRect[] {
 }
 
 function signatureFor(rects: OverlayRect[], dpr: number, ox: number, oy: number): string {
-  return `${dpr}|${ox},${oy}|` + rects.map((r) => `${r.x},${r.y},${r.w},${r.h}`).join(";");
+  return `${dpr}|${ox},${oy}|` + rects.map((r) => `${r.x},${r.y},${r.w},${r.h},${r.radius ?? 0}`).join(";");
 }
 
 // Last reported signature. The Rust applied-signature dedupe is a backstop,
@@ -198,6 +213,12 @@ export function watchRegionElementSizes(onDirty: () => void): () => void {
 }
 
 export async function reportOverlayMode(interactive: boolean): Promise<void> {
+  // Order with regions reports: the Rust passive path clears via
+  // SetWindowRgn(NULL) and the next regions report must re-apply even when
+  // the rects are unchanged. Forgetting the frontend diff forces that
+  // re-invoke; otherwise same-rects interactive→passive→interactive would
+  // skip the invoke and leave the window cleared while interactive.
+  lastSignature = null;
   try {
     await invoke("set_overlay_mode", { interactive });
   } catch {

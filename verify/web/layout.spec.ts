@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { stubTauri, commandsNamed } from "./tauri-mock";
 import { MINIMAL_LAYOUT, buildFixtures } from "./fixtures";
+import fs from "node:fs";
 
 test.beforeEach(async ({ page }) => {
   await stubTauri(page, { layout: MINIMAL_LAYOUT });
@@ -248,6 +249,186 @@ test("dock has labeled distinct controls and wraps at 800px", async ({ page }) =
   await dock.screenshot({ path: "verify/web/test-results/dock-800.png" });
 });
 
+// Overlay window-chrome paint lock (PR3): the only visible pixels outside
+// interactive elements are those elements themselves — no fullscreen or
+// pill-shaped grey halo. Pill backgrounds stay clipped inside the radius in
+// every theme/surface, the narrow nowrap-scroll dock never paints a
+// full-width bar, the modal dim exists only while open, and toasts layer
+// above the dock.
+test("overlay chrome paints only inside interactive elements", async ({ page }) => {
+  const chromeSelectors = [
+    "section.pane",
+    ".dock",
+    ".modal",
+    ".gate-card",
+    ".toasts .toast",
+    ".hint-chip",
+  ];
+  const capture = async (name: string) => {
+    const info = await page.evaluate((sels: string[]) => {
+      const out: Array<{ sel: string; x: number; y: number; w: number; h: number }> = [];
+      for (const sel of sels) {
+        for (const el of Array.from(document.querySelectorAll(sel))) {
+          const r = (el as HTMLElement).getBoundingClientRect();
+          if (r.width < 2 || r.height < 2) continue;
+          out.push({ sel, x: r.left, y: r.top, w: r.width, h: r.height });
+        }
+      }
+      return { rects: out, vw: window.innerWidth, vh: window.innerHeight };
+    }, chromeSelectors);
+    const shot = await page.screenshot({ omitBackground: true });
+    fs.writeFileSync(`verify/web/test-results/${name}.png`, shot);
+    fs.writeFileSync(`verify/web/test-results/${name}.json`, JSON.stringify(info));
+  };
+
+  // Wide solid: the root paints nothing; pill backgrounds stay in the radius.
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.reload();
+  const pill = page.getByRole("button", { name: "Dismiss shortcut hint" });
+  await expect(pill).toBeVisible();
+  expect(await pill.evaluate((el) => getComputedStyle(el).backgroundClip)).toBe(
+    "padding-box",
+  );
+  expect(
+    await page.locator(".app").evaluate((el) => getComputedStyle(el).backgroundColor),
+  ).toBe("rgba(0, 0, 0, 0)");
+  const dock = page.locator(".dock");
+  await expect(dock).toBeVisible();
+  expect(await dock.evaluate((el) => getComputedStyle(el).backgroundClip)).toBe(
+    "padding-box",
+  );
+  expect(await dock.evaluate((el) => getComputedStyle(el).borderRadius)).toContain(
+    "999px",
+  );
+  // The toast rule scopes its background even with no live toast: probe a
+  // synthetic node so the rule (not app state) is locked.
+  const toastClip = await page.evaluate(() => {
+    const host = document.querySelector(".toasts");
+    if (!host) return "no-host";
+    const el = document.createElement("div");
+    el.className = "toast";
+    host.appendChild(el);
+    const clip = getComputedStyle(el).backgroundClip;
+    el.remove();
+    return clip;
+  });
+  expect(toastClip).toBe("padding-box");
+  // Toasts layer above the dock.
+  const layers = await page.evaluate(() => {
+    const num = (sel: string) => {
+      const el = document.querySelector(sel);
+      return el ? Number(getComputedStyle(el as HTMLElement).zIndex) : NaN;
+    };
+    return { toasts: num(".toasts"), dock: num(".dock") };
+  });
+  expect(layers.toasts).toBe(300);
+  expect(layers.dock).toBe(200);
+  expect(layers.toasts).toBeGreaterThan(layers.dock);
+  await pill.click();
+  await capture("chrome-wide");
+
+  // Wrap@800px: the pill wraps, never overflows, background still clipped.
+  await page.setViewportSize({ width: 800, height: 600 });
+  await page.reload();
+  await expect(dock).toBeVisible();
+  expect(await dock.evaluate((el) => getComputedStyle(el).flexWrap)).toBe("wrap");
+  const box800 = await dock.boundingBox();
+  if (!box800) throw new Error("dock has no box at 800px");
+  expect(box800.width).toBeLessThanOrEqual(800);
+  expect(box800.x).toBeGreaterThanOrEqual(0);
+  expect(await dock.evaluate((el) => getComputedStyle(el).backgroundClip)).toBe(
+    "padding-box",
+  );
+  await capture("chrome-800");
+
+  // Modal dim exists only while open and never intercepts clicks.
+  expect(await page.locator(".modal-back").count()).toBe(0);
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog).toBeVisible();
+  const back = page.locator(".modal-back");
+  await expect(back).toBeVisible();
+  expect(await back.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe("none");
+  expect(await back.evaluate((el) => getComputedStyle(el).position)).toBe("fixed");
+  expect(await dialog.evaluate((el) => getComputedStyle(el).backgroundClip)).toBe(
+    "padding-box",
+  );
+  await capture("chrome-modal");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  expect(await page.locator(".modal-back").count()).toBe(0);
+
+  // Glass: the blur stays on the pill, never fullscreen.
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.reload();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(dialog).toBeVisible();
+  await dialog
+    .getByRole("group", { name: "Surface" })
+    .getByRole("button", { name: "glass", exact: true })
+    .click();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  expect(await dock.evaluate((el) => getComputedStyle(el).backdropFilter)).not.toBe(
+    "none",
+  );
+  const glassBox = await dock.boundingBox();
+  if (!glassBox) throw new Error("dock has no box in glass");
+  expect(glassBox.width).toBeLessThan(1280);
+  await capture("chrome-glass");
+  // Restore solid before the light pass.
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(dialog).toBeVisible();
+  await dialog
+    .getByRole("group", { name: "Surface" })
+    .getByRole("button", { name: "solid", exact: true })
+    .click();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+
+  // Light: no fullscreen wash, pill scoping intact.
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(dialog).toBeVisible();
+  await dialog
+    .getByRole("group", { name: "Theme" })
+    .getByRole("button", { name: "light", exact: true })
+    .click();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  expect(
+    await page.locator(".app").evaluate((el) => getComputedStyle(el).backgroundColor),
+  ).toBe("rgba(0, 0, 0, 0)");
+  expect(await dock.evaluate((el) => getComputedStyle(el).backgroundClip)).toBe(
+    "padding-box",
+  );
+  await capture("chrome-light");
+  // Restore dark.
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(dialog).toBeVisible();
+  await dialog
+    .getByRole("group", { name: "Theme" })
+    .getByRole("button", { name: "dark", exact: true })
+    .click();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+
+  // True narrow: the bottom icon row scrolls, never a full-width bar.
+  await page.setViewportSize({ width: 420, height: 800 });
+  await page.reload();
+  await expect(page.locator(".app")).toHaveAttribute("data-narrow", "true");
+  await expect(dock).toBeVisible();
+  expect(await dock.evaluate((el) => getComputedStyle(el).flexWrap)).toBe("nowrap");
+  const overflowX = await dock.evaluate((el) => getComputedStyle(el).overflowX);
+  expect(["auto", "scroll"]).toContain(overflowX);
+  const narrowBox = await dock.boundingBox();
+  if (!narrowBox) throw new Error("dock has no box when narrow");
+  expect(narrowBox.width).toBeLessThanOrEqual(420);
+  expect(await dock.evaluate((el) => getComputedStyle(el).backgroundClip)).toBe(
+    "padding-box",
+  );
+  await capture("chrome-narrow");
+});
+
 test("first-run coach pill shows the keys, then dismisses forever", async ({ page }) => {
   const pill = page.getByRole("button", { name: "Dismiss shortcut hint" });
   await expect(pill).toBeVisible();
@@ -290,23 +471,28 @@ test("coach pill is topmost under its center and covered by reported regions", a
   expect(hit).toBe("pill");
 
   // And the reported hit-regions cover the pill, so Rust makes it clickable.
+  // The first regions push can race layout load with a stale rect (mount
+  // reports once before panes settle); the debounced follow-up corrects it,
+  // so poll until the latest report covers.
   await expect
-    .poll(async () => (await commandsNamed(page, "set_overlay_regions")).length, {
-      timeout: 10000,
-    })
-    .toBeGreaterThan(0);
-  const reports = await commandsNamed(page, "set_overlay_regions");
-  const last = reports[reports.length - 1] as unknown as {
-    regions: Array<{ x: number; y: number; w: number; h: number }>;
-  };
-  const covers = (last.regions ?? []).some(
-    (rg) =>
-      rg.x <= box.x + 2 &&
-      rg.y <= box.y + 2 &&
-      rg.x + rg.w >= box.x + box.width - 2 &&
-      rg.y + rg.h >= box.y + box.height - 2,
-  );
-  expect(covers).toBe(true);
+    .poll(
+      async () => {
+        const all = await commandsNamed(page, "set_overlay_regions");
+        const latest = all[all.length - 1] as unknown as {
+          regions: Array<{ x: number; y: number; w: number; h: number }>;
+        } | undefined;
+        const regs = latest?.regions ?? [];
+        return regs.some(
+          (rg) =>
+            rg.x <= box.x + 2 &&
+            rg.y <= box.y + 2 &&
+            rg.x + rg.w >= box.x + box.width - 2 &&
+            rg.y + rg.h >= box.y + box.height - 2,
+        );
+      },
+      { timeout: 10000 },
+    )
+    .toBe(true);
 });
 
 test("Alt+Arrows moves the focused pane, persists, flashes guides, undoes", async ({ page }) => {

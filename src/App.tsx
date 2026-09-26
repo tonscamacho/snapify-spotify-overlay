@@ -1974,7 +1974,11 @@ export default function App() {
       if (dragRaf.current) window.cancelAnimationFrame(dragRaf.current);
       if (guidesTimer.current) window.clearTimeout(guidesTimer.current);
       if (kbBurstTimer.current) window.clearTimeout(kbBurstTimer.current);
+      // Unmount mid-drag must not strand the fullscreen drag-cover shape:
+      // clear the flag and flush one tight report so empty pixels go back
+      // to click-through (counterpart of the Rust passive reset).
       setOverlayDragCover(false);
+      void reportOverlayRegions();
     },
     [],
   );
