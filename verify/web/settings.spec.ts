@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { stubTauri, commandsNamed } from "./tauri-mock";
-import { APP_VERSION, TRACK_PROGRESS_MS, TRACK_URI } from "./fixtures";
+import { APP_VERSION, DEVICE_ID, TRACK_PROGRESS_MS, TRACK_URI } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
   await stubTauri(page);
@@ -211,21 +211,20 @@ test("spotify usage row shows request counts from the log", async ({ page }) => 
     .toBeGreaterThan(0);
 });
 
-test("playback device section lists, transfers, and remembers", async ({ page }) => {
+test("playback device rows transfer on tap and remember", async ({ page }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
   const dialog = page.getByRole("dialog", { name: "Settings" });
   const panel = dialog.getByRole("group", { name: "Playback device" });
   await expect(panel).toBeVisible();
   await expect(panel).toContainText("Sound plays on:");
   await expect(panel).toContainText("Verify Speaker");
-  await expect(panel.getByRole("button", { name: "Play here via this overlay" })).toBeVisible();
-  await expect(panel.getByRole("button", { name: "Keep playback there" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Play here" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "Keep there" })).toHaveCount(0);
   await expect(panel.getByRole("button", { name: "Refresh devices" })).toBeVisible();
   await page.screenshot({ path: "verify/web/test-results/settings-device.png" });
 
-  // Selecting the listed device and keeping there transfers to it.
+  // A single tap on the row transfers at once: no confirm button.
   await panel.locator(".device-cell", { hasText: "Verify Speaker" }).click();
-  await panel.getByRole("button", { name: "Keep playback there" }).click();
   await expect
     .poll(async () => (await commandsNamed(page, "transfer_playback")).length, { timeout: 10000 })
     .toBeGreaterThan(0);
@@ -241,6 +240,48 @@ test("playback device section lists, transfers, and remembers", async ({ page })
   await expect(panel2).toContainText("remembered");
 });
 
+test("stale overlay registrations collapse into a single row", async ({ page }) => {
+  // A previous session left a same-named registration behind: the panel
+  // must still show the overlay exactly once.
+  await stubTauri(page, {
+    fixtures: {
+      devices: {
+        devices: [
+          {
+            id: "stale-sdk-9",
+            name: "Snapify Overlay",
+            type: "Speaker",
+            is_active: false,
+            volume_percent: 80,
+          },
+          {
+            id: "older-sdk-3",
+            name: "Snapify Overlay",
+            type: "Speaker",
+            is_active: false,
+            volume_percent: 80,
+          },
+          {
+            id: DEVICE_ID,
+            name: "Verify Speaker",
+            type: "Speaker",
+            is_active: true,
+            volume_percent: 80,
+          },
+        ],
+      },
+    },
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const panel = page
+    .getByRole("dialog", { name: "Settings" })
+    .getByRole("group", { name: "Playback device" });
+  await expect(panel).toBeVisible();
+  await expect(panel.locator(".device-cell", { hasText: "Snapify Overlay" })).toHaveCount(1);
+  await expect(panel.locator(".device-cell", { hasText: "Verify Speaker" })).toHaveCount(1);
+});
+
 test("lyrics cache row shows size and clears through", async ({ page }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
   const dialog = page.getByRole("dialog", { name: "Settings" });
@@ -254,4 +295,36 @@ test("lyrics cache row shows size and clears through", async ({ page }) => {
     .poll(async () => (await commandsNamed(page, "clear_lyrics_cache")).length, { timeout: 10000 })
     .toBeGreaterThan(0);
   await expect(dialog.getByText("Lyrics cache: 0 tracks, 0 KB")).toBeVisible();
+});
+
+test("sparkles theme selectable, persisted, and coherent", async ({ page }) => {
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog).toBeVisible();
+
+  await dialog
+    .getByRole("group", { name: "Theme" })
+    .getByRole("button", { name: "sparkles", exact: true })
+    .click();
+
+  await expect(page.locator(".app")).toHaveAttribute("data-theme", "sparkles");
+  expect(await page.evaluate(() => localStorage.getItem("snapify-theme"))).toBe("sparkles");
+  await expect(dialog.getByText(/Night-sky build/)).toBeVisible();
+  await page.screenshot({ path: "verify/web/test-results/sparkles-settings.png" });
+
+  await dialog.getByRole("button", { name: "Close settings" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.locator(".stage")).toBeVisible();
+  await page.screenshot({ path: "verify/web/test-results/sparkles-pane.png" });
+
+  await page.reload();
+  await expect(page.locator(".stage")).toBeVisible();
+  await expect(page.locator(".app")).toHaveAttribute("data-theme", "sparkles");
+});
+
+test("sparkles keeps an unknown stored value on dark", async ({ page }) => {
+  await page.evaluate(() => localStorage.setItem("snapify-theme", "supernova"));
+  await page.reload();
+  await expect(page.locator(".stage")).toBeVisible();
+  await expect(page.locator(".app")).toHaveAttribute("data-theme", "dark");
 });

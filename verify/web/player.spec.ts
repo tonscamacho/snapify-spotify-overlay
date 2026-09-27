@@ -195,19 +195,24 @@ test("device section names where sound plays", async ({ page }) => {
   await expect(panel).toBeVisible();
   await expect(panel).toContainText("Sound plays on:");
   await expect(panel).toContainText("Verify Speaker");
-  await expect(panel.getByRole("button", { name: "Play here via this overlay" })).toBeVisible();
-  await expect(panel.getByRole("button", { name: "Keep playback there" })).toBeVisible();
+  // No two-step: rows transfer on tap, so the confirm buttons are gone.
+  await expect(panel.getByRole("button", { name: "Play here" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "Keep there" })).toHaveCount(0);
   await page.screenshot({ path: "verify/web/test-results/settings-device.png" });
 });
 
-test("Play here moves sound onto the overlay and remembers it", async ({ page }) => {
+test("tapping the overlay row moves sound onto it and remembers it", async ({ page }) => {
   const player = page.locator('section[data-pane="player"]');
   await expect(player.getByText(TRACK_NAME)).toBeVisible();
+  // Arm the headless device first so the overlay row is registered.
+  await page.keyboard.press("p");
   await page.getByRole("button", { name: "Open settings" }).click();
   const dialog = page.getByRole("dialog", { name: "Settings" });
   const panel = dialog.getByRole("group", { name: "Playback device" });
+  const overlayRow = panel.getByRole("button", { name: "Snapify Overlay" });
+  await expect(overlayRow).toBeVisible({ timeout: 10000 });
 
-  await panel.getByRole("button", { name: "Play here via this overlay" }).click();
+  await overlayRow.click();
   await expect
     .poll(async () => (await commandsNamed(page, "transfer_playback")).length, { timeout: 10000 })
     .toBeGreaterThan(0);
@@ -223,14 +228,15 @@ test("Play here moves sound onto the overlay and remembers it", async ({ page })
   await expect(panel2).toContainText("remembered: this overlay");
 });
 
-test("Keep there transfers to the chosen device and remembers it", async ({ page }) => {
+test("tapping a device row transfers there at once and remembers it", async ({ page }) => {
   const player = page.locator('section[data-pane="player"]');
   await expect(player.getByText(TRACK_NAME)).toBeVisible();
   await page.getByRole("button", { name: "Open settings" }).click();
   const dialog = page.getByRole("dialog", { name: "Settings" });
   const panel = dialog.getByRole("group", { name: "Playback device" });
 
-  await panel.getByRole("button", { name: "Keep playback there" }).click();
+  // One tap is the whole choice: no select-then-confirm step.
+  await panel.locator(".device-cell", { hasText: "Verify Speaker" }).click();
   await expect
     .poll(async () => (await commandsNamed(page, "transfer_playback")).length, { timeout: 10000 })
     .toBeGreaterThan(0);

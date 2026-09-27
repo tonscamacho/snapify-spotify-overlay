@@ -298,12 +298,11 @@ export default function App() {
       return false;
     }
   });
-  const [theme, setTheme] = useState<"dark" | "light">(() => {
+  const [theme, setTheme] = useState<"dark" | "light" | "sparkles">(() => {
     try {
-      return localStorage.getItem("snapify-theme") === "light" ||
-        localStorage.getItem("nebula-theme") === "light"
-        ? "light"
-        : "dark";
+      const v = localStorage.getItem("snapify-theme");
+      if (v === "light" || v === "sparkles") return v;
+      return localStorage.getItem("nebula-theme") === "light" ? "light" : "dark";
     } catch {
       return "dark";
     }
@@ -1466,10 +1465,10 @@ export default function App() {
       }),
     [run, fetchDevices],
   );
-  // Explicit "Play here": build the headless SDK player inside this user
+  // Overlay row tap: build the headless SDK player inside this user
   // gesture (autoplay policy), then move sound onto it, keeping the current
   // play state. Device priority stays SDK, then active device, then none.
-  const playHereCb = useCallback(
+  const transferOverlayCb = useCallback(
     () =>
       void (async () => {
         const seed = (snapRef.current.volume ?? 50) / 100;
@@ -2718,7 +2717,7 @@ export default function App() {
         activeDeviceId={snap.deviceId}
         activeDeviceName={snap.deviceName}
         onTransfer={transferCb}
-        onPlayHere={playHereCb}
+        onTransferOverlay={transferOverlayCb}
         onRefreshDevices={fetchDevices}
       />
       )}

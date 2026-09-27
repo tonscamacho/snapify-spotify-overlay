@@ -691,19 +691,6 @@ select:focus-visible,
   padding: 6px 2px;
 }
 
-.device-pop-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.device-pop-actions .btn {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 8px;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
 .device-pop-foot {
   display: flex;
   align-items: center;
@@ -1869,6 +1856,181 @@ select:focus-visible,
 .app[data-theme="light"] .guide-v,
 .app[data-theme="light"] .guide-h {
   background: rgba(0, 0, 0, 0.35);
+}
+
+/* ---------- sparkles preset: starry night sky ----------
+   Deep-navy surfaces, moonlit champagne accents. Starfield is static
+   layered gradients only (no animation: motion stays opacity /
+   background-color, 120-160ms per the header policy). Toast keeps its
+   status dot; glass sheen rules below still win when opted in. */
+
+.app[data-theme="sparkles"] {
+  --surface: #0b1330;
+  --surface-2: #141d42;
+  --stroke: rgba(190, 205, 255, 0.16);
+  --stroke-soft: rgba(190, 205, 255, 0.09);
+  --txt: #edf1ff;
+  --dim: rgba(237, 241, 255, 0.7);
+  --faint: rgba(237, 241, 255, 0.55);
+  --track: rgba(190, 205, 255, 0.2);
+  --moon: #ead9a8;
+  --moon-bright: #f4e9cd;
+  --skel: rgba(190, 205, 255, 0.09);
+  --shadow: 0 12px 32px rgba(2, 4, 12, 0.55), 0 2px 6px rgba(2, 4, 12, 0.4);
+  --shadow-sm: 0 4px 14px rgba(2, 4, 12, 0.5);
+}
+
+.app[data-theme="sparkles"]::selection {
+  background: rgba(234, 217, 168, 0.3);
+}
+
+/* Static starfield + faint milky-way band on the large surfaces.
+   Painted over the token background; text contrast is untouched. */
+.app[data-theme="sparkles"] .pane,
+.app[data-theme="sparkles"] .dock,
+.app[data-theme="sparkles"] .modal {
+  background-image:
+    radial-gradient(1px 1px at 12% 22%, rgba(255, 255, 255, 0.85), transparent 60%),
+    radial-gradient(1px 1px at 32% 68%, rgba(255, 255, 255, 0.6), transparent 60%),
+    radial-gradient(1.5px 1.5px at 55% 18%, rgba(244, 233, 205, 0.9), transparent 62%),
+    radial-gradient(1px 1px at 72% 44%, rgba(255, 255, 255, 0.65), transparent 60%),
+    radial-gradient(1px 1px at 86% 74%, rgba(255, 255, 255, 0.75), transparent 60%),
+    radial-gradient(1px 1px at 44% 38%, rgba(255, 255, 255, 0.45), transparent 60%),
+    radial-gradient(1.5px 1.5px at 64% 84%, rgba(255, 255, 255, 0.55), transparent 62%),
+    linear-gradient(115deg, transparent 52%, rgba(190, 205, 255, 0.07) 66%, transparent 80%);
+}
+
+.app[data-theme="sparkles"] .modal-back {
+  background: rgba(4, 7, 20, 0.6);
+}
+
+.app[data-theme="sparkles"] .art-img,
+.app[data-theme="sparkles"] .browse-thumb,
+.app[data-theme="sparkles"] .detail-head img {
+  background: rgba(190, 205, 255, 0.08);
+}
+
+.app[data-theme="sparkles"] .bar i {
+  background: var(--moon);
+}
+
+.app[data-theme="sparkles"] .play-disc,
+.app[data-theme="sparkles"] .btn.primary {
+  background: var(--moon);
+  color: #1a2140;
+}
+
+.app[data-theme="sparkles"] .play-disc:hover:not(:disabled),
+.app[data-theme="sparkles"] .btn.primary:hover:not(:disabled) {
+  background: var(--moon-bright);
+}
+
+.app[data-theme="sparkles"] .icon-btn {
+  color: rgba(237, 241, 255, 0.7);
+}
+
+.app[data-theme="sparkles"] .icon-btn:hover:not(:disabled) {
+  background: rgba(190, 205, 255, 0.08);
+  color: var(--moon-bright);
+}
+
+.app[data-theme="sparkles"] .settings-device {
+  background: #131b40;
+}
+
+.app[data-theme="sparkles"] .device-line {
+  color: var(--moon);
+}
+
+.app[data-theme="sparkles"] .device-cell:hover {
+  background: rgba(190, 205, 255, 0.07);
+}
+
+.app[data-theme="sparkles"] .device-cell[aria-pressed="true"] {
+  background: rgba(190, 205, 255, 0.12);
+}
+
+.app[data-theme="sparkles"] .like-check:hover:not(:disabled) {
+  background: rgba(190, 205, 255, 0.08);
+  color: var(--moon-bright);
+}
+
+.app[data-theme="sparkles"] .like-check.is-on {
+  background: var(--moon);
+  color: #1a2140;
+}
+
+.app[data-theme="sparkles"] .tbtn:hover {
+  background: rgba(190, 205, 255, 0.08);
+  color: var(--moon-bright);
+}
+
+.app[data-theme="sparkles"] .btn:hover:not(:disabled) {
+  background: rgba(190, 205, 255, 0.07);
+}
+
+.app[data-theme="sparkles"] .vol,
+.app[data-theme="sparkles"] .modal .row input[type="range"],
+.app[data-theme="sparkles"] .pane-op {
+  accent-color: var(--moon);
+}
+
+.app[data-theme="sparkles"] .line.on {
+  background: rgba(234, 217, 168, 0.1);
+  color: #fff;
+}
+
+.app[data-theme="sparkles"] .line.on .w-done {
+  color: #fff;
+}
+
+.app[data-theme="sparkles"] .seg {
+  background: rgba(190, 205, 255, 0.06);
+}
+
+.app[data-theme="sparkles"] .seg-on {
+  background: rgba(234, 217, 168, 0.16) !important;
+  color: var(--moon-bright) !important;
+}
+
+.app[data-theme="sparkles"] .seg button:hover {
+  color: var(--moon-bright);
+}
+
+.app[data-theme="sparkles"] .kbd {
+  background: rgba(190, 205, 255, 0.08);
+}
+
+.app[data-theme="sparkles"] .chip-on {
+  background: rgba(190, 205, 255, 0.12);
+}
+
+.app[data-theme="sparkles"] .queue-context:hover {
+  background: rgba(190, 205, 255, 0.07);
+}
+
+.app[data-theme="sparkles"] .gate-icon,
+.app[data-theme="sparkles"] .empty-icon {
+  background: var(--surface-2);
+}
+
+.app[data-theme="sparkles"] .spotify-mark {
+  color: var(--moon-bright);
+}
+
+.app[data-theme="sparkles"] .guide-v,
+.app[data-theme="sparkles"] .guide-h {
+  background: rgba(190, 205, 255, 0.4);
+}
+
+.app[data-theme="sparkles"] .collapse-btn:hover {
+  background: rgba(190, 205, 255, 0.08);
+  color: var(--moon-bright);
+}
+
+/* Restrained easter egg: one sparkle per empty state, static. */
+.app[data-theme="sparkles"] .empty-title::after {
+  content: " ✨";
 }
 
 /* ---------- appearance: surface + corners (opt-in) ---------- */

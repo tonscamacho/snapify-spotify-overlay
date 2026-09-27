@@ -4,6 +4,7 @@ import { api } from "../lib/spotify";
 import type { Density, Surface, Corners, SceneName, DeviceInfo } from "../lib/types";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { readDeviceChoice, writeDeviceChoice, type DeviceChoice } from "./PlayerPane";
+import { mergeDeviceRows, tapActionFor, type DeviceRow } from "../lib/devices";
 import {
   KEYBIND_LABELS,
   KEYBIND_ORDER,
@@ -21,7 +22,7 @@ interface Props {
   loggedIn: boolean;
   preset: string;
   uiScale: number;
-  theme: "dark" | "light";
+  theme: "dark" | "light" | "sparkles";
   density: Density;
   surface: Surface;
   corners: Corners;
@@ -50,7 +51,7 @@ interface Props {
   onToggleStreamHide: () => void;
   onToggleStreamDim: () => void;
   onUiScale: (v: number) => void;
-  onTheme: (v: "dark" | "light") => void;
+  onTheme: (v: "dark" | "light" | "sparkles") => void;
   onDensity: (v: Density) => void;
   onSurface: (v: Surface) => void;
   onCorners: (v: Corners) => void;
@@ -77,8 +78,8 @@ interface Props {
   activeDeviceId?: string | null;
   activeDeviceName?: string | null;
   onTransfer: (id: string) => void;
-  /** Build the headless SDK player and move playback onto it. */
-  onPlayHere: () => void;
+  /** Build the headless SDK player if needed and move playback onto it. */
+  onTransferOverlay: () => void;
   onRefreshDevices: () => void;
 }
 
@@ -203,49 +204,36 @@ function DeviceSection(p: {
   activeDeviceId?: string | null;
   activeDeviceName?: string | null;
   onTransfer: (id: string) => void;
-  onPlayHere: () => void;
+  onTransferOverlay: () => void;
   onRefreshDevices: () => void;
 }) {
   const [choice, setChoice] = useState<DeviceChoice | null>(() => readDeviceChoice());
-  const [selectedId, setSelectedId] = useState<string>("");
 
-  // Restore the remembered destination as the selection when the device
-  // list arrives. Selection only: no silent transfer on boot. Without a
-  // memory, the active device is the starting selection so Keep there is
-  // a one-click confirm.
-  useEffect(() => {
-    if (selectedId) return;
-    if (
-      choice?.kind === "connect" &&
-      choice.deviceId &&
-      p.devices.some((d) => d.id === choice.deviceId)
-    ) {
-      setSelectedId(choice.deviceId);
-    } else if (p.activeDeviceId) {
-      setSelectedId(p.activeDeviceId);
-    } else if (p.sdkDeviceId) {
-      setSelectedId(p.sdkDeviceId);
-    }
-  }, [p.devices, p.activeDeviceId, p.sdkDeviceId, choice, selectedId]);
+  // One merged list: the overlay renders exactly once (the live SDK id
+  // wins, stale same-named entries collapse), keyed by stable device id.
+  const rows = mergeDeviceRows(p.devices, p.sdkDeviceId, p.activeDeviceId);
 
   const activeName =
     p.activeDeviceName ??
     (p.sdkDeviceId && p.activeDeviceId === p.sdkDeviceId ? "Snapify Overlay" : null) ??
-    (p.devices.length === 0 ? "No devices — open Spotify" : "Choose a device");
+    (rows.length === 0 ? "No devices — open Spotify" : "Choose a device");
 
-  const playHere = () => {
-    const next: DeviceChoice = { kind: "sdk" };
+  // A single tap is the whole choice: the overlay row builds the headless
+  // player if needed and moves sound onto it, every other row transfers
+  // straight to its stable device id. The tap also refreshes the memory.
+  const tap = (row: DeviceRow) => {
+    const action = tapActionFor(row);
+    if (action.kind === "overlay") {
+      const next: DeviceChoice = { kind: "sdk" };
+      setChoice(next);
+      writeDeviceChoice(next);
+      p.onTransferOverlay();
+      return;
+    }
+    const next: DeviceChoice = { kind: "connect", deviceId: action.deviceId };
     setChoice(next);
     writeDeviceChoice(next);
-    p.onPlayHere();
-  };
-
-  const keepThere = () => {
-    if (!selectedId) return;
-    const next: DeviceChoice = { kind: "connect", deviceId: selectedId };
-    setChoice(next);
-    writeDeviceChoice(next);
-    p.onTransfer(selectedId);
+    p.onTransfer(action.deviceId);
   };
 
   return (
@@ -259,26 +247,14 @@ function DeviceSection(p: {
         </span>
       </div>
       <div className="device-list">
-        {p.sdkDeviceId && (
-          <button
-            className={`device-cell${p.sdkDeviceId === p.activeDeviceId ? " is-active" : ""}`}
-            aria-pressed={selectedId === p.sdkDeviceId}
-            onClick={() => setSelectedId(p.sdkDeviceId as string)}
-            title="Snapify Overlay"
-          >
-            <i className="device-dot" aria-hidden="true" />
-            <span>
-              Snapify Overlay{p.sdkDeviceId === p.activeDeviceId ? " — active" : ""}
-            </span>
-          </button>
-        )}
-        {p.devices.map((d) => (
+        {rows.map((d) => (
           <button
             key={d.id}
             className={`device-cell${d.isActive ? " is-active" : ""}`}
-            aria-pressed={selectedId === d.id}
-            onClick={() => setSelectedId(d.id)}
-            title={d.name}
+            aria-pressed={d.isActive}
+            onClick={() => tap(d)}
+            title={d.isOverlay ? "Snapify Overlay" : d.name}
+            aria-label={`${d.name}${d.isActive ? " — active" : ""}`}
           >
             <i className="device-dot" aria-hidden="true" />
             <span>
@@ -287,28 +263,9 @@ function DeviceSection(p: {
             </span>
           </button>
         ))}
-        {!p.sdkDeviceId && p.devices.length === 0 && (
+        {rows.length === 0 && (
           <div className="device-empty">No devices — open Spotify</div>
         )}
-      </div>
-      <div className="device-pop-actions">
-        <button
-          className="btn sm primary"
-          onClick={playHere}
-          title="Play through this overlay (Spotify headless SDK)"
-          aria-label="Play here via this overlay"
-        >
-          Play here
-        </button>
-        <button
-          className="btn sm"
-          onClick={keepThere}
-          disabled={!selectedId}
-          title="Keep playback on the chosen Spotify device (Connect)"
-          aria-label="Keep playback there"
-        >
-          Keep there
-        </button>
       </div>
       <div className="device-pop-foot">
         <button
@@ -327,7 +284,6 @@ function DeviceSection(p: {
         >
           <OpenIcon size={14} />
         </button>
-        <span className="dim">Play here: sound from this overlay. Keep there: stay on the chosen device.</span>
       </div>
     </div>
   );
@@ -482,7 +438,7 @@ export default function SettingsModal(p: Props) {
           activeDeviceId={p.activeDeviceId}
           activeDeviceName={p.activeDeviceName}
           onTransfer={p.onTransfer}
-          onPlayHere={p.onPlayHere}
+          onTransferOverlay={p.onTransferOverlay}
           onRefreshDevices={p.onRefreshDevices}
         />
         <div className="row">
@@ -515,7 +471,7 @@ export default function SettingsModal(p: Props) {
         <div className="row">
           <span>Theme</span>
           <span className="seg" role="group" aria-label="Theme">
-            {(["dark", "light"] as const).map((n) => (
+            {(["dark", "light", "sparkles"] as const).map((n) => (
               <button
                 key={n}
                 className={p.theme === n ? "seg-on" : ""}
@@ -527,6 +483,9 @@ export default function SettingsModal(p: Props) {
             ))}
           </span>
         </div>
+        {p.theme === "sparkles" && (
+          <div className="hint">Night-sky build — moonlit accents, low-glare text. ✨</div>
+        )}
         <div className="row">
           <span>Density</span>
           <span className="seg" role="group" aria-label="Density">
