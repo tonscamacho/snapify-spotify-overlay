@@ -2033,6 +2033,191 @@ select:focus-visible,
   content: " ✨";
 }
 
+/* ---------- pastel preset: warm cream + candy washes ----------
+   Cream shell, per-pane candy tints (pink / mint / butter / lavender),
+   warm-cocoa text and controls. Flat background-color washes only, no
+   animation: motion stays opacity / background-color, 120-160ms per the
+   header policy. Toast keeps its status dot. */
+
+.app[data-theme="pastel"] {
+  --surface: #fff9ef;
+  --surface-2: #faedd5;
+  --stroke: rgba(93, 74, 53, 0.16);
+  --stroke-soft: rgba(93, 74, 53, 0.09);
+  --txt: #443728;
+  --dim: rgba(68, 55, 40, 0.72);
+  --faint: rgba(68, 55, 40, 0.58);
+  --track: rgba(68, 55, 40, 0.16);
+  --cocoa: #4a3c2e;
+  --rose: #c4748c;
+  --skel: rgba(68, 55, 40, 0.07);
+  --shadow: 0 12px 32px rgba(122, 90, 58, 0.16), 0 2px 6px rgba(122, 90, 58, 0.1);
+  --shadow-sm: 0 4px 14px rgba(122, 90, 58, 0.14);
+}
+
+.app[data-theme="pastel"]::selection {
+  background: rgba(196, 116, 140, 0.28);
+}
+
+/* Candy cards: one wash per pane, dock/modal/toast stay cream. */
+.app[data-theme="pastel"] .pane[data-pane="player"] {
+  background-color: #fceef1;
+}
+
+.app[data-theme="pastel"] .pane[data-pane="lyrics"] {
+  background-color: #eaf6ed;
+}
+
+.app[data-theme="pastel"] .pane[data-pane="queue"] {
+  background-color: #fcf3d8;
+}
+
+.app[data-theme="pastel"] .pane[data-pane="visualizer"] {
+  background-color: #efe9fa;
+}
+
+.app[data-theme="pastel"] .dock {
+  background-color: #fdf0d5;
+}
+
+.app[data-theme="pastel"] .modal-back {
+  background: rgba(68, 55, 40, 0.38);
+}
+
+.app[data-theme="pastel"] .art-img,
+.app[data-theme="pastel"] .browse-thumb,
+.app[data-theme="pastel"] .detail-head img {
+  background: rgba(68, 55, 40, 0.07);
+}
+
+.app[data-theme="pastel"] .bar i {
+  background: var(--rose);
+}
+
+.app[data-theme="pastel"] .play-disc,
+.app[data-theme="pastel"] .btn.primary {
+  background: var(--cocoa);
+  color: #fff9ef;
+}
+
+.app[data-theme="pastel"] .play-disc:hover:not(:disabled),
+.app[data-theme="pastel"] .btn.primary:hover:not(:disabled) {
+  background: rgba(74, 60, 46, 0.85);
+}
+
+.app[data-theme="pastel"] .icon-btn {
+  color: rgba(68, 55, 40, 0.72);
+}
+
+.app[data-theme="pastel"] .icon-btn:hover:not(:disabled) {
+  background: rgba(196, 116, 140, 0.12);
+  color: var(--cocoa);
+}
+
+.app[data-theme="pastel"] .settings-device {
+  background: #fffdf7;
+}
+
+.app[data-theme="pastel"] .device-line {
+  color: #2e7d4f;
+}
+
+.app[data-theme="pastel"] .device-cell:hover {
+  background: rgba(196, 116, 140, 0.1);
+}
+
+.app[data-theme="pastel"] .device-cell[aria-pressed="true"] {
+  background: rgba(243, 218, 147, 0.5);
+}
+
+.app[data-theme="pastel"] .like-check:hover:not(:disabled) {
+  background: rgba(198, 182, 228, 0.25);
+  color: var(--cocoa);
+}
+
+.app[data-theme="pastel"] .like-check.is-on {
+  background: #b7e2c6;
+  color: var(--cocoa);
+}
+
+.app[data-theme="pastel"] .tbtn:hover {
+  background: rgba(196, 116, 140, 0.12);
+  color: var(--cocoa);
+}
+
+.app[data-theme="pastel"] .btn:hover:not(:disabled) {
+  background: rgba(243, 218, 147, 0.45);
+}
+
+.app[data-theme="pastel"] .vol,
+.app[data-theme="pastel"] .modal .row input[type="range"],
+.app[data-theme="pastel"] .pane-op {
+  accent-color: var(--cocoa);
+}
+
+.app[data-theme="pastel"] .line.on {
+  background: rgba(196, 116, 140, 0.14);
+  color: var(--cocoa);
+}
+
+.app[data-theme="pastel"] .line.on .w-done {
+  color: var(--cocoa);
+}
+
+.app[data-theme="pastel"] .seg {
+  background: rgba(68, 55, 40, 0.06);
+}
+
+.app[data-theme="pastel"] .seg-on {
+  background: rgba(243, 218, 147, 0.65) !important;
+  color: var(--cocoa) !important;
+}
+
+.app[data-theme="pastel"] .seg button:hover {
+  color: var(--cocoa);
+}
+
+.app[data-theme="pastel"] .kbd {
+  background: rgba(243, 218, 147, 0.4);
+}
+
+.app[data-theme="pastel"] .chip-on {
+  background: rgba(198, 182, 228, 0.35);
+}
+
+.app[data-theme="pastel"] .queue-context:hover {
+  background: rgba(198, 182, 228, 0.25);
+}
+
+.app[data-theme="pastel"] .gate-icon,
+.app[data-theme="pastel"] .empty-icon {
+  background: var(--surface-2);
+}
+
+.app[data-theme="pastel"] .spotify-mark {
+  color: var(--cocoa);
+}
+
+.app[data-theme="pastel"] .guide-v,
+.app[data-theme="pastel"] .guide-h {
+  background: rgba(68, 55, 40, 0.35);
+}
+
+.app[data-theme="pastel"] .collapse-btn:hover {
+  background: rgba(183, 226, 198, 0.45);
+  color: var(--cocoa);
+}
+
+/* Restrained easter eggs, static: one per empty state, one on the
+   coachmark corner. Never animated, never on the dock transport row. */
+.app[data-theme="pastel"] .empty-title::after {
+  content: " 🐈‍⬛";
+}
+
+.app[data-theme="pastel"] .hint-chip::after {
+  content: " 🐈‍⬛";
+}
+
 /* ---------- appearance: surface + corners (opt-in) ---------- */
 /* Solid + rounded is the default and stays pixel-identical: the rules
    below only match data-surface="glass" / data-corners="sharp". */

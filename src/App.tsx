@@ -298,10 +298,10 @@ export default function App() {
       return false;
     }
   });
-  const [theme, setTheme] = useState<"dark" | "light" | "sparkles">(() => {
+  const [theme, setTheme] = useState<"dark" | "light" | "sparkles" | "pastel">(() => {
     try {
       const v = localStorage.getItem("snapify-theme");
-      if (v === "light" || v === "sparkles") return v;
+      if (v === "light" || v === "sparkles" || v === "pastel") return v;
       return localStorage.getItem("nebula-theme") === "light" ? "light" : "dark";
     } catch {
       return "dark";

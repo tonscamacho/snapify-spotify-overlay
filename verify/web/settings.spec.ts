@@ -328,3 +328,35 @@ test("sparkles keeps an unknown stored value on dark", async ({ page }) => {
   await expect(page.locator(".stage")).toBeVisible();
   await expect(page.locator(".app")).toHaveAttribute("data-theme", "dark");
 });
+
+test("pastel theme selectable, persisted, and coherent", async ({ page }) => {
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog).toBeVisible();
+
+  await dialog
+    .getByRole("group", { name: "Theme" })
+    .getByRole("button", { name: "pastel", exact: true })
+    .click();
+
+  await expect(page.locator(".app")).toHaveAttribute("data-theme", "pastel");
+  expect(await page.evaluate(() => localStorage.getItem("snapify-theme"))).toBe("pastel");
+  await expect(dialog.getByText(/sleepy-cat/)).toBeVisible();
+  await page.screenshot({ path: "verify/web/test-results/pastel-settings.png" });
+
+  await dialog.getByRole("button", { name: "Close settings" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.locator(".stage")).toBeVisible();
+  await page.screenshot({ path: "verify/web/test-results/pastel-pane.png" });
+
+  await page.reload();
+  await expect(page.locator(".stage")).toBeVisible();
+  await expect(page.locator(".app")).toHaveAttribute("data-theme", "pastel");
+});
+
+test("pastel keeps an unknown stored value on dark", async ({ page }) => {
+  await page.evaluate(() => localStorage.setItem("snapify-theme", "supernova"));
+  await page.reload();
+  await expect(page.locator(".stage")).toBeVisible();
+  await expect(page.locator(".app")).toHaveAttribute("data-theme", "dark");
+});

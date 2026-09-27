@@ -22,7 +22,7 @@ interface Props {
   loggedIn: boolean;
   preset: string;
   uiScale: number;
-  theme: "dark" | "light" | "sparkles";
+  theme: "dark" | "light" | "sparkles" | "pastel";
   density: Density;
   surface: Surface;
   corners: Corners;
@@ -51,7 +51,7 @@ interface Props {
   onToggleStreamHide: () => void;
   onToggleStreamDim: () => void;
   onUiScale: (v: number) => void;
-  onTheme: (v: "dark" | "light" | "sparkles") => void;
+  onTheme: (v: "dark" | "light" | "sparkles" | "pastel") => void;
   onDensity: (v: Density) => void;
   onSurface: (v: Surface) => void;
   onCorners: (v: Corners) => void;
@@ -471,7 +471,7 @@ export default function SettingsModal(p: Props) {
         <div className="row">
           <span>Theme</span>
           <span className="seg" role="group" aria-label="Theme">
-            {(["dark", "light", "sparkles"] as const).map((n) => (
+            {(["dark", "light", "sparkles", "pastel"] as const).map((n) => (
               <button
                 key={n}
                 className={p.theme === n ? "seg-on" : ""}
@@ -485,6 +485,9 @@ export default function SettingsModal(p: Props) {
         </div>
         {p.theme === "sparkles" && (
           <div className="hint">Night-sky build — moonlit accents, low-glare text. ✨</div>
+        )}
+        {p.theme === "pastel" && (
+          <div className="hint">Warm-cream build — candy pastels, sleepy-cat approved. 🐈‍⬛</div>
         )}
         <div className="row">
           <span>Density</span>
