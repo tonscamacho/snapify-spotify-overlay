@@ -21,10 +21,35 @@ const SELECTORS = [
   ".hint-chip",
 ] as const;
 
-/** Pill selectors use a stadium OS region (CreateRoundRectRgn, radius h/2)
- *  so rectangular corners cannot leave a grey halo. All other selectors
- *  stay rectangular (radius 0). */
-const PILL_SELECTORS: ReadonlySet<string> = new Set([".dock", ".hint-chip"]);
+/** Painted corner radius of an element in CSS px: the minimum of its four
+ *  computed corners (the OS round-rect takes a single ellipse, so the
+ *  minimum is the safe choice). Percentages resolve against the smaller
+ *  box side; non-numeric values fall back to 0 (square). Reading computed
+ *  style keeps reports honest across themes (sharp corners report 0) and
+ *  pill radii (999px clamps to a stadium in Rust). */
+function paintedRadius(el: HTMLElement, w: number, h: number): number {
+  const style = getComputedStyle(el);
+  const corners = [
+    style.borderTopLeftRadius,
+    style.borderTopRightRadius,
+    style.borderBottomRightRadius,
+    style.borderBottomLeftRadius,
+  ];
+  let best = Number.POSITIVE_INFINITY;
+  for (const c of corners) {
+    const first = (c || "").split(" ")[0] || "";
+    let v: number;
+    if (first.endsWith("%")) {
+      const pct = parseFloat(first);
+      v = Number.isFinite(pct) ? (pct / 100) * Math.min(w, h) : NaN;
+    } else {
+      v = parseFloat(first);
+    }
+    if (Number.isFinite(v) && v >= 0) best = Math.min(best, v);
+  }
+  if (!Number.isFinite(best)) return 0;
+  return Math.max(0, Math.round(best));
+}
 
 function collectOverlayRegions(): OverlayRect[] {
   // While a pane drag is live the OS window region (SetWindowRgn) clips
@@ -54,11 +79,10 @@ function collectOverlayRegions(): OverlayRect[] {
       if (r.width < 2 || r.height < 2) continue;
       const w = Math.round(r.width);
       const h = Math.round(r.height);
-      // Pill inset: the OS region is a round-rect with radius h/2, so no
-      // corner pixel outside the painted stadium stays in the region.
-      const radius = PILL_SELECTORS.has(sel)
-        ? Math.max(0, Math.round(Math.min(r.width, r.height) / 2))
-        : 0;
+      // Region shape follows the painted corners: the OS round-rect is
+      // built from this radius, so no unpainted pixel inside the region
+      // can render the transparent window's grey default (halo).
+      const radius = paintedRadius(html, r.width, r.height);
       out.push({
         x: Math.round(r.left),
         y: Math.round(r.top),

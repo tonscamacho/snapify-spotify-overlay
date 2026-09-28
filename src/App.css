@@ -2419,6 +2419,15 @@ select:focus-visible,
   min-height: 18px;
 }
 
+/* The 64 px pin is exact (20 header + 42 row + 2 border) only when the
+   header content is 18 px tall: the shared 22 px collapse button would
+   push the header to 24 px and clip 4 px off the mini row (cover/disc
+   bottom cut by the pane box and the OS region alike). */
+.pane[data-pane="player"][data-collapsed="true"] .collapse-btn {
+  width: 18px;
+  height: 18px;
+}
+
 .pane[data-pane="player"][data-collapsed="true"] .player-full {
   display: none;
 }

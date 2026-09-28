@@ -138,10 +138,13 @@ fn apply_signature(
     interactive: bool,
     dpr: Option<f64>,
     origin: Option<(i32, i32)>,
-    rects: &[(i32, i32, i32, i32)],
+    rects: &[(i32, i32, i32, i32, i32, i32)],
 ) -> String {
     // DPR + origin ride the signature so a same-CSS-rects hop across
     // mixed-DPI monitors (identical rects, new display) still re-applies.
+    // The round-rect ellipse rides too: a radius-only change (sharp theme,
+    // collapsed strip) must re-apply even when every box is unchanged, or
+    // the stale shape keeps a grey halo.
     format!("{interactive}|{dpr:?}|{origin:?}|{rects:?}")
 }
 
@@ -394,8 +397,8 @@ fn apply_region(app: &AppHandle) {
     }
     let (dx, dy) = frame_offset(&win);
     let phys = phys_regions(&regions, scale, dx, dy);
-    let rects: Vec<(i32, i32, i32, i32)> =
-        phys.iter().map(|p| (p.l, p.t, p.r, p.b)).collect();
+    let rects: Vec<(i32, i32, i32, i32, i32, i32)> =
+        phys.iter().map(|p| (p.l, p.t, p.r, p.b, p.ew, p.eh)).collect();
     let (dpr, origin) = match state.inner.lock() {
         Ok(g) => (g.last_dpr, g.last_origin.map(|o| (o.x, o.y))),
         Err(_) => return,
@@ -536,7 +539,7 @@ mod tests {
 
     #[test]
     fn signature_tags_dpr_and_origin() {
-        let rects = vec![(8, 30, 158, 105)];
+        let rects = vec![(8, 30, 158, 105, 0, 0)];
         // Same CSS rects on a new monitor must still re-apply: DPR hop.
         assert_ne!(
             apply_signature(true, Some(1.0), Some((0, 0)), &rects),
@@ -566,18 +569,35 @@ mod tests {
 
     #[test]
     fn signature_settles_identical_reports() {
-        let rects = vec![(8, 30, 158, 105)];
+        let rects = vec![(8, 30, 158, 105, 0, 0)];
         assert_eq!(
             apply_signature(true, None, None, &rects),
             apply_signature(true, None, None, &rects)
         );
         assert_ne!(
             apply_signature(true, None, None, &rects),
-            apply_signature(true, None, None, &[(8, 30, 159, 105)])
+            apply_signature(true, None, None, &[(8, 30, 159, 105, 0, 0)])
         );
         assert_ne!(
             apply_signature(true, None, None, &rects),
             apply_signature(false, None, None, &rects)
+        );
+    }
+
+    #[test]
+    fn signature_reapplies_on_radius_only_change() {
+        // Same boxes, new corner shape (rounded theme -> sharp, collapsed
+        // strip): the OS shape must re-apply or the stale round-rect keeps
+        // a grey halo.
+        let rounded = vec![(8, 30, 158, 105, 28, 28)];
+        let sharp = vec![(8, 30, 158, 105, 0, 0)];
+        assert_ne!(
+            apply_signature(true, None, None, &rounded),
+            apply_signature(true, None, None, &sharp)
+        );
+        assert_eq!(
+            apply_signature(true, None, None, &rounded),
+            apply_signature(true, None, None, &rounded)
         );
     }
 
@@ -705,7 +725,7 @@ mod tests {
 
     #[test]
     fn passive_sig_clears_and_settles() {
-        let empty: Vec<(i32, i32, i32, i32)> = vec![];
+        let empty: Vec<(i32, i32, i32, i32, i32, i32)> = vec![];
         // Passive clear can never equal an interactive apply, so the reset
         // bypasses the rect dedupe even when the last interactive region
         // was also empty.
