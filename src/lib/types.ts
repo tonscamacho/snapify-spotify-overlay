@@ -23,7 +23,7 @@ export interface PaneState {
   opacity: number;
   visible: boolean;
   /** PR8 collapse: true pins the pane to its mini/compact floor (player →
-   *  the 64 px mini row, other panes → header only). Persisted in v4;
+   *  the 68 px mini card, other panes → header only). Persisted in v4;
    *  absent (v3 docs) means expanded. */
   collapsed?: boolean;
   z: number;
