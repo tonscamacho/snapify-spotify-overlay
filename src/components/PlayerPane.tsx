@@ -40,11 +40,11 @@ interface Props {
    *  banner above the player. Retry re-polls the player. */
   degraded?: boolean;
   onRetry?: () => void;
-  /** Render the mini row (art + title + play/pause) alongside the full
-   *  player. The App sets this when the pane is collapsed or narrow
-   *  enough for the 280 px container query to show it; otherwise the
-   *  mini stays out of the DOM so track text and Play/Pause resolve
-   *  exactly once. */
+  /** Render the mini card (circular art + title/artist + thin progress +
+   *  prev/play/next) alongside the full player. The App sets this when the
+   *  pane is collapsed or narrow enough for the 280 px container query to
+   *  show it; otherwise the mini stays out of the DOM so track text and
+   *  Play/Pause resolve exactly once. */
   compact?: boolean;
   onPlay: () => void;
   onPause: () => void;
@@ -611,10 +611,12 @@ export default function PlayerPane(p: Props) {
         />
       </div>
       </div>
-      {/* Mini player row (PR8): art + title + play/pause only. Rendered
-        only when the App flags the pane compact (collapsed or narrow);
-        a 280 px container query or the collapsed flag swaps it in for
-        the full player (see App.css). */}
+      {/* Mini player card (compact/collapsed): circular art + title/artist
+        + thin progress + prev/play/next. Rendered only when the App flags
+        the pane compact (collapsed, narrow, or short); the full player
+        hides via CSS in the collapsed and narrow states, so track text,
+        Play/Pause, and the seek control resolve exactly once. No
+        volume/shuffle/repeat at this size. */}
       {p.compact === true && (
         <div
           className="mini-row"
@@ -628,33 +630,65 @@ export default function PlayerPane(p: Props) {
             <NoteIcon size={16} />
           </div>
         )}
-        <div
-          className="mini-title"
-          title={`${track.name} — ${track.artists}`}
-        >
-          {track.name}
+        <div className="mini-meta">
+          <div
+            className="mini-title"
+            title={`${track.name} — ${track.artists}`}
+          >
+            {track.name}
+          </div>
+          <div className="mini-artist" title={track.artists}>
+            {track.artists}
+          </div>
+          <div
+            className="mini-progress"
+            role="img"
+            aria-label={`${formatMs(p.progressMs)} of ${formatMs(track.durationMs)}`}
+          >
+            <i style={{ width: `${progressPct}%` }} />
+          </div>
         </div>
-        {s.isPlaying ? (
+        <div className="mini-transport">
           <button
-            className="play-disc mini-play"
-            onClick={p.onPause}
-            disabled={busyPlayPause}
-            title="Pause"
-            aria-label="Pause"
+            className="icon-btn mini-nav"
+            onClick={p.onPrev}
+            disabled={busyPrev || isFree}
+            title={isFree ? UPGRADE_TEXT : "Previous"}
+            aria-label="Previous track"
           >
-            <PauseIcon size={15} />
+            <PrevIcon size={15} />
           </button>
-        ) : (
+          {s.isPlaying ? (
+            <button
+              className="play-disc mini-play"
+              onClick={p.onPause}
+              disabled={busyPlayPause}
+              title="Pause"
+              aria-label="Pause"
+            >
+              <PauseIcon size={15} />
+            </button>
+          ) : (
+            <button
+              className="play-disc mini-play"
+              onClick={p.onPlay}
+              disabled={busyPlayPause || isFree}
+              title={isFree ? UPGRADE_TEXT : "Play"}
+              aria-label="Play"
+            >
+              <PlayIcon size={15} />
+            </button>
+          )}
           <button
-            className="play-disc mini-play"
-            onClick={p.onPlay}
-            disabled={busyPlayPause || isFree}
-            title={isFree ? UPGRADE_TEXT : "Play"}
-            aria-label="Play"
+            className="icon-btn mini-nav"
+            onClick={p.onNext}
+            disabled={busyNext || isFree}
+            title={isFree ? UPGRADE_TEXT : "Next"}
+            aria-label="Next track"
           >
-            <PlayIcon size={15} />
+            <NextIcon size={15} />
           </button>
-        )}
+        </div>
         </div>
       )}
     </div>

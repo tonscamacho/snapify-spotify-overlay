@@ -6,8 +6,8 @@ import { TRACK_NAME } from "./fixtures";
 // - No native caption buttons exist in-page: the dock exposes only its own
 //   Close (minimize/maximize/close live in no pane header, at no width).
 // - Collapsed panes are header-only with zero painted spill past their box
-//   (the collapsed player mini row fits its 64 px pin exactly: 20 header +
-//   42 row + 2 border).
+//   (the collapsed player mini card fits its 68 px pin exactly: 22 header +
+//   44 card + 2 border, still inside the 72 px ceiling).
 // - Overlay regions carry the painted corner radius (panes 14 px, dock
 //   stadium) so the OS round-rect shape never leaves a grey halo.
 
@@ -123,7 +123,7 @@ for (const w of [280, 360]) {
     const pm: any = await spillReport(page, 'section[data-pane="player"]');
     const qm: any = await spillReport(page, 'section[data-pane="queue"]');
     const lm: any = await spillReport(page, 'section[data-pane="lyrics"]');
-    expect(pm.box.h).toBeLessThanOrEqual(64);
+    expect(pm.box.h).toBeLessThanOrEqual(72);
     expect(qm.box.h).toBeLessThanOrEqual(48);
     expect(lm.box.h).toBeLessThanOrEqual(48);
     await expectNoCaptionButtons(page);

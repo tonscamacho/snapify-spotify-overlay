@@ -1752,6 +1752,10 @@ select:focus-visible,
   background: #1d1d1f;
 }
 
+.app[data-theme="light"] .mini-progress i {
+  background: #1d1d1f;
+}
+
 .app[data-theme="light"] .play-disc,
 .app[data-theme="light"] .btn.primary {
   background: #1d1d1f;
@@ -1912,6 +1916,10 @@ select:focus-visible,
 }
 
 .app[data-theme="sparkles"] .bar i {
+  background: var(--moon);
+}
+
+.app[data-theme="sparkles"] .mini-progress i {
   background: var(--moon);
 }
 
@@ -2092,6 +2100,10 @@ select:focus-visible,
 }
 
 .app[data-theme="pastel"] .bar i {
+  background: var(--rose);
+}
+
+.app[data-theme="pastel"] .mini-progress i {
   background: var(--rose);
 }
 
@@ -2362,23 +2374,31 @@ select:focus-visible,
   display: none;
 }
 
-/* Mini player row: art + title + play/pause only. */
+/* Mini player card: circular art + title/artist + thin progress +
+   prev/play/next. No volume, shuffle, or repeat at this size.
+   overflow:hidden plus per-line ellipsis keeps long titles inside the
+   box; the progress fill has no transition (instant state, safe under
+   prefers-reduced-motion without an override). */
 .mini-row {
   display: none;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
   padding: 12px var(--pad-pane);
 }
 
 .mini-cover {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   flex: none;
-  border-radius: var(--r-sm);
+  border-radius: 50%;
   object-fit: cover;
   background: #232329;
+  border: 1px solid var(--stroke);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 }
 
 .mini-cover.cover-fallback {
@@ -2387,16 +2407,67 @@ select:focus-visible,
   color: var(--faint);
 }
 
-.mini-title {
+.mini-meta {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+}
+
+.mini-title {
   font-size: var(--fs-title);
   font-weight: 600;
   letter-spacing: -0.02em;
+  line-height: 1.15;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--txt);
+}
+
+.mini-artist {
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--dim);
+}
+
+.mini-progress {
+  position: relative;
+  height: 3px;
+  margin-top: 1px;
+  border-radius: 999px;
+  background: var(--track);
+  overflow: hidden;
+  flex: none;
+}
+
+.mini-progress i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-radius: inherit;
+  background: #fff;
+}
+
+.mini-transport {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.mini-row .icon-btn.mini-nav {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  padding: 0;
 }
 
 .mini-play {
@@ -2407,7 +2478,8 @@ select:focus-visible,
 }
 
 /* Collapsed player: header slims down and the body shows only the mini
-   row, totalling the 64 px mini floor (20 header + 42 row + 2 border). */
+   card, totalling the COLLAPSED_PLAYER_H floor from src/lib/layout.ts
+   (slim header + mini card + 2 px pane border). */
 .pane[data-pane="player"][data-collapsed="true"] .pane-body {
   display: block;
   overflow: hidden;
@@ -2419,13 +2491,13 @@ select:focus-visible,
   min-height: 18px;
 }
 
-/* The 64 px pin is exact (20 header + 42 row + 2 border) only when the
-   header content is 18 px tall: the shared 22 px collapse button would
-   push the header to 24 px and clip 4 px off the mini row (cover/disc
-   bottom cut by the pane box and the OS region alike). */
+/* The 68 px pin is exact (22 header + 44 card + 2 border) only when the
+   header content stays 20 px tall: the shared 22 px collapse button would
+   push the header to 24 px and clip 2 px off the mini card (cover bottom
+   cut by the pane box and the OS region alike). */
 .pane[data-pane="player"][data-collapsed="true"] .collapse-btn {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 20px;
 }
 
 .pane[data-pane="player"][data-collapsed="true"] .player-full {
@@ -2434,16 +2506,18 @@ select:focus-visible,
 
 .pane[data-pane="player"][data-collapsed="true"] .mini-row {
   display: flex;
-  padding: 4px 12px 6px;
+  padding: 2px 12px 4px;
 }
 
-/* Narrow player panes fall back to the mini row under 280 px. */
+/* Narrow player panes fall back to the mini card under 280 px. Same
+   tight padding as the collapsed card so the row measures the same. */
 @container (max-width: 280px) {
   .pane[data-pane="player"] .player-full {
     display: none;
   }
   .pane[data-pane="player"] .mini-row {
     display: flex;
+    padding: 2px 12px 4px;
   }
 }
 

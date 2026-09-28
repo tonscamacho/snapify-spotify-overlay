@@ -2277,7 +2277,7 @@ export default function App() {
               queuedCount={pendingCount}
               degraded={degradedUi}
               onRetry={retryPlayerCb}
-              // Compact (mini row in DOM) when collapsed, narrow enough
+              // Compact (mini card in DOM) when collapsed, narrow enough
               // for the 280 px container query, or shorter than the full
               // player chrome (< 160 px, only after the clamp yields to the
               // compact floor); +2 px pane border, so the React gate and

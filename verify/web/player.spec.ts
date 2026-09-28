@@ -284,7 +284,7 @@ test("short titles never marquee", async ({ page }) => {
   await expect(title).not.toHaveClass(/is-marquee/);
 });
 
-test("player collapses to the 64px mini row and persists", async ({ page }) => {
+test("player collapses to the 68px mini card and persists", async ({ page }) => {
   // Lowered pane: the floating dock overlaps pane headers near the top.
   await stubTauri(page, {
     layout: {
