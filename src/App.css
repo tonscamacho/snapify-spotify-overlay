@@ -173,6 +173,7 @@ select:focus-visible,
 }
 
 .pane-title {
+  margin: 0;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -2349,12 +2350,15 @@ select:focus-visible,
 }
 
 /* Collapsed panes drop their content floor and hide the body; the stored
-   geometry survives in state so expand restores it exactly. */
+   geometry survives in state so expand restores it exactly. The extra
+   [data-pane] keeps this above later per-type body rules (queue flex)
+   regardless of source order; the player block override below still wins
+   on equal specificity because it comes later. */
 .pane[data-collapsed="true"] {
   min-height: 0;
 }
 
-.pane[data-collapsed="true"] .pane-body {
+.pane[data-pane][data-collapsed="true"] .pane-body {
   display: none;
 }
 
