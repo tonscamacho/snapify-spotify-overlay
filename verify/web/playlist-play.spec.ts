@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { stubTauri, commandsNamed } from "./tauri-mock";
+import { stubTauri, commandsNamed, failNext } from "./tauri-mock";
 import { buildFixtures, type VerifyFixtures } from "./fixtures";
 
 async function openPlaylistDetail(page: Page, fixtures?: Partial<VerifyFixtures>) {
@@ -257,4 +257,109 @@ test("player heart reconciles against the server on load", async ({ page }) => {
   await expect
     .poll(async () => (await commandsNamed(page, "library_remove")).length, { timeout: 10000 })
     .toBeGreaterThan(0);
+});
+
+// Friend / public playlist tracks via the alternate source (GO-gate): at the
+// mock boundary the backend's embed success surfaces as the normal
+// get_playlist_items payload, so failNext 403 once proves the recoverable
+// half (wall-or-tracks race, Retry renders rows, Play intact), while a
+// persistent 403 proves the fallback half (embed unavailable → honest wall
+// with Play + Retry + Open in Spotify, never invented rows).
+const FRIEND_403 = "get_playlist_items failed: 403 Restriction violated";
+
+async function openFriendPlaylist(page: Page) {
+  await page.getByTitle("Toggle Queue pane").click();
+  const queue = page.locator('section[data-pane="queue"]');
+  await expect(queue).toBeVisible();
+  await queue.getByRole("button", { name: "Open Verify Jams" }).click();
+
+  const browse = page.locator('section[data-pane="browse"]');
+  await expect(browse).toBeVisible();
+  await expect(browse.locator(".detail-title")).toContainText("Verify Jams");
+  return browse;
+}
+
+test("friend playlist 403 recovers to tracks on retry", async ({ page }) => {
+  const seed = buildFixtures();
+  await stubTauri(page, {
+    fixtures: {
+      queue: {
+        ...(seed.queue as Record<string, unknown>),
+        context: { type: "playlist", uri: "spotify:playlist:pl-verify-1" },
+      },
+      playlistDetail: {
+        id: "pl-verify-1",
+        name: "Verify Jams",
+        owner: { display_name: "someone-else" },
+        images: [],
+        uri: "spotify:playlist:pl-verify-1",
+      },
+      playlistItems: {
+        items: [{ track: seed.trackDetail }, { track: seed.trackDetail }],
+        total: 2,
+      },
+    },
+  });
+  await page.goto("/");
+  await failNext(page, "get_playlist_items", FRIEND_403, 1);
+  const browse = await openFriendPlaylist(page);
+
+  const rows = browse.locator("ol.queue li.q");
+  const wall = browse.getByText("Tracks unavailable");
+  // The alternate source may render rows directly; otherwise the wall shows
+  // first and Retry recovers. Accept either order.
+  await expect
+    .poll(
+      async () => ((await rows.count()) > 0 ? "tracks" : (await wall.count()) > 0 ? "wall" : "pending"),
+      { timeout: 10000 },
+    )
+    .not.toBe("pending");
+  if ((await rows.count()) === 0) {
+    await expect(wall).toBeVisible();
+    await browse.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(rows.first()).toBeVisible({ timeout: 10000 });
+  }
+  await expect(rows).toHaveCount(2);
+  await expect(wall).toHaveCount(0);
+  await expect(browse.getByRole("button", { name: "Play", exact: true }).first()).toBeVisible();
+});
+
+test("friend playlist embed failure keeps the honest wall", async ({ page }) => {
+  const seed = buildFixtures();
+  await stubTauri(page, {
+    fixtures: {
+      queue: {
+        ...(seed.queue as Record<string, unknown>),
+        context: { type: "playlist", uri: "spotify:playlist:pl-verify-1" },
+      },
+      playlistDetail: {
+        id: "pl-verify-1",
+        name: "Verify Jams",
+        owner: { display_name: "someone-else" },
+        images: [],
+        uri: "spotify:playlist:pl-verify-1",
+      },
+      playlistItems: { items: [{ track: seed.trackDetail }], total: 1 },
+    },
+  });
+  await page.goto("/");
+  // Every items call fails: the alternate source is unavailable too, so the
+  // wall must survive instead of inventing tracks.
+  await failNext(page, "get_playlist_items", FRIEND_403, 99);
+  const browse = await openFriendPlaylist(page);
+
+  await expect(browse.getByText("Tracks unavailable")).toBeVisible({ timeout: 10000 });
+  await expect(browse.locator("ol.queue li.q")).toHaveCount(0);
+  const plays = browse.getByRole("button", { name: "Play", exact: true });
+  await expect(plays.first()).toBeVisible();
+  await expect(browse.getByRole("button", { name: "Open in Spotify" })).toBeVisible();
+
+  await plays.first().click();
+  await expect
+    .poll(async () => (await commandsNamed(page, "play_context")).length, { timeout: 10000 })
+    .toBeGreaterThan(0);
+
+  await browse.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(browse.getByText("Tracks unavailable")).toBeVisible({ timeout: 10000 });
+  await expect(browse.locator("ol.queue li.q")).toHaveCount(0);
 });

@@ -850,6 +850,14 @@ function PlaylistTracks({
   useEffect(() => {
     setLoadError(null);
   }, [resetKey, id]);
+  // Alternate-source cap note: the backend returns at most 50 tracks with an
+  // additive `truncated: true` flag (parsePlaylistItems ignores it). Latch it
+  // per playlist so the list honestly says "first 50" instead of implying
+  // the full playlist. Resets with the list; never blocks the wall fallback.
+  const [truncatedList, setTruncatedList] = useState(false);
+  useEffect(() => {
+    setTruncatedList(false);
+  }, [resetKey, id]);
   const initialRef = useRef<{ id: string; items: QueueItem[]; total: number } | null>(null);
   initialRef.current =
     initialItems && initialItems.length > 0
@@ -870,6 +878,7 @@ function PlaylistTracks({
       setLoadError(null);
       const parsed = parsePlaylistItems(raw);
       const node = raw as Record<string, unknown> | null;
+      if (node && node["truncated"] === true) setTruncatedList(true);
       const rawCount =
         node && Array.isArray(node["items"]) ? (node["items"] as unknown[]).length : parsed.items.length;
       const fetched = Math.max(rawCount, parsed.items.length, 1);
@@ -933,6 +942,9 @@ function PlaylistTracks({
   return (
     <>
       {list.throttled && <PaneStateBanner tone="throttled" message={list.throttled} onRetry={list.retry} />}
+      {truncatedList && (
+        <div className="empty-sub">Showing the first 50 tracks (public listing cap).</div>
+      )}
       <ol className="queue">
         {list.items.map((t, i) => {
           const entry = entryForUri(t.uri, t.name);

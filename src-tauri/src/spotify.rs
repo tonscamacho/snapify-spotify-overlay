@@ -1032,6 +1032,343 @@ fn playlist_items_should_retry(err: &str) -> bool {
     err.contains("403")
 }
 
+/// Friend/public playlist alternate source: the public Spotify embed page.
+///
+/// GO-gate (PR2-G, user-authorized 2026-09-27): third source attempted only
+/// after BOTH official reads 403 (`/items`, then legacy `/tracks`). The
+/// embed page server-renders up to 50 tracks in
+/// `__NEXT_DATA__ → props.pageProps.state.data.entity.trackList`
+/// (prototype 2026-09-27; raw capture retained outside the repo).
+///
+/// Rails (each has a unit test in the `tests` module below):
+/// - Kill-switch: [`embed_fallback_enabled`] — env `SNAPIFY_EMBED_FALLBACK`,
+///   default ON; `"0"`/`"false"`/`"off"`/`"no"` disables. One-line OFF
+///   restores the exact old wall (no embed fetch, no shape change).
+/// - Rate-limit: defensive client-side throttle ([`EMBED_MIN_INTERVAL`])
+///   between embed fetches; single-shot, never retried, never on 401/429.
+/// - 50-track cap: hard cap ([`EMBED_TRACK_CAP`]) with an explicit
+///   `truncated: true` in the payload; no pagination illusion.
+/// - Cache: separate `embed:`-namespaced entries with their own TTL
+///   ([`EMBED_CACHE_TTL`]); embed rows NEVER share keys with official-API
+///   entries, so neither direction can poison the other.
+/// - Retry only-on-403: [`embed_retry_gate`] admits the attempt only when
+///   both official errors are 403s. 401/429/5xx surface at once.
+/// - Shape: [`embed_items_payload`] returns the existing `{items, total}`
+///   contract (`parsePlaylistItems` untouched); the extra `truncated` bool
+///   is additive metadata the UI reads for its cap note.
+/// - Fallback: [`try_embed_fallback`] returns `None` on ANY failure (flag
+///   off, bad id, network error, timeout, parse fail, shape drift, empty
+///   list) and the caller returns the original 403, so the existing wall +
+///   Play + Retry + Open-in-Spotify is preserved.
+/// - Privacy: the embed fetch sends NO bearer token (public page, browser
+///   UA); the Spotify access token never leaves api.spotify.com.
+/// - Personalized mixes (Sad/Chill etc.): same path; their embed pages
+///   demand personalization, so fetch/parse fails → wall, never a panic or
+///   a spinner-forever (all untrusted parsing is panic-free and the fetch
+///   is bounded by [`EMBED_TIMEOUT`]).
+const EMBED_TRACK_CAP: usize = 50;
+const EMBED_CACHE_TTL: Duration = Duration::from_secs(300);
+const EMBED_MIN_INTERVAL: Duration = Duration::from_millis(1500);
+const EMBED_TIMEOUT: Duration = Duration::from_secs(10);
+const EMBED_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+/// Pure mapping for the kill-switch so tests never mutate process env:
+/// unset → ON; explicit off-words → OFF; anything else → ON.
+fn embed_flag_from_env(raw: Option<&str>) -> bool {
+    match raw {
+        None => true,
+        Some(s) => {
+            let v = s.trim().to_ascii_lowercase();
+            !(v == "0" || v == "false" || v == "off" || v == "no")
+        }
+    }
+}
+
+/// Kill-switch: `SNAPIFY_EMBED_FALLBACK=0` (or false/off/no) disables the
+/// alternate source and restores the exact old wall. Default ON.
+fn embed_fallback_enabled() -> bool {
+    embed_flag_from_env(std::env::var("SNAPIFY_EMBED_FALLBACK").ok().as_deref())
+}
+
+/// Separate cache namespace: embed entries live under `embed:` keys so they
+/// can never overwrite (or be read as) official-API entries.
+fn embed_cache_key(playlist_id: &str) -> String {
+    format!("embed:/playlists/{playlist_id}/items")
+}
+
+/// Guard the embed URL against path injection. Real playlist ids are
+/// base62; anything else skips the alternate source and keeps the wall.
+fn embed_playlist_id_valid(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// Admits the third source only after a double-403 (both official reads
+/// refused). 401/429/5xx on either leg keep surfacing at once — the retry
+/// discipline stays only-on-403, and the flag gates everything.
+fn embed_double_403(primary_err: &str, fallback_err: &str) -> bool {
+    playlist_items_should_retry(primary_err) && playlist_items_should_retry(fallback_err)
+}
+
+fn embed_retry_gate(primary_err: &str, fallback_err: &str) -> bool {
+    embed_fallback_enabled() && embed_double_403(primary_err, fallback_err)
+}
+
+/// Pure throttle math: how long to wait before the next embed fetch given
+/// the last one. The async wrapper below sleeps this duration.
+fn embed_wait_for(
+    last: Option<tokio::time::Instant>,
+    now: tokio::time::Instant,
+) -> Duration {
+    match last {
+        Some(t) => {
+            let earliest = t + EMBED_MIN_INTERVAL;
+            if earliest > now {
+                earliest - now
+            } else {
+                Duration::from_secs(0)
+            }
+        }
+        None => Duration::from_secs(0),
+    }
+}
+
+fn embed_last_fetch() -> &'static tokio::sync::Mutex<Option<tokio::time::Instant>> {
+    static LAST: OnceLock<tokio::sync::Mutex<Option<tokio::time::Instant>>> =
+        OnceLock::new();
+    LAST.get_or_init(|| tokio::sync::Mutex::new(None))
+}
+
+/// Defensive throttle: at most one embed fetch per [`EMBED_MIN_INTERVAL`].
+/// Burst paging (two offsets at once) serializes here instead of hammering
+/// the undocumented page.
+async fn enforce_embed_throttle() {
+    let wait = {
+        let last = embed_last_fetch().lock().await;
+        embed_wait_for(*last, tokio::time::Instant::now())
+    };
+    if !wait.is_zero() {
+        tokio::time::sleep(wait).await;
+    }
+    *embed_last_fetch().lock().await = Some(tokio::time::Instant::now());
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct EmbedTrack {
+    name: String,
+    artists: String,
+    duration_ms: i64,
+    uri: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum EmbedParseError {
+    MissingData,
+    BadShape,
+}
+
+impl std::fmt::Display for EmbedParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "embed fallback unavailable")
+    }
+}
+
+/// Defensive `__NEXT_DATA__.entity.trackList` parse. Missing block, bad
+/// JSON, moved fields, or zero usable tracks are all `Err` (→ wall), never
+/// a panic and never partial rows. Entries without a track URI are skipped;
+/// the list is hard-capped at [`EMBED_TRACK_CAP`] with a truncation flag.
+fn parse_embed_track_list(html: &str) -> Result<(Vec<EmbedTrack>, bool), EmbedParseError> {
+    const OPEN: &str = "<script id=\"__NEXT_DATA__\" type=\"application/json\">";
+    const CLOSE: &str = "</script>";
+    let start = html.find(OPEN).ok_or(EmbedParseError::MissingData)? + OPEN.len();
+    let rest = html.get(start..).ok_or(EmbedParseError::MissingData)?;
+    let end = rest.find(CLOSE).ok_or(EmbedParseError::MissingData)?;
+    let raw = rest.get(..end).ok_or(EmbedParseError::MissingData)?;
+    let doc: serde_json::Value =
+        serde_json::from_str(raw).map_err(|_| EmbedParseError::BadShape)?;
+    let list = doc
+        .pointer("/props/pageProps/state/data/entity/trackList")
+        .and_then(|v| v.as_array())
+        .ok_or(EmbedParseError::BadShape)?;
+    let mut tracks = Vec::new();
+    for entry in list {
+        let obj = match entry.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        let uri = match obj.get("uri").and_then(|u| u.as_str()) {
+            Some(u)
+                if u.starts_with("spotify:track:") && u.len() > "spotify:track:".len() =>
+            {
+                u.to_string()
+            }
+            _ => continue,
+        };
+        let name = obj
+            .get("title")
+            .and_then(|t| t.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Unknown")
+            .to_string();
+        let artists = obj
+            .get("subtitle")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
+        let duration_ms = obj
+            .get("duration")
+            .and_then(|d| d.as_i64())
+            .unwrap_or(0)
+            .max(0);
+        tracks.push(EmbedTrack {
+            name,
+            artists,
+            duration_ms,
+            uri,
+        });
+    }
+    if tracks.is_empty() {
+        return Err(EmbedParseError::MissingData);
+    }
+    let truncated = tracks.len() > EMBED_TRACK_CAP;
+    tracks.truncate(EMBED_TRACK_CAP);
+    Ok((tracks, truncated))
+}
+
+/// Existing `{items, total}` contract in the official `/items` wrapper
+/// shape (`{"track": {...}}`), so `parsePlaylistItems` is untouched. The
+/// additive `truncated` bool drives the UI's 50-track note.
+fn embed_items_payload(tracks: &[EmbedTrack], truncated: bool) -> serde_json::Value {
+    let items: Vec<serde_json::Value> = tracks
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "track": {
+                    "name": t.name,
+                    "artists": [{ "name": t.artists }],
+                    "duration_ms": t.duration_ms,
+                    "uri": t.uri,
+                }
+            })
+        })
+        .collect();
+    serde_json::json!({ "items": items, "total": items.len(), "truncated": truncated })
+}
+
+fn embed_page(
+    items: &[serde_json::Value],
+    offset: usize,
+    limit: usize,
+) -> Vec<serde_json::Value> {
+    items
+        .iter()
+        .skip(offset)
+        .take(limit.max(1))
+        .cloned()
+        .collect()
+}
+
+/// Serve one page out of a full (≤50) embed payload. `total` stays the full
+/// length so the paged list exhausts honestly instead of looping.
+fn serve_embed_page(
+    full: &serde_json::Value,
+    offset: usize,
+    limit: usize,
+) -> serde_json::Value {
+    let items = full
+        .get("items")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let total = full
+        .get("total")
+        .and_then(|v| v.as_u64())
+        .map(|t| t as usize)
+        .unwrap_or(items.len());
+    let truncated = full
+        .get("truncated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    serde_json::json!({ "items": embed_page(&items, offset, limit), "total": total, "truncated": truncated })
+}
+
+async fn embed_cache_get(key: &str) -> Option<serde_json::Value> {
+    response_cache().lock().await.get(key).cloned().and_then(|entry| {
+        if entry.stored_at.elapsed() < entry.ttl {
+            Some(entry.body)
+        } else {
+            None
+        }
+    })
+}
+
+async fn embed_cache_put(key: String, body: serde_json::Value) {
+    let mut cache = response_cache().lock().await;
+    if cache.len() >= CACHE_CAP {
+        if let Some(oldest) = cache.keys().next().cloned() {
+            cache.remove(&oldest);
+        }
+    }
+    cache.insert(
+        key,
+        CacheEntry {
+            body,
+            etag: None,
+            stored_at: tokio::time::Instant::now(),
+            ttl: EMBED_CACHE_TTL,
+        },
+    );
+}
+
+/// Public-page fetch: NO bearer token, browser UA (the page 403s/empties
+/// bot UAs). Bounded by [`EMBED_TIMEOUT`]; any failure is `Err` → wall.
+async fn fetch_embed_html(playlist_id: &str) -> Result<String, String> {
+    let url = format!("https://open.spotify.com/embed/playlist/{playlist_id}");
+    let res = tokio::time::timeout(
+        EMBED_TIMEOUT,
+        shared_client()
+            .get(&url)
+            .header(reqwest::header::USER_AGENT, EMBED_USER_AGENT)
+            .send(),
+    )
+    .await
+    .map_err(|_| "embed fallback unavailable: fetch timed out".to_string())?
+    .map_err(|e| e.to_string())?;
+    if !res.status().is_success() {
+        return Err(format!(
+            "embed fallback unavailable: http {}",
+            res.status()
+        ));
+    }
+    res.text().await.map_err(|e| e.to_string())
+}
+
+/// Third source after terminal 403. `Some` only on full success; `None` on
+/// ANY failure so the caller keeps the original 403 (→ existing wall).
+async fn try_embed_fallback(
+    playlist_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Option<serde_json::Value> {
+    if !embed_fallback_enabled() {
+        return None;
+    }
+    if !embed_playlist_id_valid(playlist_id) {
+        return None;
+    }
+    let key = embed_cache_key(playlist_id);
+    let off = offset.max(0) as usize;
+    let lim = limit.clamp(1, 50) as usize;
+    if let Some(cached) = embed_cache_get(&key).await {
+        return Some(serve_embed_page(&cached, off, lim));
+    }
+    enforce_embed_throttle().await;
+    let html = fetch_embed_html(playlist_id).await.ok()?;
+    let (tracks, truncated) = parse_embed_track_list(&html).ok()?;
+    let full = embed_items_payload(&tracks, truncated);
+    embed_cache_put(key, full.clone()).await;
+    Some(serve_embed_page(&full, off, lim))
+}
+
 #[tauri::command]
 pub async fn get_playlist_items(
     app: AppHandle,
@@ -1051,7 +1388,7 @@ pub async fn get_playlist_items(
     {
         Ok(v) => Ok(v),
         Err(e) if playlist_items_should_retry(&e) => {
-            paged(
+            match paged(
                 &app,
                 Method::GET,
                 &playlist_items_fallback(&playlist_id),
@@ -1060,6 +1397,20 @@ pub async fn get_playlist_items(
                 offset,
             )
             .await
+            {
+                Ok(v) => Ok(v),
+                // Third source (GO-gate): the public embed page, only after
+                // a double-403 and only when the kill-switch is on. ANY
+                // alternate-source failure keeps the original 403 so the
+                // existing wall + Play + Retry + Open-in-Spotify survives.
+                Err(e2) if embed_retry_gate(&e, &e2) => {
+                    match try_embed_fallback(&playlist_id, limit, offset).await {
+                        Some(v) => Ok(v),
+                        None => Err(e2),
+                    }
+                }
+                Err(e2) => Err(e2),
+            }
         }
         Err(e) => Err(e),
     }
@@ -1304,7 +1655,7 @@ pub async fn play_uris(
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_ttl, classify_result, decide, inflight_key, library_uris_arg, parse_retry_after, playlist_items_fallback, playlist_items_primary, playlist_items_should_retry, retry_after_secs};
+    use super::{cache_ttl, classify_result, decide, embed_cache_key, embed_double_403, embed_flag_from_env, embed_items_payload, embed_playlist_id_valid, embed_retry_gate, embed_wait_for, inflight_key, library_uris_arg, parse_embed_track_list, parse_retry_after, playlist_items_fallback, playlist_items_primary, playlist_items_should_retry, retry_after_secs, serve_embed_page, EmbedParseError, EMBED_CACHE_TTL, EMBED_MIN_INTERVAL, EMBED_TRACK_CAP};
     use reqwest::{Method, StatusCode};
 
     #[test]
@@ -1530,5 +1881,246 @@ mod tests {
         let a = inflight_key(&Method::GET, "/playlists/x/items", &[("limit", "50"), ("offset", "0")]);
         let b = inflight_key(&Method::GET, "/playlists/x/items", &[("limit", "50"), ("offset", "50")]);
         assert_ne!(a, b);
+    }
+
+    // Friend/public embed fallback (GO-gate PR2-G): kill-switch, retry gate,
+    // parser, payload shape, paging, cache separation, throttle math. Every
+    // failure maps to the existing wall (Err/None), never partial rows.
+
+    fn embed_doc(track_entries: &str) -> String {
+        format!(
+            "<html><head></head><body><script id=\"__NEXT_DATA__\" type=\"application/json\">{{\"props\":{{\"pageProps\":{{\"state\":{{\"data\":{{\"entity\":{{\"trackList\":[{track_entries}]}}}}}}}}}}}}</script></body></html>"
+        )
+    }
+
+    fn embed_entry(i: usize) -> String {
+        format!(
+            "{{\"uri\":\"spotify:track:{:022}\",\"title\":\"Song {i}\",\"subtitle\":\"Artist {i}\",\"duration\":180000}}",
+            i
+        )
+    }
+
+    #[test]
+    fn embed_kill_switch_defaults_on_and_parses_off_words() {
+        assert!(embed_flag_from_env(None));
+        for off in ["0", "false", "off", "no", " FALSE ", "Off", "NO"] {
+            assert!(!embed_flag_from_env(Some(off)), "should disable: {off}");
+        }
+        for on in ["1", "true", "yes", "", "anything-else"] {
+            assert!(embed_flag_from_env(Some(on)), "should stay on: {on}");
+        }
+    }
+
+    #[test]
+    fn embed_kill_switch_env_round_trip() {
+        // Single env-touching test in this binary; no other test reads this
+        // var, so no cross-test race. Restores the pre-test state after.
+        let prev = std::env::var("SNAPIFY_EMBED_FALLBACK").ok();
+        std::env::set_var("SNAPIFY_EMBED_FALLBACK", "0");
+        assert!(!embed_retry_gate("403 a", "403 b"));
+        std::env::remove_var("SNAPIFY_EMBED_FALLBACK");
+        assert!(embed_retry_gate("403 a", "403 b"));
+        if let Some(v) = prev {
+            std::env::set_var("SNAPIFY_EMBED_FALLBACK", v);
+        }
+    }
+
+    #[test]
+    fn embed_retry_gate_admits_only_double_403() {
+        assert!(embed_double_403("spotify 403 Forbidden: x", "spotify 403 Forbidden: y"));
+        // 401/429/5xx on either leg stay terminal: never a second call, let
+        // alone a third source.
+        assert!(!embed_double_403("unauthorized: token rejected", "spotify 403 Forbidden: y"));
+        assert!(!embed_double_403("spotify 403 Forbidden: x", "rate-limited: retry after 7s"));
+        assert!(!embed_double_403("rate-limited: retry after 7s", "quota-exceeded: back off"));
+        assert!(!embed_double_403("spotify 502 Bad Gateway: boom", "spotify 502 Bad Gateway: boom"));
+        assert!(!embed_double_403("", ""));
+        // The composed gate inherits the same discipline (flag defaults ON
+        // when the env var is unset, proven by the test above).
+        assert!(!embed_retry_gate("unauthorized: token rejected", "spotify 403 Forbidden: y"));
+        assert!(!embed_retry_gate("spotify 403 Forbidden: x", "rate-limited: retry after 7s"));
+    }
+
+    #[test]
+    fn embed_ids_are_base62_guarded() {
+        assert!(embed_playlist_id_valid("37i9dQZF1DXcBWIGoYBM5M"));
+        assert!(!embed_playlist_id_valid(""));
+        assert!(!embed_playlist_id_valid("../me"));
+        assert!(!embed_playlist_id_valid("ab cd"));
+        assert!(!embed_playlist_id_valid("a-b_c"));
+        assert!(!embed_playlist_id_valid(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn embed_cache_key_never_collides_with_official_keys() {
+        let key = embed_cache_key("abc123");
+        assert!(key.starts_with("embed:"), "must live in its own namespace: {key}");
+        let official = inflight_key(&Method::GET, "/playlists/abc123/items", &[("limit", "50"), ("offset", "0")]);
+        assert_ne!(key, official);
+        assert!(!official.starts_with("embed:"));
+    }
+
+    #[test]
+    fn embed_cache_ttl_is_separate_from_official() {
+        assert_eq!(EMBED_CACHE_TTL, std::time::Duration::from_secs(300));
+        // Official playlist reads stay at 30 s; the embed namespace never
+        // borrows or overwrites that entry.
+        assert_eq!(
+            cache_ttl("/playlists/abc123/items"),
+            Some(std::time::Duration::from_secs(30))
+        );
+    }
+
+    #[test]
+    fn embed_throttle_math_spaces_fetches() {
+        let now = tokio::time::Instant::now();
+        assert_eq!(embed_wait_for(None, now), std::time::Duration::from_secs(0));
+        let wait = embed_wait_for(Some(now), now);
+        assert!(wait > std::time::Duration::from_secs(0));
+        assert!(wait <= EMBED_MIN_INTERVAL);
+        let old = now - EMBED_MIN_INTERVAL - std::time::Duration::from_secs(1);
+        assert_eq!(embed_wait_for(Some(old), now), std::time::Duration::from_secs(0));
+    }
+
+    #[test]
+    fn embed_track_cap_is_fifty() {
+        assert_eq!(EMBED_TRACK_CAP, 50);
+        assert_eq!(EMBED_MIN_INTERVAL, std::time::Duration::from_millis(1500));
+    }
+
+    #[test]
+    fn embed_parser_reads_tracks_with_field_mapping() {
+        let html = embed_doc(&format!("{},{}", embed_entry(1), embed_entry(2)));
+        let (tracks, truncated) = parse_embed_track_list(&html).unwrap();
+        assert!(!truncated);
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].name, "Song 1");
+        assert_eq!(tracks[0].artists, "Artist 1");
+        assert_eq!(tracks[0].duration_ms, 180000);
+        assert_eq!(tracks[0].uri, "spotify:track:0000000000000000000001");
+    }
+
+    #[test]
+    fn embed_parser_missing_block_is_wall() {
+        assert!(matches!(
+            parse_embed_track_list("<html><body>no data here</body></html>"),
+            Err(EmbedParseError::MissingData)
+        ));
+        assert!(matches!(parse_embed_track_list(""), Err(EmbedParseError::MissingData)));
+        // Unclosed script block: never slice into garbage.
+        assert!(matches!(
+            parse_embed_track_list("<script id=\"__NEXT_DATA__\" type=\"application/json\">{\"a\":1}"),
+            Err(EmbedParseError::MissingData)
+        ));
+    }
+
+    #[test]
+    fn embed_parser_bad_json_and_shape_drift_are_wall() {
+        let wrap = |inner: &str| {
+            format!(
+                "<script id=\"__NEXT_DATA__\" type=\"application/json\">{inner}</script>"
+            )
+        };
+        assert!(matches!(
+            parse_embed_track_list(&wrap("not json{{")),
+            Err(EmbedParseError::BadShape)
+        ));
+        assert!(matches!(
+            parse_embed_track_list(&wrap("{\"props\":{}}")),
+            Err(EmbedParseError::BadShape)
+        ));
+        assert!(matches!(
+            parse_embed_track_list(&wrap(
+                "{\"props\":{\"pageProps\":{\"state\":{\"data\":{\"entity\":{}}}}}}"
+            )),
+            Err(EmbedParseError::BadShape)
+        ));
+        assert!(matches!(
+            parse_embed_track_list(&wrap(
+                "{\"props\":{\"pageProps\":{\"state\":{\"data\":{\"entity\":{\"trackList\":{}}}}}}}"
+            )),
+            Err(EmbedParseError::BadShape)
+        ));
+    }
+
+    #[test]
+    fn embed_parser_skips_unusable_entries_and_never_partials() {
+        // Episode URIs, missing URIs, and non-objects are skipped; the one
+        // good row still parses (mixed degradation, never invented rows).
+        let html = embed_doc(
+            "{\"uri\":\"spotify:episode:abc\",\"title\":\"Ep\",\"subtitle\":\"Show\"},{\"title\":\"NoUri\"},42,{\"uri\":\"spotify:track:0000000000000000000007\",\"subtitle\":\"Solo\"}",
+        );
+        let (tracks, truncated) = parse_embed_track_list(&html).unwrap();
+        assert!(!truncated);
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].name, "Unknown");
+        assert_eq!(tracks[0].artists, "Solo");
+        // All-unusable (personalized mixes behave this way) is a wall, never
+        // an empty success that would clear the UI to "no tracks".
+        let bad = embed_doc(
+            "{\"uri\":\"spotify:episode:abc\",\"title\":\"Ep\"},{\"title\":\"NoUri\"}",
+        );
+        assert!(matches!(
+            parse_embed_track_list(&bad),
+            Err(EmbedParseError::MissingData)
+        ));
+        let empty = embed_doc("");
+        assert!(matches!(
+            parse_embed_track_list(&empty),
+            Err(EmbedParseError::MissingData)
+        ));
+        // Negative durations clamp to zero instead of leaking.
+        let neg = embed_doc(
+            "{\"uri\":\"spotify:track:0000000000000000000009\",\"title\":\"N\",\"subtitle\":\"A\",\"duration\":-5}",
+        );
+        let (tracks, _) = parse_embed_track_list(&neg).unwrap();
+        assert_eq!(tracks[0].duration_ms, 0);
+    }
+
+    #[test]
+    fn embed_parser_caps_at_fifty_with_truncation_flag() {
+        let many: Vec<String> = (0..55).map(embed_entry).collect();
+        let (tracks, truncated) = parse_embed_track_list(&embed_doc(&many.join(","))).unwrap();
+        assert_eq!(tracks.len(), 50);
+        assert!(truncated);
+        let exact: Vec<String> = (0..50).map(embed_entry).collect();
+        let (tracks, truncated) = parse_embed_track_list(&embed_doc(&exact.join(","))).unwrap();
+        assert_eq!(tracks.len(), 50);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn embed_payload_keeps_items_total_contract() {
+        let html = embed_doc(&format!("{},{}", embed_entry(1), embed_entry(2)));
+        let (tracks, truncated) = parse_embed_track_list(&html).unwrap();
+        let payload = embed_items_payload(&tracks, truncated);
+        // parsePlaylistItems is untouched: the wrapper shape it already
+        // reads ({"track": {...}}) is exactly what we emit.
+        let items = payload.get("items").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(payload.get("total").and_then(|v| v.as_u64()), Some(2));
+        assert_eq!(payload.get("truncated").and_then(|v| v.as_bool()), Some(false));
+        let first = items[0].get("track").unwrap();
+        assert_eq!(first.get("name").and_then(|v| v.as_str()), Some("Song 1"));
+        assert_eq!(first.get("uri").and_then(|v| v.as_str()), Some("spotify:track:0000000000000000000001"));
+        let capped = embed_items_payload(&tracks, true);
+        assert_eq!(capped.get("truncated").and_then(|v| v.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn embed_paging_serves_slices_with_honest_total() {
+        let many: Vec<String> = (0..3).map(embed_entry).collect();
+        let html = embed_doc(&many.join(","));
+        let (tracks, truncated) = parse_embed_track_list(&html).unwrap();
+        let full = embed_items_payload(&tracks, truncated);
+        let page = serve_embed_page(&full, 1, 2);
+        let items = page.get("items").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(items.len(), 2);
+        // Total stays the full length so the paged list exhausts honestly.
+        assert_eq!(page.get("total").and_then(|v| v.as_u64()), Some(3));
+        assert_eq!(page.get("truncated").and_then(|v| v.as_bool()), Some(false));
+        let past_end = serve_embed_page(&full, 9, 50);
+        assert!(past_end.get("items").and_then(|v| v.as_array()).unwrap().is_empty());
+        assert_eq!(past_end.get("total").and_then(|v| v.as_u64()), Some(3));
     }
 }

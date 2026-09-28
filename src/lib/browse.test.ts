@@ -623,3 +623,52 @@ describe("saved library parsers", () => {
     expect(parseSavedAudiobooks(null)).toEqual({ items: [], total: 0 });
   });
 });
+
+describe("parsePlaylistItems via alternate source", () => {
+  // The GO-gated third source returns the existing {items, total} contract
+  // with {"track": {...}} wrappers plus an additive `truncated` bool, so
+  // this parser is untouched: walled=false flows through the already-built
+  // tracks path, and the extra flag is simply ignored here.
+  const embedShaped = {
+    items: [
+      {
+        track: {
+          name: "Friend Track One",
+          artists: [{ name: "Friend Band" }],
+          duration_ms: 200000,
+          uri: "spotify:track:friend-track-1",
+        },
+      },
+      {
+        track: {
+          name: "Friend Track Two",
+          artists: [{ name: "Friend Band" }],
+          duration_ms: 180000,
+          uri: "spotify:track:friend-track-2",
+        },
+      },
+    ],
+    total: 2,
+    truncated: true,
+  };
+
+  it("renders alternate-source rows through the unchanged contract", () => {
+    const out = parsePlaylistItems(embedShaped);
+    expect(out.total).toBe(2);
+    expect(out.items).toEqual([
+      { name: "Friend Track One", artists: "Friend Band", durationMs: 200000, uri: "spotify:track:friend-track-1" },
+      { name: "Friend Track Two", artists: "Friend Band", durationMs: 180000, uri: "spotify:track:friend-track-2" },
+    ]);
+  });
+
+  it("ignores the additive truncated flag without dropping rows", () => {
+    expect(parsePlaylistItems({ ...embedShaped, truncated: false }).items).toHaveLength(2);
+    expect(parsePlaylistItems({ items: embedShaped.items, total: 2 }).items).toHaveLength(2);
+  });
+
+  it("personalized-mix-shaped payloads stay empty (wall fallback, never invented rows)", () => {
+    expect(parsePlaylistItems({ items: [], total: 0 })).toEqual({ items: [], total: 0 });
+    expect(parsePlaylistItems({})).toEqual({ items: [], total: 0 });
+    expect(parsePlaylistItems(null)).toEqual({ items: [], total: 0 });
+  });
+});
