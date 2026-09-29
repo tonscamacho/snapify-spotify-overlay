@@ -2638,7 +2638,7 @@ select:focus-visible,
   min-height: 140px;
 }
 
-/* Collapse wins over compact: the 64 px mini row keeps its floor. */
+/* Collapse wins over compact: the 68 px mini row keeps its floor. */
 .pane[data-pane][data-collapsed="true"][data-compact="true"] {
   min-height: 0;
 }
