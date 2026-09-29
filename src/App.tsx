@@ -44,7 +44,6 @@ import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updat
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
 import {
-  COLLAPSED_PLAYER_H,
   MINI_PLAYER_W,
   PRESETS,
   STREAM_HIDE_DELAY_MS,
@@ -2220,9 +2219,9 @@ export default function App() {
           left: pane.x,
           top: pane.y,
           width: pane.w,
-          // Collapsed pins the rendered height; the stored h survives in
-          // state so expand restores it exactly.
-          height: collapsed ? (pane.type === "player" ? COLLAPSED_PLAYER_H : "auto") : pane.h,
+          // Collapsed is header-only for every pane type (body display:none
+          // in CSS); the stored h survives in state so expand restores it.
+          height: collapsed ? "auto" : pane.h,
           zIndex: pane.z,
           opacity: pane.opacity,
         }}
@@ -2277,12 +2276,13 @@ export default function App() {
               queuedCount={pendingCount}
               degraded={degradedUi}
               onRetry={retryPlayerCb}
-              // Compact (mini card in DOM) when collapsed, narrow enough
-              // for the 280 px container query, or shorter than the full
-              // player chrome (< 160 px, only after the clamp yields to the
-              // compact floor); +2 px pane border, so the React gate and
-              // the CSS switch agree with no dead zone.
-              compact={pane.collapsed === true || pane.w <= MINI_PLAYER_W + 2 || pane.h < 160}
+              // Compact (mini card in DOM) only when EXPANDED and narrow
+              // enough for the 280 px container query, or shorter than the
+              // full player chrome (< 160 px, only after the clamp yields to
+              // the compact floor); +2 px pane border, so the React gate and
+              // the CSS switch agree with no dead zone. Collapsed stays
+              // header-only with no mini in the DOM.
+              compact={!pane.collapsed && (pane.w <= MINI_PLAYER_W + 2 || pane.h < 160)}
               onPlay={playCb}
               onPause={pauseCb}
               onNext={nextCb}

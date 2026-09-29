@@ -284,7 +284,7 @@ test("short titles never marquee", async ({ page }) => {
   await expect(title).not.toHaveClass(/is-marquee/);
 });
 
-test("player collapses to the 68px mini card and persists", async ({ page }) => {
+test("player collapses to header-only and persists", async ({ page }) => {
   // Lowered pane: the floating dock overlaps pane headers near the top.
   await stubTauri(page, {
     layout: {
@@ -301,16 +301,13 @@ test("player collapses to the 68px mini card and persists", async ({ page }) => 
 
   await player.getByRole("button", { name: "Collapse Player pane" }).click();
   await expect(player).toHaveAttribute("data-collapsed", "true");
-  await expect(player.locator(".mini-row")).toBeVisible();
-  await expect(player.locator(".player-full")).toBeHidden();
-  await expect(player.locator(".mini-row")).toContainText(TRACK_NAME);
-  await expect(
-    player.locator(".mini-row").getByRole("button", { name: "Pause", exact: true }),
-  ).toBeVisible();
+  // Header-only like the queue: body hidden, no mini in the DOM.
+  await expect(player.locator(".pane-body")).toBeHidden();
+  await expect(player.locator(".mini-row")).toHaveCount(0);
 
   const box = await player.boundingBox();
   if (!box) throw new Error("player has no box");
-  expect(box.height).toBeLessThanOrEqual(72);
+  expect(box.height).toBeLessThanOrEqual(48);
 
   // The collapsed flag persists per scene, not as a preset swap.
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
@@ -323,12 +320,13 @@ test("player collapses to the 68px mini card and persists", async ({ page }) => 
   await page.reload();
   const reloaded = page.locator('section[data-pane="player"]');
   await expect(reloaded).toHaveAttribute("data-collapsed", "true");
-  await expect(reloaded.locator(".mini-row")).toBeVisible();
+  await expect(reloaded.locator(".pane-body")).toBeHidden();
+  await expect(reloaded.locator(".mini-row")).toHaveCount(0);
 
-  // Expand restores the full player.
+  // Expand restores the full player with no mini.
   await reloaded.getByRole("button", { name: "Expand Player pane" }).click();
   await expect(reloaded.locator(".player-full")).toBeVisible();
-  await expect(reloaded.locator(".mini-row")).toBeHidden();
+  await expect(reloaded.locator(".mini-row")).toHaveCount(0);
 });
 
 const VIZ_LAYOUT = {

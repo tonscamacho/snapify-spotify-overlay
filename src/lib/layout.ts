@@ -363,11 +363,16 @@ export const SCENE_PRESETS: Record<SceneName, string> = {
  *  the PR8 spec (on/off + dim are the only settings). */
 export const STREAM_HIDE_DELAY_MS = 2500;
 
-/** Collapsed player floor: the 68 px mini card (slim header + circular
- *  art, title/artist, thin progress, prev/play/next). The reference card
- *  needs one text line more than the old play/pause-only row, so the
- *  floor moved from 64 to 68; specs still assert the 72 px ceiling. */
-export const COLLAPSED_PLAYER_H = 68;
+/** Expanded-compact mini height: the 68 px mini card (slim header +
+ *  circular art, title/artist, thin progress, prev/play/next) shown when
+ *  an EXPANDED player pane is resized narrow/small. Collapsed is
+ *  header-only (auto, like the queue); this constant never pins a
+ *  collapsed pane. Specs still assert the 72 px ceiling. */
+export const EXPANDED_COMPACT_H = 68;
+
+/** Legacy alias: collapsed player is now header-only, not 68 px.
+ *  Kept so older imports still compile; new code uses EXPANDED_COMPACT_H. */
+export const COLLAPSED_PLAYER_H = EXPANDED_COMPACT_H;
 
 /** Player container breakpoint for the mini row (see the 280 px
  *  container query in App.css). The App renders the mini row when the

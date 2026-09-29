@@ -64,11 +64,11 @@ for (const w of [280, 360]) {
     console.log(`PLAYER@${w}: ` + JSON.stringify(pm));
     console.log(`QUEUE@${w}: ` + JSON.stringify(qm));
     console.log(`LYRICS@${w}: ` + JSON.stringify(lm));
-    await page.screenshot({ path: `docs/bug-reports/2.5.0/collapsed-after-${w}.png` });
+    await page.screenshot({ path: `docs/bug-reports/2.5.1/collapsed-after-${w}.png` });
 
-    expect(pm.box.h).toBeLessThanOrEqual(72);
-    expect(pm.playerFull.split("/")[0]).toBe("none");
-    expect(pm.miniRow.split("/")[0]).toBe("flex");
+    expect(pm.box.h).toBeLessThanOrEqual(48);
+    expect(pm.bodyDisplay).toBe("none");
+    expect(pm.miniRow.split("/")[0]).toBe("absent");
     expect(qm.bodyDisplay).toBe("none");
     expect(qm.box.h).toBeLessThanOrEqual(48);
     expect(lm.bodyDisplay).toBe("none");
@@ -101,8 +101,10 @@ test("collapsed census on narrow stage", async ({ page }) => {
   const qm = await measure(page, 'section[data-pane="queue"]');
   console.log(`PLAYER@narrow: ` + JSON.stringify(pm));
   console.log(`QUEUE@narrow: ` + JSON.stringify(qm));
-  await page.screenshot({ path: `docs/bug-reports/2.5.0/collapsed-after-narrow.png` });
-  expect(pm.box.h).toBeLessThanOrEqual(72);
+  await page.screenshot({ path: `docs/bug-reports/2.5.1/collapsed-after-narrow.png` });
+  expect(pm.box.h).toBeLessThanOrEqual(48);
+  expect(pm.bodyDisplay).toBe("none");
+  expect(pm.miniRow.split("/")[0]).toBe("absent");
   expect(qm.bodyDisplay).toBe("none");
   expect(qm.box.h).toBeLessThanOrEqual(48);
 });

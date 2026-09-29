@@ -41,10 +41,11 @@ interface Props {
   degraded?: boolean;
   onRetry?: () => void;
   /** Render the mini card (circular art + title/artist + thin progress +
-   *  prev/play/next) alongside the full player. The App sets this when the
-   *  pane is collapsed or narrow enough for the 280 px container query to
-   *  show it; otherwise the mini stays out of the DOM so track text and
-   *  Play/Pause resolve exactly once. */
+   *  prev/play/next) instead of the full player. The App sets this only
+   *  when the pane is EXPANDED but narrow/short (w<=282, h<160, or the
+   *  280 px container query); collapsed stays header-only with no mini in
+   *  the DOM. Either the mini or the full player renders its track text
+   *  and Play/Pause, never both, so each resolves exactly once. */
   compact?: boolean;
   onPlay: () => void;
   onPause: () => void;
@@ -611,12 +612,12 @@ export default function PlayerPane(p: Props) {
         />
       </div>
       </div>
-      {/* Mini player card (compact/collapsed): circular art + title/artist
-        + thin progress + prev/play/next. Rendered only when the App flags
-        the pane compact (collapsed, narrow, or short); the full player
-        hides via CSS in the collapsed and narrow states, so track text,
-        Play/Pause, and the seek control resolve exactly once. No
-        volume/shuffle/repeat at this size. */}
+      {/* Mini player card (expanded-compact only): circular art +
+        title/artist + thin progress + prev/play/next. Rendered only when
+        the App flags the EXPANDED pane compact (narrow or short); collapsed
+        renders no mini at all (header-only). The full player hides via CSS
+        whenever the mini is present, so track text, Play/Pause, and the
+        seek control resolve exactly once. No volume/shuffle/repeat here. */}
       {p.compact === true && (
         <div
           className="mini-row"
