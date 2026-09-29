@@ -2477,45 +2477,33 @@ select:focus-visible,
   margin: 0;
 }
 
-/* Collapsed player: header slims down and the body shows only the mini
-   card, totalling the COLLAPSED_PLAYER_H floor from src/lib/layout.ts
-   (slim header + mini card + 2 px pane border). */
-.pane[data-pane="player"][data-collapsed="true"] .pane-body {
-  display: block;
-  overflow: hidden;
-  padding: 0;
-}
+/* Collapsed player is header-only like the queue: the generic
+   [data-collapsed] rule above hides .pane-body, so no player exception.
+   The mini card never renders when collapsed (App gates compact to
+   expanded-only). */
 
-.pane[data-pane="player"][data-collapsed="true"] .pane-handle {
-  padding: 2px 12px 0;
-  min-height: 18px;
-}
-
-/* The 68 px pin is exact (22 header + 44 card + 2 border) only when the
-   header content stays 20 px tall: the shared 22 px collapse button would
-   push the header to 24 px and clip 2 px off the mini card (cover bottom
-   cut by the pane box and the OS region alike). */
-.pane[data-pane="player"][data-collapsed="true"] .collapse-btn {
-  width: 22px;
-  height: 20px;
-}
-
-.pane[data-pane="player"][data-collapsed="true"] .player-full {
+/* Expanded-compact mini: the mini row reaches the DOM only when the App
+   flags an EXPANDED pane compact (w<=282, h<160). Hide the full player
+   whenever the mini is present so track text and Play/Pause resolve once.
+   The 68 px reference (EXPANDED_COMPACT_H in src/lib/layout.ts) is the
+   mini card box; a collapsed pane has no card and measures header-only. */
+.pane[data-pane="player"]:not([data-collapsed="true"]):has(.mini-row) .player-full {
   display: none;
 }
 
-.pane[data-pane="player"][data-collapsed="true"] .mini-row {
+.pane[data-pane="player"]:not([data-collapsed="true"]) .mini-row {
   display: flex;
   padding: 2px 12px 4px;
 }
 
 /* Narrow player panes fall back to the mini card under 280 px. Same
-   tight padding as the collapsed card so the row measures the same. */
+   tight padding so the row measures the same. Scoped to expanded: a
+   collapsed pane carries no mini in the DOM, so this never fires there. */
 @container (max-width: 280px) {
-  .pane[data-pane="player"] .player-full {
+  .pane[data-pane="player"]:not([data-collapsed="true"]) .player-full {
     display: none;
   }
-  .pane[data-pane="player"] .mini-row {
+  .pane[data-pane="player"]:not([data-collapsed="true"]) .mini-row {
     display: flex;
     padding: 2px 12px 4px;
   }
@@ -2638,7 +2626,7 @@ select:focus-visible,
   min-height: 140px;
 }
 
-/* Collapse wins over compact: the 68 px mini row keeps its floor. */
+/* Collapse stays header-only: the compact floors never apply when collapsed. */
 .pane[data-pane][data-collapsed="true"][data-compact="true"] {
   min-height: 0;
 }

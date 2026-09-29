@@ -2,12 +2,12 @@ import { test, expect } from "@playwright/test";
 import { stubTauri } from "./tauri-mock";
 import { TRACK_NAME, TRACK_ARTISTS } from "./fixtures";
 
-// Track C (2.5.0): the collapsed/compact mini is the reference card —
-// circular cover + title/artist + thin progress + prev/play/next — at
-// most 72 px tall with zero spill, and track text plus transport resolve
-// exactly once (the full player hides whenever the mini shows).
+// Track B (2.5.1): collapsed is header-only (no mini in the DOM); the mini
+// is an expanded-only compact state (narrow/short) — circular cover +
+// title/artist + thin progress + prev/play/next — at most 72 px tall with
+// zero spill, and track text plus transport resolve exactly once.
 
-function layoutFor(w: number, collapsed: boolean) {
+function layoutFor(w: number, collapsed: boolean, h = 260) {
   return {
     version: 3,
     preset: "custom",
@@ -18,7 +18,7 @@ function layoutFor(w: number, collapsed: boolean) {
         x: 24,
         y: 200,
         w,
-        h: 260,
+        h,
         opacity: 0.92,
         visible: true,
         collapsed,
@@ -37,8 +37,20 @@ async function spillOf(page, sel: string) {
   }));
 }
 
+async function expectHeaderOnly(page, shot: string) {
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player).toHaveAttribute("data-collapsed", "true");
+  await expect(player.locator(".pane-body")).toBeHidden();
+  await expect(player.locator(".mini-row")).toHaveCount(0);
+  const box = await player.boundingBox();
+  if (!box) throw new Error("player has no box");
+  expect(box.height).toBeLessThanOrEqual(48);
+  await page.screenshot({ path: `docs/bug-reports/2.5.1/${shot}` });
+}
+
 async function expectMiniCard(page, shot: string) {
   const player = page.locator('section[data-pane="player"]');
+  await expect(player).not.toHaveAttribute("data-collapsed", "true");
   const mini = player.locator(".mini-row");
   await expect(mini).toBeVisible();
   await expect(player.locator(".player-full")).toBeHidden();
@@ -73,23 +85,18 @@ async function expectMiniCard(page, shot: string) {
   const rowBox = await mini.boundingBox();
   if (!rowBox) throw new Error("mini-row has no box");
   expect(rowBox.height).toBeLessThanOrEqual(72);
-  await page.screenshot({ path: `docs/bug-reports/2.5.0/${shot}` });
+  await page.screenshot({ path: `docs/bug-reports/2.5.1/${shot}` });
 }
 
 for (const w of [280, 360]) {
-  test(`collapsed mini card at ${w}px`, async ({ page }) => {
+  test(`collapsed player is header-only at ${w}px`, async ({ page }) => {
     await stubTauri(page, { layout: layoutFor(w, true) });
     await page.goto("/");
-    const player = page.locator('section[data-pane="player"]');
-    await expect(player).toHaveAttribute("data-collapsed", "true");
-    await expectMiniCard(page, `compact-collapsed-${w}.png`);
-    const box = await player.boundingBox();
-    if (!box) throw new Error("player has no box");
-    expect(box.height).toBeLessThanOrEqual(72);
+    await expectHeaderOnly(page, `collapsed-header-${w}.png`);
   });
 }
 
-test("collapsed mini card on narrow stage", async ({ page }) => {
+test("collapsed player is header-only on narrow stage", async ({ page }) => {
   await page.setViewportSize({ width: 460, height: 800 });
   await stubTauri(page, {
     layout: {
@@ -101,20 +108,32 @@ test("collapsed mini card on narrow stage", async ({ page }) => {
     },
   });
   await page.goto("/");
-  const player = page.locator('section[data-pane="player"]');
-  await expect(player).toHaveAttribute("data-collapsed", "true");
-  await expectMiniCard(page, "compact-narrow.png");
-  const box = await player.boundingBox();
-  if (!box) throw new Error("player has no box");
-  expect(box.height).toBeLessThanOrEqual(72);
+  await expectHeaderOnly(page, "collapsed-header-narrow.png");
 });
 
-test("compact uncollapsed mini card at 280px", async ({ page }) => {
+test("expanded compact mini card at 280px", async ({ page }) => {
   // Narrow but not collapsed: the 280 px container query swaps the full
   // player for the same mini card; the row itself stays compact.
   await stubTauri(page, { layout: layoutFor(280, false) });
   await page.goto("/");
   const player = page.locator('section[data-pane="player"]');
   await expect(player).not.toHaveAttribute("data-collapsed", "true");
-  await expectMiniCard(page, "compact-uncollapsed-280.png");
+  await expectMiniCard(page, "expanded-compact-280.png");
+  // Light theme keeps the same exquisite mini: recolor only, no layout shift.
+  await page.evaluate(() => {
+    document.querySelector(".app")?.setAttribute("data-theme", "light");
+  });
+  await expect(player.locator(".mini-row")).toBeVisible();
+  await page.screenshot({ path: "docs/bug-reports/2.5.1/expanded-compact-280-light.png" });
+});
+
+test("expanded compact mini card when short", async ({ page }) => {
+  // Short stage: the boot clamp yields to the compact floor (h<160), so an
+  // EXPANDED wide pane still swaps the full player for the mini card.
+  await page.setViewportSize({ width: 800, height: 170 });
+  await stubTauri(page, { layout: layoutFor(340, false, 260) });
+  await page.goto("/");
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player).not.toHaveAttribute("data-collapsed", "true");
+  await expectMiniCard(page, "expanded-compact-short.png");
 });

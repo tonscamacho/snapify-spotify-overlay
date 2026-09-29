@@ -22,9 +22,10 @@ export interface PaneState {
   /** Per-pane opacity, 0.4–1. Persisted in layout v3. */
   opacity: number;
   visible: boolean;
-  /** PR8 collapse: true pins the pane to its mini/compact floor (player →
-   *  the 68 px mini card, other panes → header only). Persisted in v4;
-   *  absent (v3 docs) means expanded. */
+  /** PR8 collapse: true hides the pane body so the pane is header only
+   *  (all types, including the player). The player mini card is an
+   *  expanded-only compact state (narrow/short), never a collapsed state.
+   *  Persisted in v4; absent (v3 docs) means expanded. */
   collapsed?: boolean;
   z: number;
 }

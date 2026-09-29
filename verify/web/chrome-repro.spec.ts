@@ -2,12 +2,11 @@ import { test, expect } from "@playwright/test";
 import { stubTauri, commandsNamed } from "./tauri-mock";
 import { TRACK_NAME } from "./fixtures";
 
-// Track A (window chrome): the app is frameless transparent at all sizes.
+// Track B (2.5.1 window chrome): the app is frameless transparent at all sizes.
 // - No native caption buttons exist in-page: the dock exposes only its own
 //   Close (minimize/maximize/close live in no pane header, at no width).
 // - Collapsed panes are header-only with zero painted spill past their box
-//   (the collapsed player mini card fits its 68 px pin exactly: 22 header +
-//   44 card + 2 border, still inside the 72 px ceiling).
+//   (collapsed player carries no mini card: header-only like the queue).
 // - Overlay regions carry the painted corner radius (panes 14 px, dock
 //   stadium) so the OS round-rect shape never leaves a grey halo.
 
@@ -123,12 +122,12 @@ for (const w of [280, 360]) {
     const pm: any = await spillReport(page, 'section[data-pane="player"]');
     const qm: any = await spillReport(page, 'section[data-pane="queue"]');
     const lm: any = await spillReport(page, 'section[data-pane="lyrics"]');
-    expect(pm.box.h).toBeLessThanOrEqual(72);
+    expect(pm.box.h).toBeLessThanOrEqual(48);
     expect(qm.box.h).toBeLessThanOrEqual(48);
     expect(lm.box.h).toBeLessThanOrEqual(48);
     await expectNoCaptionButtons(page);
     await expectRadii(page, 14);
-    await page.screenshot({ path: `docs/bug-reports/2.5.0/chrome-${w}.png` });
+    await page.screenshot({ path: `docs/bug-reports/2.5.1/chrome-${w}.png` });
   });
 }
 
@@ -155,8 +154,10 @@ test("chrome census on narrow stage", async ({ page }) => {
     expect(rep.bad).toEqual([]);
   }
   const lm: any = await spillReport(page, 'section[data-pane="lyrics"]');
+  const pm: any = await spillReport(page, 'section[data-pane="player"]');
   expect(lm.box.h).toBeLessThanOrEqual(48);
+  expect(pm.box.h).toBeLessThanOrEqual(48);
   await expectNoCaptionButtons(page);
   await expectRadii(page, 14);
-  await page.screenshot({ path: `docs/bug-reports/2.5.0/chrome-narrow.png` });
+  await page.screenshot({ path: `docs/bug-reports/2.5.1/chrome-narrow.png` });
 });
