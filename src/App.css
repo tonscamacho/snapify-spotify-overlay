@@ -2811,3 +2811,182 @@ select:focus-visible,
   padding: 7px 12px;
   white-space: normal;
 }
+
+/* ---------- Track Scaling: full-player growth tiers (2.5.2) ----------
+   Reading: the existing overlay player for streamers, Apple-solid quiet
+   surfaces, redesign-preserve (match density, grow proportionally).
+   The default 340 px pane capped art at 148 px and type at 15 px, so a
+   resized-big pane kept a tiny island. Narrow compact is untouched: the
+   mini card only renders <=280 px / <160 px tall (App gate + container
+   query above), every growth tier below fires at >=480 px container
+   width, and the fluid floors match today's sizes (title 15, artist 12,
+   device/times 11 at 340 px) so default and narrow panes are unchanged.
+   No new motion is added (sizes only), so the prefers-reduced-motion
+   block above needs no carve-out; the hover marquee measures overflow
+   at runtime and survives larger type. */
+
+.player-full {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.player-full .track-meta {
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Fluid type: px fallback first for engines without cqw, then the clamp.
+   Floors equal today's sizes at the default 340 px pane; caps lift wide. */
+.player-full .track-title {
+  font-size: 15px;
+  font-size: clamp(14px, 4cqw + 1px, 28px);
+}
+
+.player-full .track-artist {
+  font-size: 12px;
+  font-size: clamp(12px, 3cqw + 2px, 17px);
+}
+
+.player-full .device-line,
+.player-full .times {
+  font-size: 11px;
+  font-size: clamp(11px, 2.8cqw + 1.5px, 15px);
+}
+
+/* Spill safety (no wrap on the transport row): the overlay row is
+   absolutely positioned inside the art box, so it never expands scroll
+   width — wrapping would only break the shared flex baseline the
+   transport tests pin (centers within 1 px). The volume row may wrap
+   instead of overflowing; harmless at narrow widths where nothing
+   overflows, so no wrap triggers there. */
+.player-full .volume-row {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.player-full .volume-row .vol {
+  flex: 1 1 120px;
+  min-width: 96px;
+}
+
+/* Growth tiers, scoped to the full player so the mini card never sees
+   them. Art lifts from min(52%,148px) through 260/340/440 caps;
+   transport, like-check, slider, bar, and rhythm grow with it.
+   Thresholds sit 2 px under the nominal pane widths because container
+   units measure the pane content box (480/640/800 px panes carry a
+   1 px border per side). */
+@container (min-width: 478px) {
+  .art-top.art-compact {
+    width: min(56%, 260px);
+  }
+  .player-card {
+    gap: 6px;
+  }
+  .card-meta {
+    margin-top: 8px;
+  }
+  .art-overlay .icon-btn {
+    width: 38px;
+    height: 38px;
+  }
+  .art-overlay .play-disc {
+    width: 48px;
+    height: 48px;
+  }
+  .art-transport .icon-btn svg,
+  .art-transport .play-disc svg {
+    width: 21px;
+    height: 21px;
+  }
+  .player-full .like-check {
+    width: 30px;
+    height: 30px;
+  }
+  .player-full .volume-row .vol {
+    height: 18px;
+  }
+  .player-full .bar {
+    height: 12px;
+  }
+  .player-full .bar::before,
+  .player-full .bar i {
+    height: 4px;
+  }
+}
+
+@container (min-width: 638px) {
+  .pane[data-pane="player"] {
+    --pad-pane: 20px;
+  }
+  .art-top.art-compact {
+    width: min(60%, 340px);
+  }
+  .player-card {
+    gap: 8px;
+  }
+  .card-meta {
+    margin-top: 10px;
+  }
+  .art-overlay .icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+  .art-overlay .play-disc {
+    width: 56px;
+    height: 56px;
+  }
+  .art-transport .icon-btn svg,
+  .art-transport .play-disc svg {
+    width: 24px;
+    height: 24px;
+  }
+  .player-full .like-check {
+    width: 34px;
+    height: 34px;
+  }
+  .player-full .volume-row .vol {
+    height: 20px;
+  }
+  .player-full .bar {
+    height: 14px;
+  }
+  .player-full .bar::before,
+  .player-full .bar i {
+    height: 5px;
+  }
+}
+
+@container (min-width: 798px) {
+  .pane[data-pane="player"] {
+    --pad-pane: 24px;
+  }
+  .art-top.art-compact {
+    width: min(58%, 440px);
+  }
+  .player-card {
+    gap: 10px;
+  }
+  .card-meta {
+    margin-top: 12px;
+  }
+  .art-overlay .icon-btn {
+    width: 52px;
+    height: 52px;
+  }
+  .art-overlay .play-disc {
+    width: 68px;
+    height: 68px;
+  }
+  .art-transport .icon-btn svg,
+  .art-transport .play-disc svg {
+    width: 28px;
+    height: 28px;
+  }
+  .player-full .like-check {
+    width: 36px;
+    height: 36px;
+  }
+  .player-full .volume-row .vol {
+    height: 22px;
+  }
+}
