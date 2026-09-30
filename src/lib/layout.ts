@@ -374,10 +374,10 @@ export const EXPANDED_COMPACT_H = 68;
  *  Kept so older imports still compile; new code uses EXPANDED_COMPACT_H. */
 export const COLLAPSED_PLAYER_H = EXPANDED_COMPACT_H;
 
-/** Player container breakpoint for the mini row (see the 280 px
- *  container query in App.css). The App renders the mini row when the
- *  pane box is at most this plus the 2 px pane border, so the React
- *  gate and the CSS switch agree with no dead zone. */
+/** Legacy mini breakpoint (280). The compact gate now uses COMPACT_W (360)
+ *  with a floor-inclusive height arm (see App.tsx); the CSS fallback query
+ *  is 357 px to match (359 pane minus the 2 px border). Kept so older
+ *  imports still compile; new code uses COMPACT_W. */
 export const MINI_PLAYER_W = 280;
 
 function isSceneName(v: unknown): v is SceneName {

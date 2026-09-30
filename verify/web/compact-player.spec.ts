@@ -2,10 +2,11 @@ import { test, expect } from "@playwright/test";
 import { stubTauri } from "./tauri-mock";
 import { TRACK_NAME, TRACK_ARTISTS } from "./fixtures";
 
-// Track B (2.5.1): collapsed is header-only (no mini in the DOM); the mini
-// is an expanded-only compact state (narrow/short) — circular cover +
-// title/artist + thin progress + prev/play/next — at most 72 px tall with
-// zero spill, and track text plus transport resolve exactly once.
+// Track gate (2.5.2): collapsed is header-only (no mini in the DOM); the
+// mini is an expanded-only compact state (w < COMPACT_W 360 or
+// h <= 190 floor-inclusive) — circular cover + title/artist + thin
+// progress + prev/play/next — at most 72 px tall with zero spill, and
+// track text plus transport resolve exactly once.
 
 function layoutFor(w: number, collapsed: boolean, h = 260) {
   return {
@@ -112,8 +113,9 @@ test("collapsed player is header-only on narrow stage", async ({ page }) => {
 });
 
 test("expanded compact mini card at 280px", async ({ page }) => {
-  // Narrow but not collapsed: the 280 px container query swaps the full
-  // player for the same mini card; the row itself stays compact.
+  // Narrow but not collapsed: below COMPACT_W the React gate + 359 px
+  // container query swap the full player for the same mini card; the row
+  // itself stays compact.
   await stubTauri(page, { layout: layoutFor(280, false) });
   await page.goto("/");
   const player = page.locator('section[data-pane="player"]');
@@ -127,9 +129,39 @@ test("expanded compact mini card at 280px", async ({ page }) => {
   await page.screenshot({ path: "docs/bug-reports/2.5.1/expanded-compact-280-light.png" });
 });
 
+for (const w of [300, 340]) {
+  test(`expanded compact mini card at ${w}px (reachable by normal resize)`, async ({ page }) => {
+    // 2.5.2 gate (w < 360): these widths are reachable by normal drag
+    // resize (min 280) and must show the mini, not a squeezed full player.
+    await stubTauri(page, { layout: layoutFor(w, false) });
+    await page.goto("/");
+    await expectMiniCard(page, `expanded-compact-${w}.png`);
+  });
+}
+
+test("expanded full player above the compact gate", async ({ page }) => {
+  // Tall-wide stays full: w=400 clears w<360 and h=260 clears h<=190, so
+  // the full player renders and no mini reaches the DOM.
+  await stubTauri(page, { layout: layoutFor(400, false, 260) });
+  await page.goto("/");
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player).not.toHaveAttribute("data-collapsed", "true");
+  await expect(player.locator(".player-full")).toBeVisible();
+  await expect(player.locator(".mini-row")).toHaveCount(0);
+  await expect(player.getByText(TRACK_NAME).first()).toBeVisible();
+});
+
+test("expanded compact mini card at the height floor (h=190, reachable)", async ({ page }) => {
+  // Floor-inclusive height arm: the normal drag minimum (h=190) itself
+  // reaches mini without lowering drag minima, even when wide.
+  await stubTauri(page, { layout: layoutFor(400, false, 190) });
+  await page.goto("/");
+  await expectMiniCard(page, "expanded-compact-h190.png");
+});
+
 test("expanded compact mini card when short", async ({ page }) => {
-  // Short stage: the boot clamp yields to the compact floor (h<160), so an
-  // EXPANDED wide pane still swaps the full player for the mini card.
+  // Short stage: the boot clamp yields to the compact floor (h<=190), so
+  // an EXPANDED wide pane still swaps the full player for the mini card.
   await page.setViewportSize({ width: 800, height: 170 });
   await stubTauri(page, { layout: layoutFor(340, false, 260) });
   await page.goto("/");

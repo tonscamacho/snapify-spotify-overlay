@@ -286,12 +286,14 @@ test("short titles never marquee", async ({ page }) => {
 
 test("player collapses to header-only and persists", async ({ page }) => {
   // Lowered pane: the floating dock overlaps pane headers near the top.
+  // w=400 stays clear of the compact gate (w<360) so the full player
+  // renders before collapse.
   await stubTauri(page, {
     layout: {
       version: 3,
       preset: "custom",
       panes: [
-        { id: "player", type: "player", x: 24, y: 200, w: 340, h: 260, opacity: 0.92, visible: true, z: 1 },
+        { id: "player", type: "player", x: 24, y: 200, w: 400, h: 260, opacity: 0.92, visible: true, z: 1 },
       ],
     },
   });
@@ -338,7 +340,7 @@ const VIZ_LAYOUT = {
       type: "player",
       x: 24,
       y: 200,
-      w: 340,
+      w: 400,
       h: 260,
       opacity: 0.92,
       visible: true,
@@ -347,7 +349,7 @@ const VIZ_LAYOUT = {
     {
       id: "viz",
       type: "visualizer",
-      x: 376,
+      x: 436,
       y: 200,
       w: 340,
       h: 260,
@@ -465,14 +467,14 @@ test("transport row: equal optical size, shared baseline, proportional play disc
 
 test("transport row holds at narrow width and across light/glass", async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 600 });
-  // Narrow-but-full player: container query shrinks chrome, compact gate
-  // (<=282px) stays off so the five-button row is still rendered.
+  // Full player just above the compact gate: w=400 stays clear of the
+  // mini (w<360) so the five-button row is still rendered at default size.
   await stubTauri(page, {
     layout: {
       version: 3,
       preset: "custom",
       panes: [
-        { id: "player", type: "player", x: 24, y: 200, w: 300, h: 260, opacity: 0.92, visible: true, z: 1 },
+        { id: "player", type: "player", x: 24, y: 200, w: 400, h: 260, opacity: 0.92, visible: true, z: 1 },
       ],
     },
   });
@@ -500,13 +502,13 @@ test("transport row holds at narrow width and across light/glass", async ({ page
   const narrowIcons = narrow.btns.filter((b) => b.cls.includes("icon-btn"));
   const narrowDiscs = narrow.btns.filter((b) => b.cls.includes("play-disc"));
   for (const b of narrowIcons) {
-    expect(Math.round(b.w)).toBe(28);
-    expect(Math.round(b.h)).toBe(28);
-    expect(Math.round(b.svgW)).toBe(16);
+    expect(Math.round(b.w)).toBe(32);
+    expect(Math.round(b.h)).toBe(32);
+    expect(Math.round(b.svgW)).toBe(18);
   }
-  expect(Math.round(narrowDiscs[0].w)).toBe(36);
-  expect(Math.round(narrowDiscs[0].h)).toBe(36);
-  expect(Math.round(narrowDiscs[0].svgW)).toBe(16);
+  expect(Math.round(narrowDiscs[0].w)).toBe(40);
+  expect(Math.round(narrowDiscs[0].h)).toBe(40);
+  expect(Math.round(narrowDiscs[0].svgW)).toBe(18);
   const nCenters = narrow.btns.map((b) => b.centerY);
   expect(Math.max(...nCenters) - Math.min(...nCenters)).toBeLessThanOrEqual(1);
   await page.evaluate(() => {

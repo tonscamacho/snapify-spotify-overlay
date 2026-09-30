@@ -44,7 +44,7 @@ import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updat
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
 import {
-  MINI_PLAYER_W,
+  COMPACT_W,
   PRESETS,
   STREAM_HIDE_DELAY_MS,
   clampLayoutToArea,
@@ -2276,13 +2276,12 @@ export default function App() {
               queuedCount={pendingCount}
               degraded={degradedUi}
               onRetry={retryPlayerCb}
-              // Compact (mini card in DOM) only when EXPANDED and narrow
-              // enough for the 280 px container query, or shorter than the
-              // full player chrome (< 160 px, only after the clamp yields to
-              // the compact floor); +2 px pane border, so the React gate and
-              // the CSS switch agree with no dead zone. Collapsed stays
-              // header-only with no mini in the DOM.
-              compact={!pane.collapsed && (pane.w <= MINI_PLAYER_W + 2 || pane.h < 160)}
+              // Compact (mini card in DOM) only when EXPANDED and below the
+              // compact width (w < COMPACT_W, 360) or at/below the full
+              // player content floor (h <= 190, floor-inclusive so the
+              // normal drag minimum itself reaches mini without lowering
+              // drag minima). Collapsed stays header-only with no mini.
+              compact={!pane.collapsed && (pane.w < COMPACT_W || pane.h <= getPaneMin(pane.type).h)}
               onPlay={playCb}
               onPause={pauseCb}
               onNext={nextCb}
