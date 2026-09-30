@@ -42,10 +42,11 @@ interface Props {
   onRetry?: () => void;
   /** Render the mini card (circular art + title/artist + thin progress +
    *  prev/play/next) instead of the full player. The App sets this only
-   *  when the pane is EXPANDED but narrow/short (w<=282, h<160, or the
-   *  280 px container query); collapsed stays header-only with no mini in
-   *  the DOM. Either the mini or the full player renders its track text
-   *  and Play/Pause, never both, so each resolves exactly once. */
+   *  when the pane is EXPANDED but below the compact width (w < COMPACT_W,
+   *  360) or at/below the full content floor (h <= 190, floor-inclusive);
+   *  collapsed stays header-only with no mini in the DOM. Either the mini
+   *  or the full player renders its track text and Play/Pause, never both,
+   *  so each resolves exactly once. */
   compact?: boolean;
   onPlay: () => void;
   onPause: () => void;
