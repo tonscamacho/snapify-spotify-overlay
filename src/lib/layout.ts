@@ -18,9 +18,11 @@ export const MIN_H = 120;
 
 /** Content floors per pane type. One global minimum forced dead
  *  space in small panes and clipping in browse, so each pane gets
- *  the smallest size its own chrome can survive. */
+ *  the smallest size its own chrome can survive. The player drag floor
+ *  is 120: heights 120-190 rest on the mini card (see PLAYER_FULL_H),
+ *  so the full card never has to survive below its own threshold. */
 export const PANE_MIN: Record<PaneType, { w: number; h: number }> = {
-  player: { w: 280, h: 190 },
+  player: { w: 280, h: 120 },
   lyrics: { w: 280, h: 200 },
   queue: { w: 260, h: 180 },
   visualizer: { w: 260, h: 170 },
@@ -36,7 +38,7 @@ export function getPaneMin(type: PaneType): { w: number; h: number } {
  *  overflowing the stage; the App marks such panes data-compact so CSS
  *  sheds cover art and secondary metadata first. */
 export const COMPACT_PANE_MIN: Record<PaneType, { w: number; h: number }> = {
-  player: { w: 200, h: 132 },
+  player: { w: 200, h: 120 },
   lyrics: { w: 200, h: 140 },
   queue: { w: 200, h: 132 },
   visualizer: { w: 200, h: 120 },
@@ -46,6 +48,14 @@ export const COMPACT_PANE_MIN: Record<PaneType, { w: number; h: number }> = {
 export function getCompactPaneMin(type: PaneType): { w: number; h: number } {
   return COMPACT_PANE_MIN[type] ?? { w: MIN_W, h: MIN_H };
 }
+
+/** Full-player content threshold (Track A, 2.5.3): at or below this
+ *  height an EXPANDED player swaps the full card for the mini
+ *  (floor-inclusive), even though the drag floor (PANE_MIN.player.h)
+ *  sits lower at 120. Keeping the swap on the content size — not the
+ *  drag minimum — means 120-190 always rests on the mini with no clip,
+ *  and compact shedding keeps its old reach. */
+export const PLAYER_FULL_H = 190;
 
 /** Compact width breakpoint: below 360 px a pane sheds cover art first,
  *  then secondary metadata. Height compactness is per-type (below the
@@ -57,10 +67,13 @@ export const SMALL_WINDOW_W = 640;
 
 /** True when a pane box is squeezed below its comfortable chrome. The App
  *  reflects this as data-compact so CSS (which cannot query height) can
- *  shed secondary chrome. Pure. */
+ *  shed secondary chrome. The player reads against PLAYER_FULL_H (the
+ *  full card's threshold), not the 120 drag floor, so 120-190 keeps the
+ *  same shedding it had when 190 was the minimum. Pure. */
 export function isCompactPane(w: number, h: number, type: PaneType): boolean {
   const full = getPaneMin(type);
-  return w < COMPACT_W || h < full.h;
+  const floorH = type === "player" ? PLAYER_FULL_H : full.h;
+  return w < COMPACT_W || h < floorH;
 }
 
 /** Clamp a uiScale into the supported 0.85–1.30 range. Pure. */

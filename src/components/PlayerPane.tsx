@@ -43,10 +43,10 @@ interface Props {
   /** Render the mini card (circular art + title/artist + thin progress +
    *  prev/play/next) instead of the full player. The App sets this only
    *  when the pane is EXPANDED but below the compact width (w < COMPACT_W,
-   *  360) or at/below the full content floor (h <= 190, floor-inclusive);
-   *  collapsed stays header-only with no mini in the DOM. Either the mini
-   *  or the full player renders its track text and Play/Pause, never both,
-   *  so each resolves exactly once. */
+   *  360) or at/below the full content threshold (h <= PLAYER_FULL_H in
+   *  src/lib/layout.ts, floor-inclusive); collapsed stays header-only with
+   *  no mini in the DOM. Either the mini or the full player renders its
+   *  track text and Play/Pause, never both, so each resolves exactly once. */
   compact?: boolean;
   onPlay: () => void;
   onPause: () => void;
@@ -615,10 +615,11 @@ export default function PlayerPane(p: Props) {
       </div>
       {/* Mini player card (expanded-compact only): circular art +
         title/artist + thin progress + prev/play/next. Rendered only when
-        the App flags the EXPANDED pane compact (narrow or short); collapsed
-        renders no mini at all (header-only). The full player hides via CSS
-        whenever the mini is present, so track text, Play/Pause, and the
-        seek control resolve exactly once. No volume/shuffle/repeat here. */}
+        the App flags the EXPANDED pane compact (narrow or at/below the
+        full-content threshold); collapsed renders no mini at all
+        (header-only). The full player hides via CSS whenever the mini is
+        present, so track text, Play/Pause, and the seek control resolve
+        exactly once. No volume/shuffle/repeat here. */}
       {p.compact === true && (
         <div
           className="mini-row"
