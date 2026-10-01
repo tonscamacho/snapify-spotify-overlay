@@ -977,10 +977,40 @@ export default function App() {
     scheduleRegionReport();
   }, [layout, preset, interactive, editing, settingsOpen, toasts, loggedIn, uiScale, visible, scheduleRegionReport]);
 
+  // Runtime twin of the boot clamp. An OS shrink after boot (game
+  // resolution switch, un-maximize/restore, monitor hop — the windowed-game
+  // case) otherwise strands panes off-screen where no drag can reach them,
+  // so the overlay behaves as if the screen were smaller than it is.
+  // Debounced to the resize settle so a live resize pays a single undo
+  // step; interior panes are untouched because the clamp is identity inside.
+  const resizeClampTimer = useRef(0);
+  const queueResizeClamp = useCallback(() => {
+    if (resizeClampTimer.current) window.clearTimeout(resizeClampTimer.current);
+    resizeClampTimer.current = window.setTimeout(() => {
+      resizeClampTimer.current = 0;
+      // A live drag owns geometry mid-gesture and already pins to the live
+      // area; never fight it.
+      if (dragRef.current) return;
+      const k = uiScaleRef.current || 1;
+      const cur = layoutRef.current;
+      const next = clampLayoutToArea(
+        { version: 3, preset: presetRef.current, panes: cur },
+        window.innerWidth,
+        window.innerHeight,
+        k,
+      ).panes;
+      if (JSON.stringify(next) === JSON.stringify(cur)) return;
+      pushUndoSnapshot();
+      setLayout(next);
+      persist(next, presetRef.current);
+    }, 250);
+  }, [persist, pushUndoSnapshot]);
+
   useEffect(() => {
     const onResize = () => {
       scheduleRegionReport();
       setViewport({ w: window.innerWidth, h: window.innerHeight });
+      queueResizeClamp();
     };
     window.addEventListener("resize", onResize);
     const stopWatching = watchRegionElementSizes(scheduleRegionReport);
@@ -988,8 +1018,9 @@ export default function App() {
       window.removeEventListener("resize", onResize);
       stopWatching();
       if (regionTimer.current) window.clearTimeout(regionTimer.current);
+      if (resizeClampTimer.current) window.clearTimeout(resizeClampTimer.current);
     };
-  }, [scheduleRegionReport]);
+  }, [scheduleRegionReport, queueResizeClamp]);
 
   // In-app shortcuts. Global chords (play/pause, next, mute, like, seek,
   // interact, edit, visibility) arrive as Tauri events even while focused, so

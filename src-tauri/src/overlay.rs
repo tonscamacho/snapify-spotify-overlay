@@ -305,8 +305,11 @@ fn note_first_report(kind: &str) {
 
 /// Registers one-shot window listeners that re-apply click-through regions
 /// when the OS moves the window across monitors (`Moved`, which changes the
-/// live scale factor and frame offset) or reports a DPI change
-/// (`ScaleFactorChanged`). Registered lazily on the first overlay command
+/// live scale factor and frame offset), reports a DPI change
+/// (`ScaleFactorChanged`), or resizes the window (`Resized`, which can
+/// change the borderless frame offset on maximize/restore and the visible
+/// subset of reported rects on resolution or windowed-game switches).
+/// Registered lazily on the first overlay command
 /// so no `lib.rs` wiring beyond boot timing is needed; `Once` keeps
 /// repeated commands from stacking handlers.
 fn ensure_window_listeners(app: &AppHandle) {
@@ -318,6 +321,11 @@ fn ensure_window_listeners(app: &AppHandle) {
         win.on_window_event(move |event| match event {
             tauri::WindowEvent::ScaleFactorChanged { .. } => apply_region(&handle),
             tauri::WindowEvent::Moved(_) => apply_region(&handle),
+            // A pure resize keeps the scale factor but can change the
+            // borderless frame offset (maximize <-> restore, resolution or
+            // windowed-game switches) and which reported rects stay visible.
+            // Re-apply so no stale clip box survives the transition.
+            tauri::WindowEvent::Resized(_) => apply_region(&handle),
             _ => {}
         });
     });
