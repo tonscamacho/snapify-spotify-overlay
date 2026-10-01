@@ -1,12 +1,13 @@
 import { test, expect } from "@playwright/test";
-import { stubTauri } from "./tauri-mock";
+import { stubTauri, commandsNamed } from "./tauri-mock";
 import { TRACK_NAME, TRACK_ARTISTS } from "./fixtures";
 
-// Track gate (2.5.2): collapsed is header-only (no mini in the DOM); the
+// Track gate (2.5.3): collapsed is header-only (no mini in the DOM); the
 // mini is an expanded-only compact state (w < COMPACT_W 360 or
 // h <= 190 floor-inclusive) — circular cover + title/artist + thin
-// progress + prev/play/next — at most 72 px tall with zero spill, and
-// track text plus transport resolve exactly once.
+// progress + shuffle/prev/play/next/repeat — at most 72 px tall with zero
+// spill, and track text plus transport resolve exactly once. No volume at
+// this size.
 
 function layoutFor(w: number, collapsed: boolean, h = 260) {
   return {
@@ -46,7 +47,7 @@ async function expectHeaderOnly(page, shot: string) {
   const box = await player.boundingBox();
   if (!box) throw new Error("player has no box");
   expect(box.height).toBeLessThanOrEqual(48);
-  await page.screenshot({ path: `docs/bug-reports/2.5.1/${shot}` });
+  await page.screenshot({ path: `docs/bug-reports/2.5.3/${shot}` });
 }
 
 async function expectMiniCard(page, shot: string) {
@@ -55,7 +56,7 @@ async function expectMiniCard(page, shot: string) {
   const mini = player.locator(".mini-row");
   await expect(mini).toBeVisible();
   await expect(player.locator(".player-full")).toBeHidden();
-  // Reference content: cover, title, artist, progress, three transport buttons.
+  // Reference content: cover, title, artist, progress, five transport buttons.
   await expect(mini.locator("img.mini-cover")).toBeVisible();
   await expect(mini.locator(".mini-title")).toContainText(TRACK_NAME);
   await expect(mini.locator(".mini-artist")).toContainText(TRACK_ARTISTS);
@@ -68,6 +69,18 @@ async function expectMiniCard(page, shot: string) {
   expect(fillW.px).toBeGreaterThan(0);
   await expect(mini.getByRole("button", { name: "Previous track" })).toBeVisible();
   await expect(mini.getByRole("button", { name: "Next track" })).toBeVisible();
+  // Shuffle + repeat flank the transport, reusing the full-player
+  // behavior: icon-btn, aria-pressed, tooltips, disabled when free.
+  const shuffle = mini.getByRole("button", { name: "Toggle shuffle" });
+  const repeat = mini.getByRole("button", { name: "Cycle repeat mode" });
+  await expect(shuffle).toBeVisible();
+  await expect(repeat).toBeVisible();
+  await expect(shuffle).toHaveAttribute("aria-pressed", "false");
+  await expect(repeat).toHaveAttribute("aria-pressed", "false");
+  await expect(shuffle).toHaveClass(/mini-aux/);
+  await expect(repeat).toHaveClass(/mini-aux/);
+  // No volume at this size.
+  await expect(mini.locator("input.vol, .volume-row")).toHaveCount(0);
   // Single resolution: exactly one accessible Play/Pause in the pane —
   // display:none keeps the full player's twin out of the a11y tree.
   await expect(
@@ -86,7 +99,7 @@ async function expectMiniCard(page, shot: string) {
   const rowBox = await mini.boundingBox();
   if (!rowBox) throw new Error("mini-row has no box");
   expect(rowBox.height).toBeLessThanOrEqual(72);
-  await page.screenshot({ path: `docs/bug-reports/2.5.1/${shot}` });
+  await page.screenshot({ path: `docs/bug-reports/2.5.3/${shot}` });
 }
 
 for (const w of [280, 360]) {
@@ -120,13 +133,13 @@ test("expanded compact mini card at 280px", async ({ page }) => {
   await page.goto("/");
   const player = page.locator('section[data-pane="player"]');
   await expect(player).not.toHaveAttribute("data-collapsed", "true");
-  await expectMiniCard(page, "expanded-compact-280.png");
+  await expectMiniCard(page, "mini-shuffle-280.png");
   // Light theme keeps the same exquisite mini: recolor only, no layout shift.
   await page.evaluate(() => {
     document.querySelector(".app")?.setAttribute("data-theme", "light");
   });
   await expect(player.locator(".mini-row")).toBeVisible();
-  await page.screenshot({ path: "docs/bug-reports/2.5.1/expanded-compact-280-light.png" });
+  await page.screenshot({ path: "docs/bug-reports/2.5.3/mini-shuffle-280-light.png" });
 });
 
 for (const w of [300, 340]) {
@@ -135,7 +148,7 @@ for (const w of [300, 340]) {
     // resize (min 280) and must show the mini, not a squeezed full player.
     await stubTauri(page, { layout: layoutFor(w, false) });
     await page.goto("/");
-    await expectMiniCard(page, `expanded-compact-${w}.png`);
+    await expectMiniCard(page, `mini-shuffle-${w}.png`);
   });
 }
 
@@ -156,7 +169,7 @@ test("expanded compact mini card at the height floor (h=190, reachable)", async 
   // reaches mini without lowering drag minima, even when wide.
   await stubTauri(page, { layout: layoutFor(400, false, 190) });
   await page.goto("/");
-  await expectMiniCard(page, "expanded-compact-h190.png");
+  await expectMiniCard(page, "mini-shuffle-h190.png");
 });
 
 test("expanded compact mini card when short", async ({ page }) => {
@@ -167,5 +180,27 @@ test("expanded compact mini card when short", async ({ page }) => {
   await page.goto("/");
   const player = page.locator('section[data-pane="player"]');
   await expect(player).not.toHaveAttribute("data-collapsed", "true");
-  await expectMiniCard(page, "expanded-compact-short.png");
+  await expectMiniCard(page, "mini-shuffle-short.png");
+});
+
+test("mini shuffle + repeat fire the matching commands", async ({ page }) => {
+  await stubTauri(page, { layout: layoutFor(300, false) });
+  await page.goto("/");
+  const player = page.locator('section[data-pane="player"]');
+  const mini = player.locator(".mini-row");
+  await expect(mini).toBeVisible();
+
+  await mini.getByRole("button", { name: "Toggle shuffle" }).click();
+  await expect
+    .poll(async () => (await commandsNamed(page, "set_shuffle")).length, { timeout: 10000 })
+    .toBeGreaterThan(0);
+
+  await mini.getByRole("button", { name: "Cycle repeat mode" }).click();
+  await expect
+    .poll(async () => (await commandsNamed(page, "set_repeat")).length, { timeout: 10000 })
+    .toBeGreaterThan(0);
+
+  // Single resolution still holds after both presses.
+  await expect(player.getByRole("button", { name: "Pause", exact: true })).toHaveCount(1);
+  await page.screenshot({ path: "docs/bug-reports/2.5.3/mini-shuffle-commands.png" });
 });

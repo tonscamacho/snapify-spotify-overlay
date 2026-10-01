@@ -2490,6 +2490,21 @@ select:focus-visible,
   padding: 0;
 }
 
+/* Mini shuffle/repeat flankers: same .icon-btn behavior (hover, .is-on
+   dot, disabled dim) at a smaller box so shuffle/prev/play/next/repeat
+   still fits the 72 px row with zero spill at 280 px. 14 px glyphs keep
+   optical weight next to the 15 px transport glyphs. */
+.mini-row .icon-btn.mini-aux {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  padding: 0;
+}
+
+.mini-row .icon-btn.mini-aux.is-on::after {
+  bottom: 2px;
+}
+
 .mini-play {
   width: 32px;
   height: 32px;
@@ -2536,6 +2551,30 @@ select:focus-visible,
     flex: none;
     margin-block: auto;
     padding: 3px 12px;
+  }
+}
+
+/* Tightest mini widths (280-330): shave the transport boxes and gaps so
+   five buttons still fit with zero spill. Title/artist ellipsis absorbs
+   the rest; the row stays within 72 px. */
+@container (max-width: 330px) {
+  .pane[data-pane="player"]:not([data-collapsed="true"]) .mini-row {
+    gap: 6px;
+  }
+  .pane[data-pane="player"]:not([data-collapsed="true"]) .mini-transport {
+    gap: 1px;
+  }
+  .pane[data-pane="player"]:not([data-collapsed="true"]) .mini-row .icon-btn.mini-nav {
+    width: 28px;
+    height: 28px;
+  }
+  .pane[data-pane="player"]:not([data-collapsed="true"]) .mini-play {
+    width: 28px;
+    height: 28px;
+  }
+  .pane[data-pane="player"]:not([data-collapsed="true"]) .mini-row .icon-btn.mini-aux {
+    width: 26px;
+    height: 26px;
   }
 }
 

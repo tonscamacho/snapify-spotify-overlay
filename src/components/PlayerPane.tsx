@@ -614,12 +614,16 @@ export default function PlayerPane(p: Props) {
       </div>
       </div>
       {/* Mini player card (expanded-compact only): circular art +
-        title/artist + thin progress + prev/play/next. Rendered only when
-        the App flags the EXPANDED pane compact (narrow or at/below the
-        full-content threshold); collapsed renders no mini at all
-        (header-only). The full player hides via CSS whenever the mini is
-        present, so track text, Play/Pause, and the seek control resolve
-        exactly once. No volume/shuffle/repeat here. */}
+        title/artist + thin progress + shuffle/prev/play/next/repeat.
+        Rendered only when the App flags the EXPANDED pane compact (narrow
+        w < 360 or at/below the full-content threshold PLAYER_FULL_H in
+        src/lib/layout.ts, floor-inclusive); collapsed renders no mini at
+        all (header-only). The full player hides via CSS whenever the mini
+        is present, so track text, Play/Pause, and the seek control resolve
+        exactly once. No volume at this size. Shuffle/repeat reuse the
+        .icon-btn active/disabled behavior (is-on dot, dim when busy,
+        tooltips/aria) at a smaller aux size so the row stays within 72 px
+        with zero spill. */}
       {p.compact === true && (
         <div
           className="mini-row"
@@ -652,6 +656,16 @@ export default function PlayerPane(p: Props) {
           </div>
         </div>
         <div className="mini-transport">
+          <button
+            className={`icon-btn mini-nav mini-aux${s.shuffle ? " is-on" : ""}`}
+            onClick={p.onShuffle}
+            title={isFree ? UPGRADE_TEXT : "Shuffle"}
+            aria-label="Toggle shuffle"
+            aria-pressed={s.shuffle}
+            disabled={isFree}
+          >
+            <ShuffleIcon size={14} />
+          </button>
           <button
             className="icon-btn mini-nav"
             onClick={p.onPrev}
@@ -690,6 +704,16 @@ export default function PlayerPane(p: Props) {
             aria-label="Next track"
           >
             <NextIcon size={15} />
+          </button>
+          <button
+            className={`icon-btn mini-nav mini-aux${s.repeat !== "off" ? " is-on" : ""}`}
+            onClick={p.onRepeat}
+            title={isFree ? UPGRADE_TEXT : `Repeat: ${s.repeat}`}
+            aria-label="Cycle repeat mode"
+            aria-pressed={s.repeat !== "off"}
+            disabled={isFree}
+          >
+            {s.repeat === "track" ? <RepeatOneIcon size={14} /> : <RepeatIcon size={14} />}
           </button>
         </div>
         </div>
