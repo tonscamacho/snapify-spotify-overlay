@@ -45,6 +45,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
 import {
   COMPACT_W,
+  PLAYER_FULL_H,
   PRESETS,
   STREAM_HIDE_DELAY_MS,
   clampLayoutToArea,
@@ -2278,10 +2279,10 @@ export default function App() {
               onRetry={retryPlayerCb}
               // Compact (mini card in DOM) only when EXPANDED and below the
               // compact width (w < COMPACT_W, 360) or at/below the full
-              // player content floor (h <= 190, floor-inclusive so the
-              // normal drag minimum itself reaches mini without lowering
-              // drag minima). Collapsed stays header-only with no mini.
-              compact={!pane.collapsed && (pane.w < COMPACT_W || pane.h <= getPaneMin(pane.type).h)}
+              // player content threshold (h <= PLAYER_FULL_H, floor-inclusive).
+              // The drag floor sits lower (120), so 120-190 always rests on
+              // the mini with no clip. Collapsed stays header-only with no mini.
+              compact={!pane.collapsed && (pane.w < COMPACT_W || pane.h <= PLAYER_FULL_H)}
               onPlay={playCb}
               onPause={pauseCb}
               onNext={nextCb}

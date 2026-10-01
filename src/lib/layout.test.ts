@@ -17,6 +17,7 @@ import {
   migrateV3ToV4,
   newPaneForType,
   PANE_MIN,
+  PLAYER_FULL_H,
   pushLayoutUndo,
   revealPaneType,
   saveSceneLayout,
@@ -52,7 +53,7 @@ function layout(panes: PaneState[]): LayoutState {
 
 describe("getPaneMin", () => {
   it("returns the per-type content floors", () => {
-    expect(getPaneMin("player")).toEqual({ w: 280, h: 190 });
+    expect(getPaneMin("player")).toEqual({ w: 280, h: 120 });
     expect(getPaneMin("lyrics")).toEqual({ w: 280, h: 200 });
     expect(getPaneMin("queue")).toEqual({ w: 260, h: 180 });
     expect(getPaneMin("visualizer")).toEqual({ w: 260, h: 170 });
@@ -75,6 +76,15 @@ describe("compact helpers", () => {
     expect(isCompactPane(400, 200, "player")).toBe(false);
     expect(isCompactPane(400, 300, "browse")).toBe(true);
     expect(isCompactPane(400, 340, "browse")).toBe(false);
+  });
+
+  it("keeps the player mini/full swap at 190 while the drag floor is 120", () => {
+    expect(PLAYER_FULL_H).toBe(190);
+    expect(getPaneMin("player")).toMatchObject({ h: 120 });
+    // 120-190 still reads compact (mini) with the same reach as before.
+    expect(isCompactPane(400, 120, "player")).toBe(true);
+    expect(isCompactPane(400, 189, "player")).toBe(true);
+    expect(isCompactPane(400, 190, "player")).toBe(false);
   });
 
   it("clamps uiScale into 0.85–1.30 and divides the area", () => {
@@ -458,7 +468,12 @@ describe("clampPaneToArea", () => {
 
   it("never shrinks below the per-type content floor", () => {
     const out = clampPaneToArea(pane({ x: 0, y: 0, w: 100, h: 50 }), 1920, 1040);
-    expect(out).toMatchObject({ w: 280, h: 190 });
+    expect(out).toMatchObject({ w: 280, h: 120 });
+  });
+
+  it("keeps a 120-tall player pane instead of forcing it back to 190", () => {
+    const out = clampPaneToArea(pane({ x: 24, y: 100, w: 360, h: 120 }), 1280, 800);
+    expect(out).toMatchObject({ w: 360, h: 120 });
   });
 
   it("does not mutate the input pane", () => {

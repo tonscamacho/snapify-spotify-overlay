@@ -211,7 +211,27 @@ select:focus-visible,
   position: relative;
 }
 
-.pane[data-pane="player"] { min-width: 280px; min-height: 190px; }
+/* Player vertical centering (2.5.3): the body is a flex column so
+   .pane-fill stretches the full content box (pre-fix it wrapped content
+   height and leftover space pooled at the bottom). The full card then
+   centers on leftover space with safe auto margins: the margins absorb
+   free space equally when the card fits, and collapse to zero when it
+   overflows, so a scrolled pane pins the top instead of clipping it.
+   The mini row is content-sized and centers the same way. Symmetric
+   padding keeps top/bottom gaps within 8 px. */
+.pane[data-pane="player"] .pane-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pane[data-pane="player"] .player-full {
+  margin-block: auto;
+  margin-inline: auto;
+  width: 100%;
+}
+
+.pane[data-pane="player"] { min-width: 280px; min-height: 120px; }
 .pane[data-pane="lyrics"] { min-width: 280px; min-height: 200px; }
 .pane[data-pane="queue"] { min-width: 260px; min-height: 180px; }
 .pane[data-pane="visualizer"] { min-width: 260px; min-height: 170px; }
@@ -2494,7 +2514,9 @@ select:focus-visible,
 
 .pane[data-pane="player"]:not([data-collapsed="true"]) .mini-row {
   display: flex;
-  padding: 2px 12px 4px;
+  flex: none;
+  margin-block: auto;
+  padding: 3px 12px;
 }
 
 /* Narrow player panes fall back to the mini card below COMPACT_W (360).
@@ -2511,7 +2533,9 @@ select:focus-visible,
   }
   .pane[data-pane="player"]:not([data-collapsed="true"]) .mini-row {
     display: flex;
-    padding: 2px 12px 4px;
+    flex: none;
+    margin-block: auto;
+    padding: 3px 12px;
   }
 }
 
@@ -2609,7 +2633,7 @@ select:focus-visible,
 
 .pane[data-pane="player"][data-compact="true"] {
   min-width: 200px;
-  min-height: 132px;
+  min-height: 120px;
 }
 
 .pane[data-pane="lyrics"][data-compact="true"] {
