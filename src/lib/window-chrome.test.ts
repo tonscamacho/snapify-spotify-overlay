@@ -21,6 +21,33 @@ import tauriConf from "../../src-tauri/tauri.conf.json";
 // login flow alone reverts it within seconds), so surgery only buys
 // flicker. Likewise keep `maximized:true`: un-maximizing at creation
 // leaves the bits identical (0x14CF0000 measured) while adding boot flash.
+//
+// Live verdict (fix/window-controls-2.5.4, fresh cargo build of 2.5.3,
+// HWND CLASS=Tauri Window TITLE=Snapify - Spotify Overlay):
+// - Premise census. P1 (2.5.0) assumed the halo was a rectangular OS
+//   region around rounded pills (fixed: round-rect + painted radii).
+//   P2 (2.5.1) assumed WS_CAPTION bits paint a real caption (disproved:
+//   tao hides the frame via WM_NCCALCSIZE, client == window). P3 (2.5.3)
+//   assumed Resized could strand a stale region (fixed: Resized/Moved/
+//   ScaleFactorChanged re-apply). P4 assumed the user photo shows the
+//   overlay's OWN caption buttons. Live evidence kills P4: windowed
+//   0x14CF0000 (1280x800 client == 1280x800 window), maximized 0x15CF0000
+//   (1920x1032 client inside a -8,-8 overscan frame, caption height 0),
+//   iconic 0x34CF0000 at boot. GetWindowRgn returns SIMPLEREGION with a
+//   single gate-card rect (240x268, re-centered 520,266 -> 848,390 on
+//   maximize: the 2.5.3 Resized arm works). A maximized CopyFromScreen
+//   capture looks straight THROUGH the overlay to the browser behind
+//   (its tabs and min/max/close) while the overlay paints only the gate.
+//   The photo's buttons are the behind-window seen through transparency,
+//   not overlay chrome, so no config/style surgery ships: it would only
+//   revert (tao rewrites GWL_STYLE on every state transition, observed
+//   0x34 -> 0x15 -> 0x14 across iconic/maximize/restore) or shrink
+//   coverage. Evidence: docs/bug-reports/2.5.4/chrome-*.png.
+// - Harness artifact (not shipped behavior): a standalone `cargo build`
+//   debug exe run WITHOUT `tauri dev` (stale dist, no dev server) shows
+//   WebView2's localhost-refused error page and self-minimizes within
+//   seconds. Under `tauri dev` the same binary never self-minimizes.
+//   The shipped artifact is the `tauri build` bundle, so no fix here.
 describe("window chrome (frameless transparent)", () => {
   const windows = (tauriConf as { app: { windows: Array<Record<string, unknown>> } }).app.windows;
 

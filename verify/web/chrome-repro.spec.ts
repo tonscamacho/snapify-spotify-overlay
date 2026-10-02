@@ -2,13 +2,19 @@ import { test, expect } from "@playwright/test";
 import { stubTauri, commandsNamed } from "./tauri-mock";
 import { TRACK_NAME } from "./fixtures";
 
-// Track B (2.5.1 window chrome): the app is frameless transparent at all sizes.
+// Track B (2.5.1 window chrome) + Track E (2.5.4 see-through verdict): the
+// app is frameless transparent at all sizes.
 // - No native caption buttons exist in-page: the dock exposes only its own
 //   Close (minimize/maximize/close live in no pane header, at no width).
 // - Collapsed panes are header-only with zero painted spill past their box
 //   (collapsed player carries no mini card: header-only like the queue).
 // - Overlay regions carry the painted corner radius (panes 14 px, dock
 //   stadium) so the OS round-rect shape never leaves a grey halo.
+// - 2.5.4 live-Tauri verdict: caption buttons photographed "in" the
+//   overlay are the behind-window seen through transparency (maximized
+//   CopyFromScreen shows the browser + its min/max/close while the
+//   overlay paints only its gate rect). This spec locks the in-DOM half:
+//   the overlay itself paints no chrome. Screenshots land in 2.5.4.
 
 function layoutFor(w: number) {
   return {
@@ -127,7 +133,7 @@ for (const w of [280, 360]) {
     expect(lm.box.h).toBeLessThanOrEqual(48);
     await expectNoCaptionButtons(page);
     await expectRadii(page, 14);
-    await page.screenshot({ path: `docs/bug-reports/2.5.1/chrome-${w}.png` });
+    await page.screenshot({ path: `docs/bug-reports/2.5.4/chrome-${w}.png` });
   });
 }
 
@@ -159,5 +165,5 @@ test("chrome census on narrow stage", async ({ page }) => {
   expect(pm.box.h).toBeLessThanOrEqual(48);
   await expectNoCaptionButtons(page);
   await expectRadii(page, 14);
-  await page.screenshot({ path: `docs/bug-reports/2.5.1/chrome-narrow.png` });
+  await page.screenshot({ path: `docs/bug-reports/2.5.4/chrome-narrow.png` });
 });
