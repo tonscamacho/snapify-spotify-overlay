@@ -76,6 +76,7 @@ import type {
   DeviceInfo,
   LayoutUndoEntry,
   LyricsState,
+  OverlayColor,
   PaneState,
   PaneType,
   PlayerSnapshot,
@@ -84,6 +85,11 @@ import type {
   SceneLayout,
   SceneName,
   Surface,
+} from "./lib/types";
+import {
+  OVERLAY_COLOR_KEY,
+  overlayColorToRgba,
+  parseOverlayColor,
 } from "./lib/types";
 import type { StreamSettings } from "./lib/layout";
 import "./App.css";
@@ -329,6 +335,26 @@ export default function App() {
       return "rounded";
     }
   });
+  // Custom overlay background (2.5.4): "" = theme default, otherwise a
+  // normalized #rrggbb. Parsed at the boundary so invalid stored values
+  // coerce to "" and never reach render/persist.
+  const [overlayColor, setOverlayColorState] = useState<OverlayColor>(() => {
+    try {
+      return parseOverlayColor(localStorage.getItem(OVERLAY_COLOR_KEY));
+    } catch {
+      return "";
+    }
+  });
+  const setOverlayColor = useCallback((v: string) => {
+    const next = parseOverlayColor(v);
+    setOverlayColorState(next);
+    try {
+      if (next === "") localStorage.removeItem(OVERLAY_COLOR_KEY);
+      else localStorage.setItem(OVERLAY_COLOR_KEY, next);
+    } catch {
+      // Private mode. Choice lasts the session.
+    }
+  }, []);
   const [autostart, setAutostart] = useState(false);
   const [keybinds, setKeybinds] = useState<KeybindMap>({ ...DEFAULT_KEYBINDS });
   const keybindsRef = useRef<KeybindMap>({ ...DEFAULT_KEYBINDS });
@@ -2427,12 +2453,27 @@ export default function App() {
   const stageNarrow = effStageW < 480;
   const stageShort = effStageH < 420;
 
+  // Custom overlay vars (2.5.4): --overlay is the normalized hex,
+  // --overlay-glass its translucent twin for glass surfaces. The light
+  // theme uses a denser scrim (0.62) matching its glass token; every
+  // other theme uses 0.42. Empty means theme default: no vars, no attr.
+  const overlayGlassAlpha = theme === "light" ? 0.62 : 0.42;
+  const overlayStyle =
+    overlayColor === ""
+      ? undefined
+      : ({
+          "--overlay": overlayColor,
+          "--overlay-glass": overlayColorToRgba(overlayColor, overlayGlassAlpha),
+        } as React.CSSProperties);
+
   return (
     <div
       className="app"
       data-theme={theme}
       data-surface={surface}
       data-corners={corners}
+      data-overlay-color={overlayColor === "" ? undefined : "custom"}
+      style={overlayStyle}
       data-narrow={stageNarrow ? "true" : undefined}
       data-short={stageShort ? "true" : undefined}
       data-stream={streamHidden ? (stream.dimInstead ? "dimmed" : "hidden") : undefined}
@@ -2624,6 +2665,8 @@ export default function App() {
         density={density}
         surface={surface}
         corners={corners}
+        overlayColor={overlayColor}
+        onOverlayColor={setOverlayColor}
         autostart={autostart}
         interactive={interactive}
         clickToSeek={clickToSeek}

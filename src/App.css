@@ -2433,6 +2433,70 @@ select:focus-visible,
   background-color: rgba(250, 237, 213, 0.55);
 }
 
+/* ---------- custom overlay color (2.5.4) ----------
+   Precedence (documented): custom wins over the pastel candy washes
+   and the sparkles starfield, then falls back to the theme --surface.
+   App sets --overlay (normalized #rrggbb) and --overlay-glass (its
+   translucent twin) inline on .app only while a custom color is
+   stored, and marks data-overlay-color="custom". Empty (theme
+   default) sets neither, so every theme renders exactly as before.
+   Glass keeps its backdrop-filter and sheen; only the tint changes. */
+
+.app[data-overlay-color="custom"] {
+  --surface: var(--overlay);
+  --surface-2: var(--overlay);
+  --glass-regular: var(--overlay-glass);
+  --glass-clear: var(--overlay-glass);
+}
+
+/* Neutralize the per-pane candy washes and the sparkles starfield
+   while custom wins. The [data-pane] holds (0,4,0) specificity so
+   these outrank the pastel per-pane washes; dock/modal tie their
+   pastel counterparts and win by coming later in the file. */
+.app[data-overlay-color="custom"] .pane[data-pane],
+.app[data-overlay-color="custom"] .dock,
+.app[data-overlay-color="custom"] .modal {
+  background-color: var(--overlay);
+  background-image: none;
+}
+
+/* Glass stays translucent: this twin wins back over the opaque rule
+   above when both attrs are present. Backdrop-filter is untouched. */
+.app[data-overlay-color="custom"][data-surface="glass"] .pane[data-pane],
+.app[data-overlay-color="custom"][data-surface="glass"] .dock,
+.app[data-overlay-color="custom"][data-surface="glass"] .modal {
+  background: var(--overlay-glass);
+  background-image: none;
+}
+
+/* Settings row controls: swatch plus hex field plus reset. */
+.overlay-color-controls {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.overlay-color-controls input[type="color"] {
+  width: 36px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--stroke);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.overlay-color-hex {
+  width: 76px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--stroke);
+  background: var(--surface-2);
+  color: var(--txt);
+  font: inherit;
+  font-size: 12px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

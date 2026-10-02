@@ -12,6 +12,55 @@ export type Surface = "solid" | "glass";
  *  the radius vars (pill shapes like dock/chips keep 999px). */
 export type Corners = "rounded" | "sharp";
 
+/** Custom overlay background color (2.5.4). Empty string means "theme
+ *  default" (no override); otherwise a normalized lowercase `#rrggbb`
+ *  hex. The empty case keeps unknown-value fallback safe: any invalid
+ *  stored value coerces to "" at the parse boundary (App read +
+ *  onChange), so illegal states are unrepresentable past parsing. */
+export type OverlayColor = string;
+
+/** localStorage key for the custom overlay background color. */
+export const OVERLAY_COLOR_KEY = "snapify-overlay-color";
+
+/** Theme-default surface hex, mirrored from App.css `--surface` per
+ *  theme. Used as the native color-input value and hex placeholder
+ *  while `OverlayColor` is "" (theme default). */
+export const THEME_DEFAULT_SURFACE: Record<string, string> = {
+  dark: "#17171a",
+  light: "#ffffff",
+  sparkles: "#0b1330",
+  pastel: "#fff9ef",
+};
+
+/** Parse an unknown stored/input value into a valid OverlayColor.
+ *  Accepts "" (theme default), `#rrggbb`, `#rgb` (expanded), or
+ *  bare `rrggbb` / `rgb` (a `#` is added). Anything else coerces to
+ *  "" so callers never branch on invalid colors. */
+export function parseOverlayColor(v: unknown): OverlayColor {
+  if (typeof v !== "string") return "";
+  const t = v.trim().toLowerCase();
+  if (t === "") return "";
+  const hex = t.startsWith("#") ? t.slice(1) : t;
+  if (/^[0-9a-f]{6}$/.test(hex)) return `#${hex}`;
+  if (/^[0-9a-f]{3}$/.test(hex)) {
+    return `#${hex[0]}${hex[0]}${hex[1]}${hex[1]}${hex[2]}${hex[2]}`;
+  }
+  return "";
+}
+
+/** Convert a normalized `#rrggbb` hex to `rgba(r, g, b, alpha)`.
+ *  Returns "" for non-hex input so glass vars never receive garbage. */
+export function overlayColorToRgba(hex: string, alpha: number): string {
+  const m = /^#([0-9a-f]{6})$/.exec(hex);
+  if (!m) return "";
+  const n = m[1];
+  const r = parseInt(n.slice(0, 2), 16);
+  const g = parseInt(n.slice(2, 4), 16);
+  const b = parseInt(n.slice(4, 6), 16);
+  const a = Math.min(1, Math.max(0, alpha));
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
 export interface PaneState {
   id: string;
   type: PaneType;
