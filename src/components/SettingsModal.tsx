@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { TRANS_LANGS, type TransLang } from "../lib/translate";
 import { api } from "../lib/spotify";
 import type { Density, Surface, Corners, SceneName, DeviceInfo } from "../lib/types";
+import {
+  THEME_DEFAULT_SURFACE,
+  parseOverlayColor,
+} from "../lib/types";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { readDeviceChoice, writeDeviceChoice, type DeviceChoice } from "./PlayerPane";
 import { mergeDeviceRows, tapActionFor, type DeviceRow } from "../lib/devices";
@@ -26,6 +30,9 @@ interface Props {
   density: Density;
   surface: Surface;
   corners: Corners;
+  /** Custom overlay background: "" = theme default, else #rrggbb. */
+  overlayColor: string;
+  onOverlayColor: (v: string) => void;
   autostart: boolean;
   interactive: boolean;
   editing?: boolean;
@@ -302,6 +309,19 @@ export default function SettingsModal(p: Props) {
     null,
   );
   const [clearingLyrics, setClearingLyrics] = useState(false);
+  // Hex draft for the overlay-color text field. The native color input
+  // commits valid hex at once; the text field commits on blur / Enter so
+  // intermediate keystrokes never coerce mid-typing. Invalid commits
+  // coerce to "" (theme default); App re-parses on receipt.
+  const [colorDraft, setColorDraft] = useState(p.overlayColor);
+  useEffect(() => {
+    setColorDraft(p.overlayColor);
+  }, [p.overlayColor]);
+  const themeDefaultHex = THEME_DEFAULT_SURFACE[p.theme] ?? "#17171a";
+  const effectiveHex = p.overlayColor === "" ? themeDefaultHex : p.overlayColor;
+  const commitColorDraft = () => {
+    p.onOverlayColor(parseOverlayColor(colorDraft));
+  };
   // The modal mounts transiently, so one fetch on open covers its lifetime.
   useEffect(() => {
     if (!p.open) return;
@@ -534,6 +554,45 @@ export default function SettingsModal(p: Props) {
             ))}
           </span>
         </div>
+        <div className="row">
+          <span>Overlay color</span>
+          <span className="overlay-color-controls">
+            <input
+              type="color"
+              value={effectiveHex}
+              aria-label="Overlay color"
+              title={p.overlayColor === "" ? `Theme default (${themeDefaultHex})` : p.overlayColor}
+              onChange={(e) => p.onOverlayColor(e.target.value)}
+            />
+            <input
+              type="text"
+              className="overlay-color-hex"
+              value={colorDraft}
+              placeholder={themeDefaultHex}
+              spellCheck={false}
+              autoComplete="off"
+              aria-label="Overlay color hex"
+              onChange={(e) => setColorDraft(e.target.value)}
+              onBlur={commitColorDraft}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              }}
+            />
+            <button
+              className="btn sm"
+              onClick={() => p.onOverlayColor("")}
+              disabled={p.overlayColor === ""}
+              title="Reset to theme default"
+            >
+              Reset
+            </button>
+          </span>
+        </div>
+        {p.overlayColor === "" ? (
+          <div className="hint">Theme default — pick a color to override the overlay background.</div>
+        ) : (
+          <div className="hint">Custom overlay background {p.overlayColor} — Reset returns to the theme default.</div>
+        )}
         <div className="row">
           <span>Preset</span>
           <span className="seg" role="group" aria-label="Preset">
