@@ -2503,7 +2503,9 @@ select:focus-visible,
   *::after {
     transition: none !important;
   }
-  .track-title.is-marquee .marquee-inner {
+  .track-title.is-marquee .marquee-inner,
+  .mini-title.is-marquee .marquee-inner,
+  .mini-artist.is-marquee .marquee-inner {
     animation: none;
   }
 }
@@ -2572,11 +2574,11 @@ select:focus-visible,
   display: none;
 }
 
-/* Mini player card: circular art + title/artist + thin progress +
-   prev/play/next. No volume, shuffle, or repeat at this size.
-   overflow:hidden plus per-line ellipsis keeps long titles inside the
-   box; the progress fill has no transition (instant state, safe under
-   prefers-reduced-motion without an override). */
+/* Mini player card: circular art + marquee title/artist + thin progress +
+   shuffle/prev/play/next/repeat + expanding volume. overflow:hidden plus
+   per-line ellipsis keeps long titles inside the box; the progress fill
+   has no transition (instant state, safe under prefers-reduced-motion
+   without an override). */
 .mini-row {
   display: none;
   align-items: center;
@@ -2632,6 +2634,60 @@ select:focus-visible,
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--dim);
+}
+
+.mini-title:focus-visible,
+.mini-artist:focus-visible {
+  outline: 2px solid #0a84ff;
+  outline-offset: 2px;
+}
+
+/* Mini marquee (2.5.4): same overflow-gated mechanics as the full-player
+   title. JS adds .is-marquee only while the pointer hovers or keyboard
+   focuses an overflowing line (scrollWidth > clientWidth + 1) and sets
+   --marquee-dist to the overflow width; short lines never animate.
+   Transform-only keyframes; the reduced-motion block above kills all
+   three. Title and artist run one at a time so the row never moves
+   twice at once. */
+.mini-title.is-marquee,
+.mini-artist.is-marquee {
+  text-overflow: clip;
+}
+
+.mini-title.is-marquee .marquee-inner,
+.mini-artist.is-marquee .marquee-inner {
+  display: inline-block;
+  animation: title-marquee 6s linear infinite alternate;
+}
+
+/* Mini volume (2.5.4): icon-button closed, same slider open. A permanent
+   thin bar was measured and rejected: 56-64 px of slider leaves ~43 px
+   of meta at 280 px and collapses the title to nothing. The icon costs
+   one aux slot (26-28 px) closed and reveals the slider only while the
+   cluster is hovered or focused, so the closed row keeps its 72 px cap
+   with zero spill at 280/300/340 + 280x120. Opacity and width only, in
+   the theme motion budget; reduced-motion already zeroes transitions. */
+.mini-vol {
+  display: flex;
+  align-items: center;
+  flex: none;
+  min-width: 0;
+}
+
+.mini-vol-slider {
+  width: 0;
+  flex: none;
+  opacity: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  transition: width var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+
+.mini-vol:hover .mini-vol-slider,
+.mini-vol:focus-within .mini-vol-slider {
+  width: 56px;
+  opacity: 1;
 }
 
 .mini-progress {
@@ -2733,8 +2789,10 @@ select:focus-visible,
 }
 
 /* Tightest mini widths (280-330): shave the transport boxes and gaps so
-   five buttons still fit with zero spill. Title/artist ellipsis absorbs
-   the rest; the row stays within 72 px. */
+   six controls (shuffle/prev/play/next/repeat + closed volume icon)
+   still fit with zero spill. Title/artist ellipsis absorbs the rest;
+   the row stays within 72 px. The open slider narrows to 48 px here so
+   the expanded cluster squeezes meta instead of spilling. */
 @container (max-width: 330px) {
   .pane[data-pane="player"]:not([data-collapsed="true"]) .mini-row {
     gap: 6px;
@@ -2753,6 +2811,10 @@ select:focus-visible,
   .pane[data-pane="player"]:not([data-collapsed="true"]) .mini-row .icon-btn.mini-aux {
     width: 26px;
     height: 26px;
+  }
+  .mini-vol:hover .mini-vol-slider,
+  .mini-vol:focus-within .mini-vol-slider {
+    width: 48px;
   }
 }
 
