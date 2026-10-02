@@ -2063,8 +2063,8 @@ select:focus-visible,
 }
 
 /* ---------- pastel preset: warm cream + candy washes ----------
-   Cream shell, per-pane candy tints (pink / mint / butter / lavender),
-   warm-cocoa text and controls. Flat background-color washes only, no
+   Cream shell, per-pane candy tints (pink / mint / butter / lavender /
+   sky), warm-cocoa text and controls. Flat background-color washes only, no
    animation: motion stays opacity / background-color, 120-160ms per the
    header policy. Toast keeps its status dot. */
 
@@ -2088,7 +2088,7 @@ select:focus-visible,
   background: rgba(196, 116, 140, 0.28);
 }
 
-/* Candy cards: one wash per pane, dock/modal/toast stay cream. */
+/* Candy cards: one wash per pane, dock stays cream, modal/toast stay cream. */
 .app[data-theme="pastel"] .pane[data-pane="player"] {
   background-color: #fceef1;
 }
@@ -2103,6 +2103,10 @@ select:focus-visible,
 
 .app[data-theme="pastel"] .pane[data-pane="visualizer"] {
   background-color: #efe9fa;
+}
+
+.app[data-theme="pastel"] .pane[data-pane="browse"] {
+  background-color: #e9f1fb;
 }
 
 .app[data-theme="pastel"] .dock {
@@ -2317,6 +2321,116 @@ select:focus-visible,
 .app[data-theme="light"][data-surface="glass"] .dock,
 .app[data-theme="light"][data-surface="glass"] .modal {
   box-shadow: 0 16px 40px rgba(30, 40, 70, 0.16), inset 0 1px 1px var(--lg-spec-top);
+}
+
+/* ---------- pastel + glass: warm-cream scrim + tinted scrims ----------
+   The dark glass base (--glass-regular navy) would fragment the candy
+   panes, and the opaque candy washes (0,4,0) beat the glass base
+   (0,3,0). Every background rule here carries >= (0,4,0) so panes,
+   dock, and modal agree: generic warm scrim first, per-pane tinted
+   twins of the solid washes above, then translucent fixes for the
+   opaque inner surfaces (sticky headers, search, device well, icon
+   wells). Cocoa text tokens come from pastel untouched and stay
+   legible over the light scrims. Toast/hint keep their solid cream
+   by design (status dot lives on ::before). */
+
+.app[data-theme="pastel"][data-surface="glass"] {
+  --glass-regular: rgba(255, 249, 239, 0.62);
+  --glass-clear: rgba(255, 249, 239, 0.35);
+  --lg-stroke: rgba(93, 74, 53, 0.18);
+  --lg-spec-top: rgba(255, 255, 255, 0.65);
+}
+
+.app[data-theme="pastel"][data-surface="glass"] .pane,
+.app[data-theme="pastel"][data-surface="glass"] .dock,
+.app[data-theme="pastel"][data-surface="glass"] .modal {
+  box-shadow: 0 16px 40px rgba(122, 90, 58, 0.18), inset 0 1px 1px var(--lg-spec-top);
+}
+
+/* Generic warm scrim so any pane without a tint still agrees (0,4,0). */
+.app[data-theme="pastel"][data-surface="glass"] .pane {
+  background-color: rgba(255, 249, 239, 0.62);
+}
+
+/* Per-pane tinted scrims: translucent twins of the solid candy washes
+   (0,5,0) so they beat the opaque washes regardless of source order. */
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="player"] {
+  background-color: rgba(252, 238, 241, 0.62);
+}
+
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="lyrics"] {
+  background-color: rgba(234, 246, 237, 0.62);
+}
+
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="queue"] {
+  background-color: rgba(252, 243, 216, 0.62);
+}
+
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="visualizer"] {
+  background-color: rgba(239, 233, 250, 0.62);
+}
+
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="browse"] {
+  background-color: rgba(233, 241, 251, 0.62);
+}
+
+.app[data-theme="pastel"][data-surface="glass"] .dock {
+  background-color: rgba(253, 240, 213, 0.62);
+}
+
+.app[data-theme="pastel"][data-surface="glass"] .modal {
+  background-color: rgba(255, 249, 239, 0.66);
+}
+
+/* Opaque inner surfaces go translucent so the blur shows through.
+   Sticky headers ride a near-opaque twin of their pane tint (0,6,0):
+   scrolled lines slide under a frosted bar instead of ghosting through
+   the header text, while the pane body keeps the lighter 0.62 scrim. */
+.app[data-theme="pastel"][data-surface="glass"] .pane-subhead,
+.app[data-theme="pastel"][data-surface="glass"] .lyrics-meta,
+.app[data-theme="pastel"][data-surface="glass"] .viz-meta,
+.app[data-theme="pastel"][data-surface="glass"] .browse-tabs,
+.app[data-theme="pastel"][data-surface="glass"] .search-wrap {
+  background-color: transparent;
+}
+
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="lyrics"] .lyrics-meta {
+  background-color: rgba(234, 246, 237, 0.92);
+}
+
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="queue"] .pane-subhead {
+  background-color: rgba(252, 243, 216, 0.92);
+}
+
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="visualizer"] .viz-meta {
+  background-color: rgba(239, 233, 250, 0.92);
+}
+
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="browse"] .browse-tabs,
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="browse"] .search-wrap {
+  background-color: rgba(233, 241, 251, 0.92);
+}
+
+/* Frosted-bar blur so scrolled lines smear under the 0.92 tint instead
+   of ghosting through the header text. */
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="lyrics"] .lyrics-meta,
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="queue"] .pane-subhead,
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="visualizer"] .viz-meta,
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="browse"] .browse-tabs,
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="browse"] .search-wrap {
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+}
+
+.app[data-theme="pastel"][data-surface="glass"] .search-input,
+.app[data-theme="pastel"][data-surface="glass"] .browse-tab-select,
+.app[data-theme="pastel"][data-surface="glass"] .settings-device {
+  background-color: rgba(255, 253, 247, 0.55);
+}
+
+.app[data-theme="pastel"][data-surface="glass"] .gate-icon,
+.app[data-theme="pastel"][data-surface="glass"] .empty-icon {
+  background-color: rgba(250, 237, 213, 0.55);
 }
 
 @media (prefers-reduced-motion: reduce) {
