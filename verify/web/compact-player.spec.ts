@@ -2,12 +2,13 @@ import { test, expect } from "@playwright/test";
 import { stubTauri, commandsNamed } from "./tauri-mock";
 import { TRACK_NAME, TRACK_ARTISTS } from "./fixtures";
 
-// Track gate (2.5.3): collapsed is header-only (no mini in the DOM); the
+// Track gate (2.5.4): collapsed is header-only (no mini in the DOM); the
 // mini is an expanded-only compact state (w < COMPACT_W 360 or
-// h <= 190 floor-inclusive) — circular cover + title/artist + thin
-// progress + shuffle/prev/play/next/repeat — at most 72 px tall with zero
-// spill, and track text plus transport resolve exactly once. No volume at
-// this size.
+// h <= 190 floor-inclusive) — circular cover + marquee title/artist +
+// thin progress + shuffle/prev/play/next/repeat + expanding volume — at
+// most 72 px tall with zero spill, and track text plus transport resolve
+// exactly once. Volume rides an icon-button that expands to the same
+// slider on hover/focus (closed it costs one aux slot, nothing else).
 
 function layoutFor(w: number, collapsed: boolean, h = 260) {
   return {
@@ -79,8 +80,12 @@ async function expectMiniCard(page, shot: string) {
   await expect(repeat).toHaveAttribute("aria-pressed", "false");
   await expect(shuffle).toHaveClass(/mini-aux/);
   await expect(repeat).toHaveClass(/mini-aux/);
-  // No volume at this size.
-  await expect(mini.locator("input.vol, .volume-row")).toHaveCount(0);
+  // Mini volume: the icon-button is always present and the slider rides
+  // the same set_volume contract (asserted live in mini-marquee-volume);
+  // closed it holds zero width so the row keeps its cap.
+  await expect(mini.getByRole("button", { name: "Adjust volume" })).toBeVisible();
+  await expect(mini.locator("input.vol")).toHaveCount(1);
+  await expect(mini.locator("input.vol")).toHaveAttribute("aria-valuetext", "80 percent");
   // Single resolution: exactly one accessible Play/Pause in the pane —
   // display:none keeps the full player's twin out of the a11y tree.
   await expect(

@@ -40,8 +40,9 @@ interface Props {
    *  banner above the player. Retry re-polls the player. */
   degraded?: boolean;
   onRetry?: () => void;
-  /** Render the mini card (circular art + title/artist + thin progress +
-   *  prev/play/next) instead of the full player. The App sets this only
+  /** Render the mini card (circular art + marquee title/artist + thin
+   *  progress + shuffle/prev/play/next/repeat + expanding volume) instead
+   *  of the full player. The App sets this only
    *  when the pane is EXPANDED but below the compact width (w < COMPACT_W,
    *  360) or at/below the full content threshold (h <= PLAYER_FULL_H in
    *  src/lib/layout.ts, floor-inclusive); collapsed stays header-only with
@@ -160,9 +161,15 @@ export default function PlayerPane(p: Props) {
   const [resumeMs, setResumeMs] = useState<number | null>(null);
   // Marquee: true only while the pointer hovers an overflowing title.
   // Overflow is measured on enter (scrollWidth > clientWidth); short
-  // titles never set it so they stay static ellipsis.
+  // titles never set it so they stay static ellipsis. The mini card owns
+  // the same pair for its title and artist (miniMarquee names which one
+  // is running); both reuse the full-player --marquee-dist mechanics.
   const [marquee, setMarquee] = useState(false);
+  const [miniMarquee, setMiniMarquee] = useState<"title" | "artist" | null>(null);
   const titleRef = useRef<HTMLDivElement>(null);
+  const miniTitleRef = useRef<HTMLDivElement>(null);
+  const miniArtistRef = useRef<HTMLDivElement>(null);
+  const miniVolSliderRef = useRef<HTMLInputElement>(null);
   const s = p.snapshot;
   const track = s.track;
   const shownVol = vol ?? s.volume ?? 50;
@@ -224,6 +231,7 @@ export default function PlayerPane(p: Props) {
   // Marquee settles back to ellipsis on track change.
   useEffect(() => {
     setMarquee(false);
+    setMiniMarquee(null);
   }, [track?.id]);
 
   // Text-only destination line. Device switching lives in Settings; the
@@ -250,6 +258,29 @@ export default function PlayerPane(p: Props) {
 
   const stopMarquee = () => {
     setMarquee(false);
+  };
+
+  // Mini marquee: same overflow-gated mechanics as the full-player title
+  // (measure on enter/focus, animate only when scrollWidth overflows by
+  // more than a pixel, reduced-motion stays static). Title and artist run
+  // one at a time so the row never moves twice at once.
+  const startMiniMarquee = (which: "title" | "artist") => {
+    const el = which === "title" ? miniTitleRef.current : miniArtistRef.current;
+    if (!el) return;
+    try {
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    } catch {
+      // No matchMedia: fall through to measuring.
+    }
+    if (el.scrollWidth > el.clientWidth + 1) {
+      const dist = el.scrollWidth - el.clientWidth;
+      el.style.setProperty("--marquee-dist", `${dist + 16}px`);
+      setMiniMarquee(which);
+    }
+  };
+
+  const stopMiniMarquee = () => {
+    setMiniMarquee(null);
   };
 
   const commitSeek = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -614,16 +645,19 @@ export default function PlayerPane(p: Props) {
       </div>
       </div>
       {/* Mini player card (expanded-compact only): circular art +
-        title/artist + thin progress + shuffle/prev/play/next/repeat.
+        marquee title/artist + thin progress + shuffle/prev/play/next/
+        repeat + an icon-button volume that expands to the same slider
+        (same set_volume + curved-gain contract as the full player).
         Rendered only when the App flags the EXPANDED pane compact (narrow
         w < 360 or at/below the full-content threshold PLAYER_FULL_H in
         src/lib/layout.ts, floor-inclusive); collapsed renders no mini at
         all (header-only). The full player hides via CSS whenever the mini
         is present, so track text, Play/Pause, and the seek control resolve
-        exactly once. No volume at this size. Shuffle/repeat reuse the
+        exactly once. Shuffle/repeat/volume reuse the
         .icon-btn active/disabled behavior (is-on dot, dim when busy,
-        tooltips/aria) at a smaller aux size so the row stays within 72 px
-        with zero spill. */}
+        tooltips/aria) at a smaller aux size so the closed row stays within
+        72 px with zero spill; the slider only takes width while the
+        volume cluster is hovered or focused. */}
       {p.compact === true && (
         <div
           className="mini-row"
@@ -639,13 +673,30 @@ export default function PlayerPane(p: Props) {
         )}
         <div className="mini-meta">
           <div
-            className="mini-title"
+            ref={miniTitleRef}
+            className={`mini-title${miniMarquee === "title" ? " is-marquee" : ""}`}
             title={`${track.name} — ${track.artists}`}
+            tabIndex={0}
+            aria-label={`${track.name} by ${track.artists}`}
+            onMouseEnter={() => startMiniMarquee("title")}
+            onMouseLeave={stopMiniMarquee}
+            onFocus={() => startMiniMarquee("title")}
+            onBlur={stopMiniMarquee}
           >
-            {track.name}
+            <span className="marquee-inner">{track.name}</span>
           </div>
-          <div className="mini-artist" title={track.artists}>
-            {track.artists}
+          <div
+            ref={miniArtistRef}
+            className={`mini-artist${miniMarquee === "artist" ? " is-marquee" : ""}`}
+            title={track.artists}
+            tabIndex={0}
+            aria-label={track.artists}
+            onMouseEnter={() => startMiniMarquee("artist")}
+            onMouseLeave={stopMiniMarquee}
+            onFocus={() => startMiniMarquee("artist")}
+            onBlur={stopMiniMarquee}
+          >
+            <span className="marquee-inner">{track.artists}</span>
           </div>
           <div
             className="mini-progress"
@@ -715,6 +766,43 @@ export default function PlayerPane(p: Props) {
           >
             {s.repeat === "track" ? <RepeatOneIcon size={14} /> : <RepeatIcon size={14} />}
           </button>
+          <div className="mini-vol">
+            <button
+              className="icon-btn mini-nav mini-aux mini-vol-btn"
+              onClick={() => miniVolSliderRef.current?.focus()}
+              title={`Volume ${shownVol}%`}
+              aria-label="Adjust volume"
+              disabled={isFree}
+            >
+              <VolumeIcon size={14} />
+            </button>
+            <input
+              ref={miniVolSliderRef}
+              className="vol mini-vol-slider"
+              type="range"
+              min={0}
+              max={100}
+              value={shownVol}
+              aria-label="Volume"
+              aria-valuetext={`${shownVol} percent`}
+              disabled={isFree}
+              onChange={(e) => setVol(Number(e.target.value))}
+              onPointerUp={(e) => {
+                p.onVolume(Number((e.target as HTMLInputElement).value));
+                setVol(null);
+              }}
+              onKeyUp={(e) => {
+                p.onVolume(Number((e.target as HTMLInputElement).value));
+                setVol(null);
+              }}
+              onBlur={(e) => {
+                if (vol !== null) {
+                  p.onVolume(Number((e.target as HTMLInputElement).value));
+                  setVol(null);
+                }
+              }}
+            />
+          </div>
         </div>
         </div>
       )}

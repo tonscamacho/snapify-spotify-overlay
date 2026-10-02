@@ -8,9 +8,11 @@ import { TRACK_NAME, TRACK_ARTISTS } from "./fixtures";
 // collapse when content overflows, so scrolled panes never clip the top).
 // The drag floor drops to 120 px while the mini/full swap stays at the
 // full-content threshold (h <= 190), so 120-190 rests on the mini card
-// without clipping. Marquee + reduced-motion are untouched. On this base
+// without clipping. Marquee + reduced-motion are untouched (mini marquee
+// + volume arrive via the sibling mini track). On this base
 // the mini carries prev/play/next only (shuffle/repeat arrive via the
-// sibling mini track); this spec asserts the shared transport and makes
+// sibling mini track); this spec asserts the shared transport, the mini
+// volume presence (closed, zero width, no spill), and makes
 // no claim about the sibling buttons either way.
 //
 // Generator (record): this file writes the captures.
@@ -127,7 +129,12 @@ for (const c of CASES) {
       await expect(mini.locator(".mini-artist")).toContainText(TRACK_ARTISTS);
       await expect(mini.getByRole("button", { name: "Previous track" })).toBeVisible();
       await expect(mini.getByRole("button", { name: "Next track" })).toBeVisible();
-      await expect(mini.locator("input.vol, .volume-row")).toHaveCount(0);
+      // Mini volume rides along closed: icon-button visible, slider present
+      // at zero width, still no spill anywhere in the swap band.
+      await expect(mini.getByRole("button", { name: "Adjust volume" })).toBeVisible();
+      await expect(mini.locator("input.vol")).toHaveCount(1);
+      const miniVolW = await mini.locator("input.vol").evaluate((el) => el.getBoundingClientRect().width);
+      expect(miniVolW).toBeLessThanOrEqual(1);
       await expect(player.getByRole("button", { name: "Pause", exact: true })).toHaveCount(1);
 
       // The 120 px floor holds: the seeded height survives boot clamping.
