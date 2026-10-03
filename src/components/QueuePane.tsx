@@ -37,10 +37,22 @@ export default function QueuePane(p: Props) {
   const total = p.upcoming.length;
 
   // Measure one real row so the window math tracks density/font scale.
+  // The row carries an inline height:rowH pin, so offsetHeight on the li
+  // itself just reads the pin back (ROW_GUESS forever, never converging).
+  // Measure the unpinned inner content (.q-hit) plus the li's own vertical
+  // chrome instead: that converges on the natural row height, so the
+  // virtual grid (ol height, window slice, scrollbar) matches what paints.
   useEffect(() => {
-    const el = listRef.current?.querySelector("li.q");
-    if (!el) return;
-    const h = (el as HTMLElement).offsetHeight;
+    const el = listRef.current?.querySelector("li.q") as HTMLElement | null;
+    const hit = el?.querySelector(".q-hit") as HTMLElement | null;
+    if (!el || !hit) return;
+    const cs = getComputedStyle(el);
+    const h =
+      hit.offsetHeight +
+      (parseFloat(cs.paddingTop) || 0) +
+      (parseFloat(cs.paddingBottom) || 0) +
+      (parseFloat(cs.borderTopWidth) || 0) +
+      (parseFloat(cs.borderBottomWidth) || 0);
     if (h >= 24 && h <= 220 && h !== rowH) setRowH(h);
   });
 
