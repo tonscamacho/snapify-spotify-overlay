@@ -249,6 +249,7 @@ select:focus-visible,
 }
 
 .pane-body::-webkit-scrollbar,
+.queue-scroll::-webkit-scrollbar,
 .lyrics::-webkit-scrollbar,
 .plain::-webkit-scrollbar,
 .queue::-webkit-scrollbar,
@@ -257,6 +258,7 @@ select:focus-visible,
 }
 
 .pane-body::-webkit-scrollbar-thumb,
+.queue-scroll::-webkit-scrollbar-thumb,
 .lyrics::-webkit-scrollbar-thumb,
 .plain::-webkit-scrollbar-thumb,
 .queue::-webkit-scrollbar-thumb,
@@ -3021,7 +3023,19 @@ select:focus-visible,
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+  margin-inline: calc(var(--pad-pane) * -1);
+  padding-inline: var(--pad-pane);
 }
+
+/* Queue/browse scroll parity (2.5.6): the virtualized viewport spans the
+   same scrollport as the browse pane body — full-bleed horizontally like
+   the sticky headers (negative inline margins cancel the body pad, the
+   inner inline padding puts rows back). Rows keep their exact position and
+   width; only the scrollbar moves out to the pane edge, thin and tinted
+   like browse via the 5px rules above. Block padding stays on the body
+   (same var), so nothing overflows the body's padding box and the
+   no-spill invariant holds. No TSX change: virtualization, the 120 floor,
+   and mini contracts are untouched. */
 
 .queue-scroll:focus-visible {
   outline: 2px solid #0a84ff;
