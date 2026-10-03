@@ -503,12 +503,6 @@ export default function SettingsModal(p: Props) {
             ))}
           </span>
         </div>
-        {p.theme === "sparkles" && (
-          <div className="hint">Night-sky build — moonlit accents, low-glare text. ✨</div>
-        )}
-        {p.theme === "pastel" && (
-          <div className="hint">Warm-cream build — candy pastels, sleepy-cat approved. 🐈‍⬛</div>
-        )}
         <div className="row">
           <span>Density</span>
           <span className="seg" role="group" aria-label="Density">
