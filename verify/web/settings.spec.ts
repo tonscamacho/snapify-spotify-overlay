@@ -309,7 +309,7 @@ test("sparkles theme selectable, persisted, and coherent", async ({ page }) => {
 
   await expect(page.locator(".app")).toHaveAttribute("data-theme", "sparkles");
   expect(await page.evaluate(() => localStorage.getItem("snapify-theme"))).toBe("sparkles");
-  await expect(dialog.getByText(/Night-sky build/)).toBeVisible();
+  await expect(dialog.getByText(/Night-sky build/)).toHaveCount(0);
   await page.screenshot({ path: "verify/web/test-results/sparkles-settings.png" });
 
   await dialog.getByRole("button", { name: "Close settings" }).click();
@@ -341,7 +341,7 @@ test("pastel theme selectable, persisted, and coherent", async ({ page }) => {
 
   await expect(page.locator(".app")).toHaveAttribute("data-theme", "pastel");
   expect(await page.evaluate(() => localStorage.getItem("snapify-theme"))).toBe("pastel");
-  await expect(dialog.getByText(/sleepy-cat/)).toBeVisible();
+  await expect(dialog.getByText(/sleepy-cat/)).toHaveCount(0);
   await page.screenshot({ path: "verify/web/test-results/pastel-settings.png" });
 
   await dialog.getByRole("button", { name: "Close settings" }).click();
