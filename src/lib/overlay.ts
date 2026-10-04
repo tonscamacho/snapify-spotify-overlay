@@ -19,6 +19,11 @@ const SELECTORS = [
   // listed here the pill is clickable in interactive mode; passive mode is
   // unaffected because the Rust side ignores regions unless interactive.
   ".hint-chip",
+  // Mini MP3 mode (integration): the stub root (.mp3-player) and the real
+  // PR2 card (.mp3-body) both resolve here so the wheel stays clickable in
+  // interactive mode. Same passive-mode rule as above.
+  ".mp3-player",
+  ".mp3-body",
 ] as const;
 
 /** Painted corner radius of an element in CSS px: the minimum of its four
