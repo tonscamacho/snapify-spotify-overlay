@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -15,6 +15,11 @@ const MemoVisualizerPane = memo(VisualizerPane);
 import BrowsePane from "./components/BrowsePane";
 const MemoBrowsePane = memo(BrowsePane);
 import SettingsModal from "./components/SettingsModal";
+import Mp3Player from "./components/Mp3Player";
+import type { Mp3Power } from "./components/Mp3Player";
+import Mp3Wheel, { nextMp3View } from "./components/Mp3Wheel";
+import { loadOverlayMode, parseOverlayMode, saveOverlayMode } from "./lib/overlayMode";
+import type { Mp3Settings } from "./lib/overlayMode";
 import {
   CursorIcon,
   EyeIcon,
@@ -130,286 +135,6 @@ const HANDLE_LABELS: Record<Handle, string> = {
   se: "bottom right corner",
   sw: "bottom left corner",
 };
-
-/** Mini MP3 overlay-mode doc — PR1 stub (canonical home:
- *  `src/lib/overlayMode.ts`, key `snapify-overlay-mode`).
- *  This integration branch inlines the shape plus the coerce-on-parse
- *  load/save so it builds before PR1 merges; PR1 replaces this block
- *  with an import and keeps the key, defaults, and field rules.
- *  Coerce precedent: `parseOverlayColor` in `src/lib/types.ts`. */
-type OverlayModeName = "classic" | "mp3";
-type Mp3VariantName = "purple" | "silver" | "pink" | "black";
-type Mp3LcdName = "track" | "time" | "eq";
-interface OverlayModeDoc {
-  version: 1;
-  mode: OverlayModeName;
-  variant: Mp3VariantName;
-  lcd: Mp3LcdName;
-  motion: boolean;
-}
-const OVERLAY_MODE_KEY = "snapify-overlay-mode";
-const DEFAULT_OVERLAY_MODE: OverlayModeDoc = {
-  version: 1,
-  mode: "classic",
-  variant: "purple",
-  lcd: "track",
-  motion: true,
-};
-function coerceOverlayModeDoc(v: Partial<OverlayModeDoc>): OverlayModeDoc {
-  return {
-    version: 1,
-    mode: v.mode === "mp3" ? "mp3" : "classic",
-    variant:
-      v.variant === "purple" || v.variant === "silver" || v.variant === "pink" || v.variant === "black"
-        ? v.variant
-        : "purple",
-    lcd: v.lcd === "track" || v.lcd === "time" || v.lcd === "eq" ? v.lcd : "track",
-    motion: typeof v.motion === "boolean" ? v.motion : true,
-  };
-}
-function loadOverlayModeDoc(): OverlayModeDoc {
-  try {
-    const raw = localStorage.getItem(OVERLAY_MODE_KEY);
-    if (!raw) return { ...DEFAULT_OVERLAY_MODE };
-    const parsed = JSON.parse(raw) as Partial<OverlayModeDoc>;
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return { ...DEFAULT_OVERLAY_MODE };
-    }
-    return coerceOverlayModeDoc(parsed);
-  } catch {
-    return { ...DEFAULT_OVERLAY_MODE };
-  }
-}
-function saveOverlayModeDoc(s: OverlayModeDoc): void {
-  try {
-    localStorage.setItem(OVERLAY_MODE_KEY, JSON.stringify(coerceOverlayModeDoc(s)));
-  } catch {
-    // Private mode. Choice lasts the session.
-  }
-}
-
-/** Round-trip helper for the acceptance check: save then load must
- *  preserve all four fields (exported for tests, no DOM needed). */
-export function roundTripOverlayModeDoc(s: OverlayModeDoc): OverlayModeDoc {
-  saveOverlayModeDoc(s);
-  return loadOverlayModeDoc();
-}
-
-/** Mini MP3 stage card — PR2 stub (canonical home:
- *  `src/components/Mp3Player.tsx`).
- *  Renders the `.mp3-player` / `.mp3-body` region hooks, the LCD views,
- *  and transport wired to the same App callbacks as the player pane, so
- *  mode switching preserves playback. PR2 swaps this stub for the real
- *  card (wheel, volume OSD, FM spoof) with no App state changes. */
-function Mp3IntegrationStub(p: {
-  snapshot: PlayerSnapshot;
-  progressMs: number;
-  variant: Mp3VariantName;
-  lcd: Mp3LcdName;
-  motion: boolean;
-  busyPrev: boolean;
-  busyPlayPause: boolean;
-  busyNext: boolean;
-  onPlay: () => void;
-  onPause: () => void;
-  onNext: () => void;
-  onPrev: () => void;
-  onSeek: (ms: number) => void;
-  onVolume: (v: number) => void;
-  onCycleView: () => void;
-  onPowerOff: () => void;
-}) {
-  const s = p.snapshot;
-  const track = s.track;
-  const title = track?.name ?? "No track";
-  const artistLine = !track
-    ? "Start Spotify"
-    : track.artists !== ""
-      ? track.album !== ""
-        ? `${track.artists} — ${track.album}`
-        : track.artists
-      : (track.album !== "" ? track.album : "Unknown");
-  const dur = track?.durationMs ?? 0;
-  const ratio = dur > 0 ? Math.min(1, Math.max(0, p.progressMs / dur)) : 0;
-  const canTransport = track !== null;
-  const baseVol = typeof s.volume === "number" ? s.volume : 50;
-  const clampVol = (v: number) =>
-    Number.isFinite(v) ? Math.min(100, Math.max(0, Math.round(v))) : 50;
-  return (
-    // pointer-events: the stage disables input by default (pass-through);
-    // only the card re-enables it, mirroring section.pane. Full card
-    // styling (PR4) replaces these inline hooks, not the region list.
-    <div className="mp3-player" style={{ pointerEvents: "auto" }}>
-      <div
-        className="mp3-body"
-        data-variant={p.variant}
-        data-motion={p.motion ? "on" : "off"}
-        role="region"
-        aria-label="MP3 player"
-      >
-        <div
-          className="mp3-lcd"
-          role="status"
-          aria-live="polite"
-          aria-label={`${title} by ${artistLine}`}
-        >
-          {p.lcd === "time" ? (
-            <div className="mp3-view">
-              <div className="mp3-big">{formatClock(p.progressMs)}</div>
-              <div className="mp3-sub">{formatClock(dur)}</div>
-            </div>
-          ) : p.lcd === "eq" ? (
-            <div className="mp3-view">
-              <div className="mp3-sub">{title}</div>
-              <div className="mp3-eq" data-live={p.motion && s.isPlaying ? "on" : "off"} aria-hidden="true">
-                <i />
-                <i />
-                <i />
-                <i />
-                <i />
-              </div>
-            </div>
-          ) : (
-            <div className="mp3-view">
-              <div className="mp3-title" title={title}>
-                {title}
-              </div>
-              <div className="mp3-artist" title={artistLine}>
-                {artistLine}
-              </div>
-            </div>
-          )}
-          <div
-            className="mp3-progress"
-            role="slider"
-            tabIndex={0}
-            aria-label="Seek"
-            aria-valuemin={0}
-            aria-valuenow={Math.round(p.progressMs)}
-            aria-valuemax={dur}
-            onClick={(e) => {
-              if (!track || dur <= 0) return;
-              const rect = e.currentTarget.getBoundingClientRect();
-              const w = rect.width > 0 ? rect.width : 1;
-              p.onSeek(Math.round(Math.min(1, Math.max(0, (e.clientX - rect.left) / w)) * dur));
-            }}
-            onKeyDown={(e) => {
-              if (!track || dur <= 0) return;
-              if (e.key === "ArrowLeft") {
-                e.preventDefault();
-                p.onSeek(Math.max(0, p.progressMs - 5000));
-              } else if (e.key === "ArrowRight") {
-                e.preventDefault();
-                p.onSeek(Math.min(dur, p.progressMs + 5000));
-              }
-            }}
-          >
-            <div className="mp3-progress-fill" style={{ transform: `scaleX(${ratio})` }} />
-          </div>
-          <div className="mp3-times">
-            <span>{formatClock(p.progressMs)}</span>
-            <span>-{formatClock(Math.max(0, dur - p.progressMs))}</span>
-          </div>
-        </div>
-        <div className="mp3-wheel" role="group" aria-label="Control wheel">
-          <button
-            className="mp3-wheel-btn"
-            data-key="prev"
-            type="button"
-            onClick={p.onPrev}
-            disabled={p.busyPrev || !canTransport}
-            title="Previous"
-            aria-label="Previous track"
-          >
-            |◀
-          </button>
-          {s.isPlaying ? (
-            <button
-              className="mp3-center"
-              type="button"
-              onClick={p.onPause}
-              disabled={p.busyPlayPause}
-              title="Pause"
-              aria-label="Pause"
-            >
-              ‖
-            </button>
-          ) : (
-            <button
-              className="mp3-center"
-              type="button"
-              onClick={p.onPlay}
-              disabled={p.busyPlayPause || !canTransport}
-              title="Play"
-              aria-label="Play"
-            >
-              ▶
-            </button>
-          )}
-          <button
-            className="mp3-wheel-btn"
-            data-key="next"
-            type="button"
-            onClick={p.onNext}
-            disabled={p.busyNext || !canTransport}
-            title="Next"
-            aria-label="Next track"
-          >
-            ▶|
-          </button>
-          <button
-            className="mp3-wheel-btn"
-            data-key="menu"
-            type="button"
-            onClick={p.onCycleView}
-            title="Cycle display view"
-            aria-label="Cycle display view"
-          >
-            M
-          </button>
-          <button
-            className="mp3-wheel-btn"
-            data-key="vol-down"
-            type="button"
-            onClick={() => p.onVolume(clampVol(baseVol - 5))}
-            title="Volume down"
-            aria-label="Volume down"
-          >
-            −
-          </button>
-          <button
-            className="mp3-wheel-btn"
-            data-key="vol-up"
-            type="button"
-            onClick={() => p.onVolume(clampVol(baseVol + 5))}
-            title="Volume up"
-            aria-label="Volume up"
-          >
-            +
-          </button>
-          <button
-            className="mp3-wheel-btn"
-            data-key="power"
-            type="button"
-            onClick={p.onPowerOff}
-            title="Back to classic (same as Esc)"
-            aria-label="Back to classic"
-          >
-            ⏻
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** m:ss clock for the stub LCD (canonical card owns its own format). */
-function formatClock(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return "0:00";
-  const total = Math.floor(ms / 1000);
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
-}
-
 /** Arrow-key nudge step for keyboard move/resize, in logical px. */
 const KB_STEP = 8;
 
@@ -503,40 +228,86 @@ export default function App() {
   const [stream, setStream] = useState<StreamSettings>(() => loadStreamSettings());
   // True once a pause outlasts STREAM_HIDE_DELAY_MS; resume clears it.
   const [streamHidden, setStreamHidden] = useState(false);
-  // Mini MP3 overlay mode (snapify-overlay-mode key, never scene geometry).
-  // The pane layout persists untouched underneath so returning to classic
-  // restores the exact prior arrangement with no data loss.
-  const [overlayMode, setOverlayMode] = useState<OverlayModeDoc>(() => loadOverlayModeDoc());
+  const [overlayMode, setOverlayMode] = useState<Mp3Settings>(() => loadOverlayMode());
   const isMp3 = overlayMode.mode === "mp3";
-  // Synchronous mirror so the global key listener reads the live mode
-  // without re-subscribing (same pattern as layoutRef/keybindsRef).
-  const overlayModeRef = useRef<OverlayModeDoc>(overlayMode);
+  const overlayModeRef = useRef<Mp3Settings>(overlayMode);
   useEffect(() => {
     overlayModeRef.current = overlayMode;
   }, [overlayMode]);
-  /** Patch one or more overlay-mode fields and persist the repaired doc. */
-  const patchOverlayMode = useCallback((patch: Partial<OverlayModeDoc>) => {
-    const next = coerceOverlayModeDoc({ ...overlayModeRef.current, ...patch });
+  const patchOverlayMode = useCallback((patch: Partial<Mp3Settings>) => {
+    const next = parseOverlayMode({ ...overlayModeRef.current, ...patch });
     overlayModeRef.current = next;
-    saveOverlayModeDoc(next);
+    saveOverlayMode(next);
     setOverlayMode(next);
   }, []);
-  /** Power-off path: long-press center and Esc both land here. */
   const exitMp3ToClassic = useCallback(() => {
-    const next = coerceOverlayModeDoc({ ...overlayModeRef.current, mode: "classic" });
+    const next = parseOverlayMode({ ...overlayModeRef.current, mode: "classic" });
     overlayModeRef.current = next;
-    saveOverlayModeDoc(next);
+    saveOverlayMode(next);
     setOverlayMode(next);
   }, []);
   const exitMp3Ref = useRef(() => {});
   useEffect(() => {
     exitMp3Ref.current = exitMp3ToClassic;
   }, [exitMp3ToClassic]);
-  /** M key: cycle LCD views track -> time -> eq (FM spoof arrives in PR3). */
   const cycleMp3View = useCallback(() => {
-    const cur = overlayModeRef.current.lcd;
-    patchOverlayMode({ lcd: cur === "track" ? "time" : cur === "time" ? "eq" : "track" });
+    patchOverlayMode({ lcd: nextMp3View(overlayModeRef.current.lcd) });
   }, [patchOverlayMode]);
+  const [mp3Power, setMp3Power] = useState<Mp3Power>("on");
+  const [mp3Locked, setMp3Locked] = useState(false);
+  const [volArmed, setVolArmed] = useState(false);
+  const volTimer = useRef(0);
+  const mp3CardRef = useRef<HTMLDivElement | null>(null);
+  const preMp3Focus = useRef<Element | null>(null);
+  const powerTimer = useRef(0);
+  useEffect(() => {
+    return () => {
+      if (volTimer.current) window.clearTimeout(volTimer.current);
+      if (powerTimer.current) window.clearTimeout(powerTimer.current);
+    };
+  }, []);
+  useEffect(() => {
+    if (isMp3) {
+      preMp3Focus.current = document.activeElement;
+      setMp3Power(overlayMode.motion ? "boot" : "on");
+      setMp3Locked(false);
+      setVolArmed(false);
+      if (powerTimer.current) window.clearTimeout(powerTimer.current);
+      if (overlayMode.motion) {
+        powerTimer.current = window.setTimeout(() => setMp3Power("on"), 600);
+      }
+      const t = window.setTimeout(() => mp3CardRef.current?.focus(), 0);
+      return () => {
+        window.clearTimeout(t);
+        if (powerTimer.current) window.clearTimeout(powerTimer.current);
+      };
+    } else {
+      setMp3Power("on");
+      setMp3Locked(false);
+      setVolArmed(false);
+      if (preMp3Focus.current instanceof HTMLElement) {
+        preMp3Focus.current.focus();
+      }
+      preMp3Focus.current = null;
+      return undefined;
+    }
+  }, [isMp3, overlayMode.motion]);
+  const armVol = useCallback(() => {
+    if (mp3Locked) return;
+    setVolArmed(true);
+    if (volTimer.current) window.clearTimeout(volTimer.current);
+    volTimer.current = window.setTimeout(() => setVolArmed(false), 1500);
+  }, [mp3Locked]);
+  const powerOffMp3 = useCallback(() => {
+    if (!overlayModeRef.current || overlayModeRef.current.mode !== "mp3") return;
+    if (!overlayModeRef.current.motion) {
+      exitMp3Ref.current();
+      return;
+    }
+    setMp3Power("goodbye");
+    if (powerTimer.current) window.clearTimeout(powerTimer.current);
+    powerTimer.current = window.setTimeout(() => exitMp3Ref.current(), 500);
+  }, []);
   // Bounded layout-undo stack (cap LAYOUT_UNDO_DEPTH). Snapshots are pushed
   // before geometry-changing ops; Ctrl+Z while editing pops the last.
   const [undoStack, setUndoStack] = useState<LayoutUndoEntry[]>([]);
@@ -565,9 +336,6 @@ export default function App() {
       return false;
     }
   });
-  // MP3 forces the window interactive (the card must take wheel clicks)
-  // and never editable (no pane drags exist in this mode). The underlying
-  // interactive/editing prefs are untouched, so leaving MP3 restores them.
   const effInteractive = isMp3 ? true : interactive;
   const effEditing = isMp3 ? false : editing;
   const [visible, setVisible] = useState(true);
@@ -1251,7 +1019,6 @@ export default function App() {
   // pause so a stream's window capture stops showing a stale frame.
   // Resume restores instantly. CSS-only via data-stream on .app; the Rust
   // visibility truth (toggle_visibility) is never touched.
-  // Suspended in MP3 mode: the card is the visible novelty, never hidden.
   useEffect(() => {
     if (isMp3) {
       setStreamHidden(false);
@@ -1291,8 +1058,6 @@ export default function App() {
   // rects, so the game keeps focus and keeps moving on empty space.
   // Visibility (true hide/show) is a separate global action that hides the
   // window entirely.
-  // MP3 reads the effective flags (forced interactive, never editing) so
-  // the card always takes input; the persisted prefs stay the classic ones.
   useEffect(() => {
     const passive = loggedIn && !effInteractive && !effEditing && !settingsOpen;
     void reportOverlayMode(!passive);
@@ -1395,8 +1160,6 @@ export default function App() {
   }, [interactive]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // Bare Esc exits settings first, then MP3 to classic, then edit:
-      // one exit rule. MP3 exit restores the untouched classic prefs.
       if (e.key === "Escape" && !e.ctrlKey && !e.altKey && !e.metaKey) {
         if (settingsOpenRef.current) closeSettings();
         else if (overlayModeRef.current.mode === "mp3") exitMp3Ref.current();
@@ -1422,7 +1185,6 @@ export default function App() {
           e.key === "ArrowDown")
       ) {
         if (settingsOpenRef.current) return;
-        // MP3 has no panes to move: geometry keys stay quiet in this mode.
         if (overlayModeRef.current.mode === "mp3") return;
         if (!editingRef.current && !interactiveRef.current) return;
         e.preventDefault();
@@ -1431,7 +1193,6 @@ export default function App() {
       }
       // Layout undo: Ctrl+Z (or Cmd+Z) while editing restores the last
       // geometry snapshot. Guarded to edit mode so game-time chords pass.
-      // Quiet in MP3 mode (nothing on stage is undoable there).
       if (
         editingRef.current &&
         overlayModeRef.current.mode !== "mp3" &&
@@ -2807,10 +2568,6 @@ export default function App() {
       style={overlayStyle}
       data-narrow={stageNarrow ? "true" : undefined}
       data-short={stageShort ? "true" : undefined}
-      // MP3 styling hooks (PR4 locks the full FX set): mode selects the
-      // card, variant repaints it, motion off freezes every animation.
-      // Stream auto-hide never applies here (suspended above), so
-      // data-stream stays unset while the card is up.
       data-overlay-mode={isMp3 ? "mp3" : undefined}
       data-variant={isMp3 ? overlayMode.variant : undefined}
       data-motion={isMp3 && !overlayMode.motion ? "off" : undefined}
@@ -2847,12 +2604,12 @@ export default function App() {
             }}
           >
             {isMp3 ? (
-              // Mini MP3 mode: the pane stage swaps for the centered card.
-              // progressMs is computed above this branch so both modes
-              // share one interpolation tick; layout state persists
-              // untouched underneath for an exact classic restore.
               <div
+                ref={mp3CardRef}
                 className="mp3-stage"
+                tabIndex={-1}
+                role="region"
+                aria-label="MP3 player"
                 style={{
                   position: "absolute",
                   inset: 0,
@@ -2861,24 +2618,112 @@ export default function App() {
                   pointerEvents: "none",
                 }}
               >
-                <Mp3IntegrationStub
-                  snapshot={snap}
-                  progressMs={progressMs}
-                  variant={overlayMode.variant}
-                  lcd={overlayMode.lcd}
-                  motion={overlayMode.motion}
-                  busyPrev={busyPrev}
-                  busyPlayPause={busyPlayPause}
-                  busyNext={busyNext}
-                  onPlay={playCb}
-                  onPause={pauseCb}
-                  onNext={nextCb}
-                  onPrev={prevCb}
-                  onSeek={seekCb}
-                  onVolume={volumeCb}
-                  onCycleView={cycleMp3View}
-                  onPowerOff={exitMp3ToClassic}
-                />
+                <div className="mp3-player" style={{ pointerEvents: "auto" }}>
+                  <Mp3Player
+                    snapshot={snap}
+                    progressMs={progressMs}
+                    busyPrev={busyPrev}
+                    busyPlayPause={busyPlayPause}
+                    busyNext={busyNext}
+                    pendingAction={pendingAction}
+                    tier={tier}
+                    degraded={degradedUi}
+                    variant={overlayMode.variant}
+                    lcd={overlayMode.lcd}
+                    motion={overlayMode.motion}
+                    power={mp3Power}
+                    locked={mp3Locked}
+                    onPlay={() => {
+                      if (mp3Locked || tier === "free") return;
+                      playCb();
+                    }}
+                    onPause={() => {
+                      if (mp3Locked) return;
+                      pauseCb();
+                    }}
+                    onNext={() => {
+                      if (mp3Locked || tier === "free" || busyNext) return;
+                      nextCb();
+                    }}
+                    onPrev={() => {
+                      if (mp3Locked || tier === "free" || busyPrev) return;
+                      prevCb();
+                    }}
+                    onSeek={(ms: number) => {
+                      if (mp3Locked || tier === "free") return;
+                      seekCb(ms);
+                    }}
+                    onVolume={(v: number) => {
+                      if (mp3Locked || tier === "free") return;
+                      volumeCb(v);
+                    }}
+                    onShuffle={() => {
+                      if (mp3Locked || tier === "free") return;
+                      shuffleCb();
+                    }}
+                    onRepeat={() => {
+                      if (mp3Locked || tier === "free") return;
+                      repeatCb();
+                    }}
+                    onRetry={retryPlayerCb}
+                  />
+                  <Mp3Wheel
+                    onPrev={() => {
+                      if (mp3Locked) return;
+                      if (volArmed) {
+                        if (tier === "free") return;
+                        const base = typeof snap.volume === "number" ? snap.volume : 50;
+                        const next = Math.min(100, Math.max(0, Math.round(base - 5)));
+                        volumeCb(next);
+                        if (volTimer.current) window.clearTimeout(volTimer.current);
+                        volTimer.current = window.setTimeout(() => setVolArmed(false), 1500);
+                        return;
+                      }
+                      if (tier === "free" || busyPrev) return;
+                      prevCb();
+                    }}
+                    onNext={() => {
+                      if (mp3Locked) return;
+                      if (volArmed) {
+                        if (tier === "free") return;
+                        const base = typeof snap.volume === "number" ? snap.volume : 50;
+                        const next = Math.min(100, Math.max(0, Math.round(base + 5)));
+                        volumeCb(next);
+                        if (volTimer.current) window.clearTimeout(volTimer.current);
+                        volTimer.current = window.setTimeout(() => setVolArmed(false), 1500);
+                        return;
+                      }
+                      if (tier === "free" || busyNext) return;
+                      nextCb();
+                    }}
+                    onMenu={() => {
+                      if (mp3Locked) return;
+                      cycleMp3View();
+                    }}
+                    onVol={armVol}
+                    onPlayPause={() => {
+                      if (mp3Locked) return;
+                      if (snap.isPlaying) {
+                        if (busyPlayPause) return;
+                        pauseCb();
+                      } else {
+                        if (tier === "free" || busyPlayPause) return;
+                        playCb();
+                      }
+                    }}
+                    onCenterHold={powerOffMp3}
+                    onMenuHold={() => {
+                      setMp3Locked((v: boolean) => !v);
+                      setVolArmed(false);
+                    }}
+                    disabled={false}
+                    variant={overlayMode.variant}
+                    volArmed={volArmed}
+                    playing={snap.isPlaying}
+                    motion={overlayMode.motion}
+                    size={140}
+                  />
+                </div>
               </div>
             ) : (
               <>
@@ -2895,7 +2740,7 @@ export default function App() {
         </div>
       )}
 
-      {(effEditing || effInteractive) && loggedIn && (
+      {(effEditing || effInteractive) && loggedIn && !isMp3 && (
         <div className="dock" role="toolbar" aria-label="Overlay editor">
           <button
             className="tbtn"

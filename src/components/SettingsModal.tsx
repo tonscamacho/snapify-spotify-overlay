@@ -20,30 +20,9 @@ import {
 import type { UpdateStatus } from "../lib/updater";
 import { SCENE_NAMES, SCENE_LABELS } from "../lib/layout";
 import { XIcon, RefreshIcon, OpenIcon } from "./icons";
-
-/** Mini MP3 overlay-mode settings — PR1 stub (canonical home:
- *  `src/lib/overlayMode.ts`). Mirrors the App-side stub so Settings
- *  builds before PR1 merges; PR1 replaces both with the one import. */
-export type OverlayModeName = "classic" | "mp3";
-export type OverlayMp3Variant = "purple" | "silver" | "pink" | "black";
-export type OverlayMp3Lcd = "track" | "time" | "eq";
-export interface OverlayModeSettings {
-  version: 1;
-  mode: OverlayModeName;
-  variant: OverlayMp3Variant;
-  lcd: OverlayMp3Lcd;
-  motion: boolean;
-}
-const DEFAULT_OVERLAY_MODE_SETTINGS: OverlayModeSettings = {
-  version: 1,
-  mode: "classic",
-  variant: "purple",
-  lcd: "track",
-  motion: true,
-};
-/** CSS-only finish thumbnails: 24x34 rounded rects using the same
- *  gradient stops as the card. No images. */
-const FINISH_THUMBNAILS: Record<OverlayMp3Variant, string> = {
+import { DEFAULT_OVERLAY_MODE } from "../lib/overlayMode";
+import type { Mp3Settings, Mp3Variant } from "../lib/overlayMode";
+const FINISH_THUMBNAILS: Record<Mp3Variant, string> = {
   purple: "linear-gradient(160deg, #9a72e0 0%, #6a3fb5 45%, #4a2683 100%)",
   silver: "linear-gradient(160deg, #f2f4f6 0%, #c9ccd2 45%, #9aa0a8 100%)",
   pink: "linear-gradient(160deg, #f7c3da 0%, #e58bb4 45%, #b44e82 100%)",
@@ -62,11 +41,8 @@ interface Props {
   /** Custom overlay background: "" = theme default, else #rrggbb. */
   overlayColor: string;
   onOverlayColor: (v: string) => void;
-  /** Mini MP3 overlay mode — PR1 stub shape (canonical:
-   *  `src/lib/overlayMode.ts`). Optional so older callers keep working;
-   *  absent means classic with a no-op writer. */
-  overlayMode?: OverlayModeSettings;
-  onOverlayMode?: (patch: Partial<OverlayModeSettings>) => void;
+  overlayMode?: Mp3Settings;
+  onOverlayMode?: (patch: Partial<Mp3Settings>) => void;
   autostart: boolean;
   interactive: boolean;
   editing?: boolean;
@@ -523,8 +499,8 @@ export default function SettingsModal(p: Props) {
           </button>
         </div>
         {(() => {
-          const mode = p.overlayMode ?? DEFAULT_OVERLAY_MODE_SETTINGS;
-          const setMode = (patch: Partial<OverlayModeSettings>) => p.onOverlayMode?.(patch);
+          const mode = p.overlayMode ?? DEFAULT_OVERLAY_MODE;
+          const setMode = (patch: Partial<Mp3Settings>) => p.onOverlayMode?.(patch);
           const isMp3 = mode.mode === "mp3";
           return (
             <>
