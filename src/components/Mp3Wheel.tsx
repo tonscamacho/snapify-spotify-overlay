@@ -8,11 +8,28 @@ import type {
 export const HOLD_MS = 500;
 export const WHEEL_STEP_DEG = 30;
 
+/** Max onPrev/onNext invocations per pointermove; excess rotation carries over. */
+export const MAX_WHEEL_STEPS_PER_MOVE = 3;
+
 export type Mp3WheelVariant = "purple" | "silver" | "pink" | "black";
-export type Mp3WheelView = "track" | "time" | "eq" | "fm";
+export type Mp3WheelView = "track" | "time" | "eq";
 
-export const MP3_VIEW_ORDER: readonly Mp3WheelView[] = ["track", "time", "eq", "fm"];
+export const MP3_VIEW_ORDER: readonly Mp3WheelView[] = ["track", "time", "eq"];
 
+/**
+ * Standalone MP3 click wheel. Mount inside `.mp3-body` (provided by the shell
+ * owner): the wheel renders only the `.mp3w` root and relies on the ancestor
+ * for body styling. When wired into the overlay window, the integration owner
+ * must cover `.mp3w` in overlay region reporting (`SELECTORS` in
+ * `src/lib/overlay.ts`) or the wheel will not be clickable in
+ * interactive mode.
+ *
+ * Transport debounce contract: radial drag fires at most
+ * `MAX_WHEEL_STEPS_PER_MOVE` `onPrev`/`onNext` calls per pointermove, with
+ * excess rotation carried to the next event. The wheel is stateless, so the
+ * shell must ignore transport callbacks while its busy flags are set and
+ * pass `disabled` to lock all five buttons plus drag.
+ */
 export interface Mp3WheelProps {
   onPrev: () => void;
   onNext: () => void;
@@ -54,6 +71,15 @@ export function stepsForDelta(
   return { steps, rest: accumulated - steps * stepDeg };
 }
 
+/** Split a raw step count into firings now vs steps carried to the next event. */
+export function clampWheelSteps(
+  steps: number,
+  max: number = MAX_WHEEL_STEPS_PER_MOVE,
+): { fire: number; carry: number } {
+  const fire = Math.max(-max, Math.min(max, steps));
+  return { fire, carry: steps - fire };
+}
+
 interface WheelPalette {
   ring1: string;
   ring2: string;
@@ -78,7 +104,7 @@ const VARIANT_COLORS: Record<Mp3WheelVariant, WheelPalette> = {
     center: "#6a3fb5",
     centerEdge: "#9a72e0",
     glyph: "#f2eaff",
-    focus: "#8aff5a",
+    focus: "#0a84ff",
   },
   silver: {
     ring1: "#f2f4f6",
@@ -90,7 +116,7 @@ const VARIANT_COLORS: Record<Mp3WheelVariant, WheelPalette> = {
     center: "#c9ccd2",
     centerEdge: "#f2f4f6",
     glyph: "#23262b",
-    focus: "#0a5c2e",
+    focus: "#0a84ff",
   },
   pink: {
     ring1: "#f7c3da",
@@ -102,7 +128,7 @@ const VARIANT_COLORS: Record<Mp3WheelVariant, WheelPalette> = {
     center: "#e58bb4",
     centerEdge: "#f7c3da",
     glyph: "#3a1224",
-    focus: "#0a5c2e",
+    focus: "#0a84ff",
   },
   black: {
     ring1: "#5a5d66",
@@ -114,21 +140,21 @@ const VARIANT_COLORS: Record<Mp3WheelVariant, WheelPalette> = {
     center: "#33343a",
     centerEdge: "#5a5d66",
     glyph: "#f0f1f4",
-    focus: "#8aff5a",
+    focus: "#0a84ff",
   },
 };
 
 const MP3W_CSS = [
   ".mp3w{position:relative;touch-action:none;user-select:none;-webkit-user-select:none;line-height:1}",
   ".mp3w svg{display:block;width:100%;height:100%}",
-  ".mp3w-btn{position:absolute;background-color:transparent;border:0;padding:0;cursor:pointer;color:inherit;transition:background-color 80ms ease}",
+  ".mp3w-btn{position:absolute;background-color:transparent;border:0;padding:0;cursor:pointer;color:inherit;transition:opacity 80ms ease,transform 80ms ease}",
   ".mp3w-btn::-moz-focus-inner{border:0}",
   ".mp3w-btn:focus{outline:none}",
   ".mp3w-btn:focus-visible{outline:2px solid var(--mp3w-focus);outline-offset:2px}",
   ".mp3w-btn-center{border-radius:50%}",
-  ".mp3w-btn:active{background-color:rgba(255,255,255,0.10)}",
+  ".mp3w-btn:active{opacity:0.72}",
   ".mp3w[data-disabled=true] .mp3w-btn{cursor:default}",
-  ".mp3w[data-disabled=true] .mp3w-btn:active{background-color:transparent}",
+  ".mp3w[data-disabled=true] .mp3w-btn:active{opacity:1}",
   ".mp3w[data-disabled=true] svg{opacity:0.55}",
   ".mp3w[data-vol-armed=true] .mp3w-vol-label{fill:var(--mp3w-focus)}",
   ".mp3w[data-motion=false] .mp3w-btn{transition:none}",
@@ -334,11 +360,12 @@ export default function Mp3Wheel(props: Mp3WheelProps): React.JSX.Element {
     drag.last = a;
     const { steps, rest } = stepsForDelta(drag.acc);
     if (steps !== 0) {
-      drag.acc = rest;
-      if (steps > 0) {
-        for (let i = 0; i < steps; i += 1) nextRef.current();
+      const { fire, carry } = clampWheelSteps(steps);
+      drag.acc = rest + carry * WHEEL_STEP_DEG;
+      if (fire > 0) {
+        for (let i = 0; i < fire; i += 1) nextRef.current();
       } else {
-        for (let i = 0; i < -steps; i += 1) prevRef.current();
+        for (let i = 0; i < -fire; i += 1) prevRef.current();
       }
     }
   }, []);
