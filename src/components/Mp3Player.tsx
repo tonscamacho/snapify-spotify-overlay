@@ -12,10 +12,10 @@ import {
 } from "./icons";
 import Mp3Lcd from "./Mp3Lcd";
 import type { Mp3LcdView, Mp3Power } from "./Mp3Lcd";
+import type { Mp3Variant } from "../lib/overlayMode";
 
 export type { Mp3LcdView, Mp3Power } from "./Mp3Lcd";
-
-export type Mp3Variant = "purple" | "silver" | "pink" | "black";
+export type { Mp3Variant } from "../lib/overlayMode";
 export type Mp3PendingAction = "play" | "pause" | "next" | "prev" | null;
 
 export interface Mp3PlayerProps {
