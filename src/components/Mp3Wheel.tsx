@@ -4,6 +4,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
 } from "react";
+import type { LcdView, Mp3Variant } from "../lib/overlayMode";
 
 export const HOLD_MS = 500;
 export const WHEEL_STEP_DEG = 30;
@@ -11,8 +12,8 @@ export const WHEEL_STEP_DEG = 30;
 /** Max onPrev/onNext invocations per pointermove; excess rotation carries over. */
 export const MAX_WHEEL_STEPS_PER_MOVE = 3;
 
-export type Mp3WheelVariant = "purple" | "silver" | "pink" | "black";
-export type Mp3WheelView = "track" | "time" | "eq";
+export type Mp3WheelVariant = Mp3Variant;
+export type Mp3WheelView = LcdView;
 
 export const MP3_VIEW_ORDER: readonly Mp3WheelView[] = ["track", "time", "eq"];
 
@@ -325,6 +326,9 @@ export default function Mp3Wheel(props: Mp3WheelProps): React.JSX.Element {
     },
     [],
   );
+  useEffect(() => {
+    if (disabled) dragRef.current = null;
+  }, [disabled]);
   const clearPressed = useCallback(() => setPressed(null), []);
   const ringPointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
     if (disabledRef.current || !e.isPrimary) return;
