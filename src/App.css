@@ -3320,6 +3320,7 @@ select:focus-visible,
   --mp3-wheel-face: #ececf0;
   --mp3-wheel-ring: #b9bcc3;
   --mp3-wheel-core: #2a2b30;
+  --mp3-ink: #f5f2fc;
   --mp3-focus: #0a84ff;
   --mp3-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 }
@@ -3336,6 +3337,7 @@ select:focus-visible,
   --mp3-wheel-face: #ececf0;
   --mp3-wheel-ring: #b9bcc3;
   --mp3-wheel-core: #2a2b30;
+  --mp3-ink: #f5f2fc;
 }
 
 .app[data-overlay-mode="mp3"][data-variant="silver"] {
@@ -3350,6 +3352,7 @@ select:focus-visible,
   --mp3-wheel-face: #f4f5f7;
   --mp3-wheel-ring: #a8adb5;
   --mp3-wheel-core: #2a2d33;
+  --mp3-ink: #1a1a20;
 }
 
 .app[data-overlay-mode="mp3"][data-variant="pink"] {
@@ -3364,6 +3367,7 @@ select:focus-visible,
   --mp3-wheel-face: #f8f0f4;
   --mp3-wheel-ring: #c9a3b7;
   --mp3-wheel-core: #33242c;
+  --mp3-ink: #1a1a20;
 }
 
 .app[data-overlay-mode="mp3"][data-variant="black"] {
@@ -3378,6 +3382,7 @@ select:focus-visible,
   --mp3-wheel-face: #3a3b41;
   --mp3-wheel-ring: #17181c;
   --mp3-wheel-core: #0e0f12;
+  --mp3-ink: #f5f2fc;
 }
 
 .app[data-overlay-mode="mp3"] .mp3-body[data-variant="purple"] {
@@ -3392,6 +3397,7 @@ select:focus-visible,
   --mp3-wheel-face: #ececf0;
   --mp3-wheel-ring: #b9bcc3;
   --mp3-wheel-core: #2a2b30;
+  --mp3-ink: #f5f2fc;
 }
 
 .app[data-overlay-mode="mp3"] .mp3-body[data-variant="silver"] {
@@ -3406,6 +3412,7 @@ select:focus-visible,
   --mp3-wheel-face: #f4f5f7;
   --mp3-wheel-ring: #a8adb5;
   --mp3-wheel-core: #2a2d33;
+  --mp3-ink: #1a1a20;
 }
 
 .app[data-overlay-mode="mp3"] .mp3-body[data-variant="pink"] {
@@ -3420,6 +3427,7 @@ select:focus-visible,
   --mp3-wheel-face: #f8f0f4;
   --mp3-wheel-ring: #c9a3b7;
   --mp3-wheel-core: #33242c;
+  --mp3-ink: #1a1a20;
 }
 
 .app[data-overlay-mode="mp3"] .mp3-body[data-variant="black"] {
@@ -3434,6 +3442,7 @@ select:focus-visible,
   --mp3-wheel-face: #3a3b41;
   --mp3-wheel-ring: #17181c;
   --mp3-wheel-core: #0e0f12;
+  --mp3-ink: #f5f2fc;
 }
 
 .app[data-overlay-mode="mp3"] :focus-visible {
@@ -3441,25 +3450,18 @@ select:focus-visible,
   outline-offset: 2px;
 }
 
-.app[data-overlay-mode="mp3"] .mp3-stage {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 16px;
-}
-
 .app[data-overlay-mode="mp3"] .mp3-body {
   position: relative;
   width: 200px;
+  height: 340px;
   padding: 12px;
   border-radius: 18px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   overflow: hidden;
-  color: var(--mp3-key-ink, #f5f5f7);
+  color: var(--mp3-ink);
   background:
     linear-gradient(180deg, var(--mp3-edge) 0, transparent 2px),
     linear-gradient(180deg, var(--mp3-body-base) 0, var(--mp3-body-deep) 82%, var(--mp3-shade) 100%);
@@ -3480,17 +3482,67 @@ select:focus-visible,
   background: linear-gradient(115deg, transparent 40%, rgba(255, 255, 255, 0.14) 48%, transparent 60%);
 }
 
-.app[data-overlay-mode="mp3"] .mp3-body.mp3-strip {
-  width: 340px;
-  flex-direction: row;
+.app[data-overlay-mode="mp3"] .mp3-top {
+  width: 100%;
+  flex: none;
+  display: flex;
   align-items: center;
-  padding: 12px 16px;
+  gap: 6px;
+  font-family: var(--mp3-mono);
+  font-size: 9px;
+  line-height: 14px;
+  letter-spacing: 0.12em;
+}
+
+.app[data-overlay-mode="mp3"] .mp3-led {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: #8a8f98;
+}
+
+.app[data-overlay-mode="mp3"] .mp3-led[data-state="play"] {
+  background: #1ed760;
+  box-shadow: 0 0 4px #1ed760;
+}
+
+.app[data-overlay-mode="mp3"] .mp3-led[data-state="pause"] {
+  background: #ffb020;
+  box-shadow: 0 0 4px #ffb020;
+}
+
+.app[data-overlay-mode="mp3"] .mp3-brand {
+  flex: 1;
+  text-align: center;
+}
+
+.app[data-overlay-mode="mp3"] .mp3-batt {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.app[data-overlay-mode="mp3"] .mp3-batt i {
+  width: 3px;
+  height: 8px;
+  background: currentColor;
+  opacity: 0.85;
+}
+
+.app[data-overlay-mode="mp3"] .mp3-batt em {
+  width: 2px;
+  height: 4px;
+  margin-left: 1px;
+  background: currentColor;
+  opacity: 0.85;
 }
 
 .app[data-overlay-mode="mp3"] .mp3-lcd {
   position: relative;
-  width: 164px;
-  height: 64px;
+  width: 176px;
+  height: 76px;
+  flex: none;
   border-radius: 8px;
   overflow: hidden;
   background: var(--mp3-lcd-bg);
@@ -3501,11 +3553,6 @@ select:focus-visible,
     0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
-.app[data-overlay-mode="mp3"] .mp3-body.mp3-strip .mp3-lcd {
-  flex: 1;
-  width: auto;
-}
-
 .app[data-overlay-mode="mp3"] .mp3-lcd::before {
   content: "";
   position: absolute;
@@ -3513,7 +3560,6 @@ select:focus-visible,
   right: 0;
   top: 0;
   height: 16px;
-  opacity: 0;
   pointer-events: none;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), transparent);
 }
@@ -3526,33 +3572,48 @@ select:focus-visible,
   background: repeating-linear-gradient(180deg, rgba(0, 0, 0, 0.22) 0 1px, transparent 1px 3px);
 }
 
-.app[data-overlay-mode="mp3"] .mp3-lcd-text {
+.app[data-overlay-mode="mp3"] .mp3-sweep {
   position: absolute;
-  inset: 4px 8px 8px;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.25), transparent);
+  animation: mp3-sweep 300ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.app[data-overlay-mode="mp3"] .mp3-boot,
+.app[data-overlay-mode="mp3"] .mp3-goodbye {
+  position: absolute;
+  inset: 6px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mp3-mono);
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 0.08em;
+  color: var(--mp3-lcd-ink);
+  text-shadow: 0 0 2px var(--mp3-lcd-ink);
+}
+
+.app[data-overlay-mode="mp3"] .mp3-view {
+  position: absolute;
+  inset: 6px 8px;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 4px;
+  gap: 3px;
   font-family: var(--mp3-mono);
   color: var(--mp3-lcd-ink);
   text-shadow: 0 0 2px var(--mp3-lcd-ink);
 }
 
-.app[data-overlay-mode="mp3"] .mp3-lcd-text.is-changed {
-  animation: mp3-track-slide 220ms cubic-bezier(0.2, 0, 0, 1);
+.app[data-overlay-mode="mp3"] .mp3-view.mp3-slide {
+  animation: mp3-view-slide 220ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-.app[data-overlay-mode="mp3"] .mp3-lcd.is-boot .mp3-lcd-text {
-  animation: mp3-boot-wipe 600ms cubic-bezier(0.2, 0, 0, 1);
-}
-
-.app[data-overlay-mode="mp3"] .mp3-lcd.is-refresh::before {
-  animation: mp3-boot-wipe 600ms cubic-bezier(0.2, 0, 0, 1);
-}
-
-.app[data-overlay-mode="mp3"] .mp3-lcd-title {
+.app[data-overlay-mode="mp3"] .mp3-title {
   margin: 0;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 16px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -3562,11 +3623,17 @@ select:focus-visible,
   color: var(--mp3-lcd-ink);
 }
 
-.app[data-overlay-mode="mp3"] .mp3-lcd-sub {
+.app[data-overlay-mode="mp3"] .mp3-title-inner {
+  display: inline-block;
+  white-space: nowrap;
+  will-change: transform;
+  animation: mp3-marquee 8s linear infinite;
+}
+
+.app[data-overlay-mode="mp3"] .mp3-artist {
   margin: 0;
   font-size: 10px;
-  line-height: 16px;
-  font-weight: 400;
+  line-height: 14px;
   letter-spacing: 0.06em;
   white-space: nowrap;
   overflow: hidden;
@@ -3575,24 +3642,30 @@ select:focus-visible,
   text-shadow: none;
 }
 
-.app[data-overlay-mode="mp3"] .mp3-marquee {
-  display: inline-block;
-  overflow: hidden;
-  max-width: 100%;
-  vertical-align: top;
+.app[data-overlay-mode="mp3"] .mp3-big {
+  margin: 0;
+  font-size: 20px;
+  line-height: 24px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--mp3-lcd-ink);
 }
 
-.app[data-overlay-mode="mp3"] .mp3-marquee-inner {
-  display: inline-block;
-  white-space: nowrap;
-  will-change: transform;
+.app[data-overlay-mode="mp3"] .mp3-sub {
+  margin: 0;
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0.06em;
+  color: var(--mp3-lcd-dim);
+  text-shadow: none;
 }
 
-.app[data-overlay-mode="mp3"] .mp3-lcd-title.is-marquee .mp3-marquee-inner {
-  animation: mp3-marquee 8s linear infinite;
+.app[data-overlay-mode="mp3"] .mp3-bar {
+  padding: 4px 0;
+  cursor: pointer;
 }
 
-.app[data-overlay-mode="mp3"] .mp3-progress {
+.app[data-overlay-mode="mp3"] .mp3-bar-track {
   height: 4px;
   border-radius: 2px;
   overflow: hidden;
@@ -3600,91 +3673,56 @@ select:focus-visible,
   opacity: 0.9;
 }
 
-.app[data-overlay-mode="mp3"] .mp3-progress-fill {
+.app[data-overlay-mode="mp3"] .mp3-fill {
+  display: block;
   width: 100%;
   height: 4px;
   border-radius: 2px;
   background: var(--mp3-lcd-ink);
   transform-origin: left center;
+  transition: transform 200ms linear;
 }
 
-.app[data-overlay-mode="mp3"] .mp3-volume {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 8px;
+.app[data-overlay-mode="mp3"] .mp3-times {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  padding: 4px 8px;
-  border-radius: 4px;
-  background: var(--mp3-lcd-bg);
-  border: 1px solid var(--mp3-lcd-ink);
-  font-family: var(--mp3-mono);
-  font-size: 10px;
-  line-height: 16px;
-  color: var(--mp3-lcd-ink);
-  transform-origin: center;
+  font-size: 9px;
+  line-height: 12px;
+  letter-spacing: 0.06em;
+  color: var(--mp3-lcd-dim);
+  text-shadow: none;
 }
 
-.app[data-overlay-mode="mp3"] .mp3-volume.is-open {
-  animation: mp3-volume-pop 150ms cubic-bezier(0.2, 0, 0, 1);
-}
-
-.app[data-overlay-mode="mp3"] .mp3-volume-bar {
-  flex: 1;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--mp3-lcd-dim);
-  overflow: hidden;
-}
-
-.app[data-overlay-mode="mp3"] .mp3-volume-fill {
-  height: 4px;
-  background: var(--mp3-lcd-ink);
-  transform-origin: left center;
-}
-
-.app[data-overlay-mode="mp3"] .mp3-meta-row {
-  width: 164px;
+.app[data-overlay-mode="mp3"] .mp3-status {
+  width: 100%;
+  flex: none;
+  min-height: 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   font-family: var(--mp3-mono);
-  font-size: 10px;
-  line-height: 16px;
-  color: var(--mp3-lcd-dim);
-}
-
-.app[data-overlay-mode="mp3"] .mp3-battery {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+  font-size: 9px;
+  line-height: 14px;
   letter-spacing: 0.08em;
 }
 
-.app[data-overlay-mode="mp3"] .mp3-battery.is-low {
-  color: var(--mp3-lcd-ink);
-  animation: mp3-battery-blink 1s steps(2, end) infinite;
+.app[data-overlay-mode="mp3"] .mp3-retry {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
 }
 
-.app[data-overlay-mode="mp3"] .mp3-led {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: #1ed760;
-  box-shadow: 0 0 4px #1ed760;
-}
-
-.app[data-overlay-mode="mp3"] .mp3-led.is-off {
-  background: rgba(255, 255, 255, 0.24);
-  box-shadow: none;
-}
-
-.app[data-overlay-mode="mp3"] .mp3-led.is-warn {
-  background: #e5484d;
-  box-shadow: 0 0 4px #e5484d;
+.app[data-overlay-mode="mp3"] .mp3-hold[data-on="off"] {
+  opacity: 0.25;
 }
 
 .app[data-overlay-mode="mp3"] .mp3-wheel {
@@ -3701,60 +3739,44 @@ select:focus-visible,
     0 2px 4px rgba(0, 0, 0, 0.4);
 }
 
+.app[data-overlay-mode="mp3"] .mp3-btn {
+  font-family: var(--mp3-mono);
+  color: var(--mp3-wheel-core);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.app[data-overlay-mode="mp3"] .mp3-btn:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
 .app[data-overlay-mode="mp3"] .mp3-wheel-btn {
   position: absolute;
+  top: 50%;
   display: grid;
   place-items: center;
-  border: none;
-  background: transparent;
-  color: var(--mp3-wheel-core);
-  font-family: var(--mp3-mono);
-  font-size: 10px;
-  line-height: 16px;
-  letter-spacing: 0.08em;
-  cursor: pointer;
   border-radius: 8px;
-  padding: 4px;
   transition: transform 80ms cubic-bezier(0.2, 0, 0, 1), opacity 80ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-.app[data-overlay-mode="mp3"] .mp3-wheel-btn[data-key="menu"] {
-  top: 4px;
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-.app[data-overlay-mode="mp3"] .mp3-wheel-btn[data-key="vol"] {
-  bottom: 4px;
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-.app[data-overlay-mode="mp3"] .mp3-wheel-btn[data-key="prev"] {
-  left: 4px;
-  top: 50%;
+.app[data-overlay-mode="mp3"] .mp3-wheel-prev {
+  left: 10px;
   transform: translateY(-50%);
 }
 
-.app[data-overlay-mode="mp3"] .mp3-wheel-btn[data-key="next"] {
-  right: 4px;
-  top: 50%;
+.app[data-overlay-mode="mp3"] .mp3-wheel-next {
+  right: 10px;
   transform: translateY(-50%);
 }
 
-.app[data-overlay-mode="mp3"] .mp3-wheel-btn[data-key="menu"]:active {
-  transform: translateX(-50%) translateY(2px);
-}
-
-.app[data-overlay-mode="mp3"] .mp3-wheel-btn[data-key="vol"]:active {
-  transform: translateX(-50%) translateY(2px);
-}
-
-.app[data-overlay-mode="mp3"] .mp3-wheel-btn[data-key="prev"]:active {
+.app[data-overlay-mode="mp3"] .mp3-wheel-prev:active {
   transform: translateY(calc(-50% + 2px));
 }
 
-.app[data-overlay-mode="mp3"] .mp3-wheel-btn[data-key="next"]:active {
+.app[data-overlay-mode="mp3"] .mp3-wheel-next:active {
   transform: translateY(calc(-50% + 2px));
 }
 
@@ -3775,9 +3797,6 @@ select:focus-visible,
     inset 0 1px 0 rgba(255, 255, 255, 0.3),
     inset 0 -3px 6px rgba(0, 0, 0, 0.5),
     0 1px 2px rgba(0, 0, 0, 0.5);
-  font-family: var(--mp3-mono);
-  font-size: 10px;
-  line-height: 16px;
   transform: translate(-50%, -50%);
   transition: transform 80ms cubic-bezier(0.2, 0, 0, 1), opacity 80ms cubic-bezier(0.2, 0, 0, 1);
 }
@@ -3789,79 +3808,93 @@ select:focus-visible,
     0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
-.app[data-overlay-mode="mp3"] .mp3-key-row {
+.app[data-overlay-mode="mp3"] .mp3-subrow {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
 }
 
-.app[data-overlay-mode="mp3"] .mp3-key {
+.app[data-overlay-mode="mp3"] .mp3-sub-btn {
   min-width: 32px;
-  height: 24px;
-  padding: 4px 8px;
-  border-radius: 12px;
+  height: 22px;
+  padding: 2px 8px;
+  border-radius: 11px;
   border: 1px solid var(--mp3-shade);
   background: rgba(0, 0, 0, 0.28);
-  color: #f5f5f7;
-  font-family: var(--mp3-mono);
+  color: var(--mp3-ink);
   font-size: 10px;
   line-height: 16px;
-  cursor: pointer;
+  display: grid;
+  place-items: center;
   transition: transform 80ms cubic-bezier(0.2, 0, 0, 1), opacity 80ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-.app[data-overlay-mode="mp3"] .mp3-key:active {
+.app[data-overlay-mode="mp3"] .mp3-sub-btn:active {
   transform: translateY(2px);
+}
+
+.app[data-overlay-mode="mp3"] .mp3-sub-btn[data-on="true"] {
+  border-color: var(--mp3-focus);
+  background: rgba(10, 132, 255, 0.35);
+}
+
+.app[data-overlay-mode="mp3"] .mp3-foot {
+  flex: none;
+  font-family: var(--mp3-mono);
+  font-size: 8px;
+  line-height: 12px;
+  letter-spacing: 0.18em;
+  opacity: 0.8;
 }
 
 .app[data-overlay-mode="mp3"] .mp3-eq {
   display: flex;
   align-items: flex-end;
   gap: 4px;
-  height: 16px;
+  height: 18px;
 }
 
-.app[data-overlay-mode="mp3"] .mp3-eq-bar {
-  width: 4px;
-  height: 16px;
+.app[data-overlay-mode="mp3"] .mp3-eq i {
+  flex: 1;
+  height: 18px;
   border-radius: 1px;
   background: var(--mp3-lcd-ink);
   transform-origin: bottom center;
   animation: mp3-eq 800ms ease-in-out infinite alternate;
 }
 
-.app[data-overlay-mode="mp3"] .mp3-eq-bar:nth-child(2) {
+.app[data-overlay-mode="mp3"] .mp3-eq i:nth-child(2) {
   animation-delay: 120ms;
 }
 
-.app[data-overlay-mode="mp3"] .mp3-eq-bar:nth-child(3) {
+.app[data-overlay-mode="mp3"] .mp3-eq i:nth-child(3) {
   animation-delay: 240ms;
 }
 
-.app[data-overlay-mode="mp3"] .mp3-eq-bar:nth-child(4) {
+.app[data-overlay-mode="mp3"] .mp3-eq i:nth-child(4) {
   animation-delay: 360ms;
 }
 
-.app[data-overlay-mode="mp3"] .mp3-eq-bar:nth-child(5) {
+.app[data-overlay-mode="mp3"] .mp3-eq i:nth-child(5) {
   animation-delay: 480ms;
 }
 
-@keyframes mp3-boot-wipe {
+.app[data-overlay-mode="mp3"] .mp3-eq[data-live="off"] i {
+  animation-play-state: paused;
+}
+
+@keyframes mp3-sweep {
   from {
     transform: translateX(-100%);
-    opacity: 0;
-  }
-  20% {
-    opacity: 1;
   }
   to {
     transform: translateX(100%);
-    opacity: 1;
   }
 }
 
-@keyframes mp3-track-slide {
+@keyframes mp3-view-slide {
   from {
     transform: translateX(16px);
     opacity: 0;
@@ -3869,26 +3902,6 @@ select:focus-visible,
   to {
     transform: translateX(0);
     opacity: 1;
-  }
-}
-
-@keyframes mp3-volume-pop {
-  from {
-    transform: scale(0.9);
-    opacity: 0;
-  }
-  to {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-@keyframes mp3-battery-blink {
-  0%, 49% {
-    opacity: 1;
-  }
-  50%, 100% {
-    opacity: 0.25;
   }
 }
 
@@ -3910,41 +3923,38 @@ select:focus-visible,
   }
 }
 
-.app[data-overlay-mode="mp3"][data-motion="off"] .mp3-lcd-text.is-changed,
-.app[data-overlay-mode="mp3"][data-motion="off"] .mp3-lcd.is-boot .mp3-lcd-text,
-.app[data-overlay-mode="mp3"][data-motion="off"] .mp3-lcd.is-refresh::before,
-.app[data-overlay-mode="mp3"][data-motion="off"] .mp3-volume.is-open,
-.app[data-overlay-mode="mp3"][data-motion="off"] .mp3-lcd-title.is-marquee .mp3-marquee-inner,
-.app[data-overlay-mode="mp3"][data-motion="off"] .mp3-eq-bar,
-.app[data-overlay-mode="mp3"][data-motion="off"] .mp3-battery.is-low {
+.app[data-overlay-mode="mp3"] .mp3-body[data-motion="off"] .mp3-sweep,
+.app[data-overlay-mode="mp3"] .mp3-body[data-motion="off"] .mp3-view.mp3-slide,
+.app[data-overlay-mode="mp3"] .mp3-body[data-motion="off"] .mp3-title-inner,
+.app[data-overlay-mode="mp3"] .mp3-body[data-motion="off"] .mp3-eq i {
   animation: none;
 }
 
-.app[data-overlay-mode="mp3"][data-motion="off"] .mp3-wheel-btn,
-.app[data-overlay-mode="mp3"][data-motion="off"] .mp3-center,
-.app[data-overlay-mode="mp3"][data-motion="off"] .mp3-key {
+.app[data-overlay-mode="mp3"] .mp3-body[data-motion="off"] .mp3-bar,
+.app[data-overlay-mode="mp3"] .mp3-body[data-motion="off"] .mp3-fill,
+.app[data-overlay-mode="mp3"] .mp3-body[data-motion="off"] .mp3-btn,
+.app[data-overlay-mode="mp3"] .mp3-body[data-motion="off"] .mp3-wheel-btn,
+.app[data-overlay-mode="mp3"] .mp3-body[data-motion="off"] .mp3-center,
+.app[data-overlay-mode="mp3"] .mp3-body[data-motion="off"] .mp3-sub-btn {
   transition: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .app[data-overlay-mode="mp3"] .mp3-lcd-text.is-changed,
-  .app[data-overlay-mode="mp3"] .mp3-lcd.is-boot .mp3-lcd-text,
-  .app[data-overlay-mode="mp3"] .mp3-lcd.is-refresh::before,
-  .app[data-overlay-mode="mp3"] .mp3-volume.is-open,
-  .app[data-overlay-mode="mp3"] .mp3-lcd-title.is-marquee .mp3-marquee-inner,
-  .app[data-overlay-mode="mp3"] .mp3-eq-bar,
-  .app[data-overlay-mode="mp3"] .mp3-battery.is-low {
+  .app[data-overlay-mode="mp3"] .mp3-sweep,
+  .app[data-overlay-mode="mp3"] .mp3-view.mp3-slide,
+  .app[data-overlay-mode="mp3"] .mp3-title-inner,
+  .app[data-overlay-mode="mp3"] .mp3-eq i {
     animation: none;
   }
+  .app[data-overlay-mode="mp3"] .mp3-bar,
+  .app[data-overlay-mode="mp3"] .mp3-fill,
+  .app[data-overlay-mode="mp3"] .mp3-btn,
   .app[data-overlay-mode="mp3"] .mp3-wheel-btn,
   .app[data-overlay-mode="mp3"] .mp3-center,
-  .app[data-overlay-mode="mp3"] .mp3-key,
-  .app[data-overlay-mode="mp3"] .mp3-marquee-inner,
-  .app[data-overlay-mode="mp3"] .mp3-progress-fill,
-  .app[data-overlay-mode="mp3"] .mp3-volume-fill {
+  .app[data-overlay-mode="mp3"] .mp3-sub-btn {
     transition: none;
   }
-  .app[data-overlay-mode="mp3"] .mp3-lcd-title.is-marquee {
+  .app[data-overlay-mode="mp3"] .mp3-title {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
