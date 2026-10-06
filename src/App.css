@@ -1306,6 +1306,12 @@ select:focus-visible,
   letter-spacing: -0.01em;
   margin-bottom: 8px;
   color: var(--txt);
+  position: sticky;
+  top: -16px;
+  z-index: 2;
+  background: var(--surface);
+  margin-inline: -18px;
+  padding-inline: 18px;
 }
 
 .modal .row {
