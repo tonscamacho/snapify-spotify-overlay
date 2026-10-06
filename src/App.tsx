@@ -31,7 +31,7 @@ import {
   UndoIcon,
   XIcon,
 } from "./components/icons";
-import { api, parsePlayer, toThrottleError } from "./lib/spotify";
+import { api, isSessionDead, parsePlayer, toThrottleError } from "./lib/spotify";
 import { ActionGate, PendingQueue, flushDelayMs, shiftQueueForNext } from "./lib/pendingQueue";
 import { reportOverlayMode, reportOverlayRegions, setOverlayDragCover, watchRegionElementSizes } from "./lib/overlay";
 import { ensurePlayer, isSdkReady, sdkPause, sdkResume, setSdkVolume } from "./lib/player-sdk";
@@ -785,9 +785,8 @@ export default function App() {
       noteRecovered();
       return true;
     } catch (e) {
-      // A rejected session surfaces here first: drop the gate open.
       const m = e instanceof Error ? e.message : String(e);
-      if (/not logged in|session expired|invalid_grant|refresh failed/i.test(m)) {
+      if (isSessionDead(m)) {
         setLoggedIn(false);
       } else if (isThrottledMsg(m)) {
         noteDegraded(m);
@@ -846,6 +845,41 @@ export default function App() {
       // Leave previous list in place.
     }
   }, []);
+
+  const restoreSession = useCallback(async () => {
+    const ok = await refreshAuth();
+    syncLoginWindow(ok);
+    if (!ok) {
+      setSnap(EMPTY_SNAP);
+      setLyrics({ kind: "idle" });
+      return;
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await api.freshToken();
+        break;
+      } catch (e) {
+        const m = e instanceof Error ? e.message : String(e);
+        if (isSessionDead(m)) {
+          setLoggedIn(false);
+          syncLoginWindow(false);
+          setSnap(EMPTY_SNAP);
+          setLyrics({ kind: "idle" });
+          return;
+        }
+        if (attempt >= 2) {
+          flashErrThrottledAware(m);
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+      }
+    }
+    void fetchPlayer().then((alive) => {
+      if (!alive) return;
+      void fetchDevices();
+      void fetchQueue();
+    });
+  }, [refreshAuth, syncLoginWindow, fetchPlayer, fetchDevices, fetchQueue, flashErrThrottledAware]);
 
   const fetchLyrics = useCallback(
     async (trackId: string) => {
@@ -917,37 +951,16 @@ export default function App() {
       })
       .catch(() => {});
     getVersion().then(setAppVersion).catch(() => {});
-    void refreshAuth().then((ok) => {
-      syncLoginWindow(ok);
-      if (ok) {
-        void fetchPlayer().then((alive) => {
-          if (!alive) return;
-          void fetchDevices();
-          void fetchQueue();
-        });
-      }
-    });
+    void restoreSession();
     const off1 = listen("auth-changed", () => {
-      void refreshAuth().then((ok) => {
-        syncLoginWindow(ok);
-        if (ok) {
-          void fetchPlayer().then((alive) => {
-            if (!alive) return;
-            void fetchDevices();
-            void fetchQueue();
-          });
-        } else {
-          setSnap(EMPTY_SNAP);
-          setLyrics({ kind: "idle" });
-        }
-      });
+      void restoreSession();
     });
     const off2 = listen("auth-error", (e) => flashErr(String(e.payload)));
     return () => {
       void off1.then((f) => f());
       void off2.then((f) => f());
     };
-  }, [refreshAuth, fetchPlayer, fetchDevices, fetchQueue, flashErr, persist, syncLoginWindow]);
+  }, [restoreSession, flashErr, persist]);
 
   // Player poll while logged in: 5 s playing, 20 s paused, 30 s with no
   // device. Skipped while hidden; visibilitychange refetches on return.

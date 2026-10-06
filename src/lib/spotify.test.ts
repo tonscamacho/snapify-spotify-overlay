@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-import { parseDevices, parsePlayer, parseQueue, parseQueueContext, toThrottleError, isThrottledError, getRetryAfterSec, parseRetryAfterSec, isQuotaError } from "./spotify";
+import { parseDevices, parsePlayer, parseQueue, parseQueueContext, toThrottleError, isThrottledError, getRetryAfterSec, parseRetryAfterSec, isQuotaError, isSessionDead } from "./spotify";
 
 const fullTrack = {
   id: "t1",
@@ -281,5 +281,24 @@ describe("typed throttle error", () => {
   it("passes through already-typed throttle objects", () => {
     const t = toThrottleError({ kind: "quota", retryAfterSec: 12, message: "q" });
     expect(t).toMatchObject({ kind: "quota", retryAfterSec: 12 });
+  });
+});
+
+describe("session dead signal", () => {
+  it("opens the gate only for revoked or missing sessions", () => {
+    expect(isSessionDead("Not logged in. Start login first.")).toBe(true);
+    expect(isSessionDead("Session expired. Please login again.")).toBe(true);
+    expect(isSessionDead('refresh failed: {"error":"invalid_grant"}')).toBe(true);
+    expect(isSessionDead(new Error("INVALID_GRANT: revoked"))).toBe(true);
+  });
+
+  it("keeps the session for transient refresh and throttle noise", () => {
+    expect(isSessionDead("refresh failed: token endpoint 503")).toBe(false);
+    expect(isSessionDead("token refresh transient: accounts hiccup")).toBe(false);
+    expect(isSessionDead("refresh cooling down after recent failure")).toBe(false);
+    expect(isSessionDead("rate-limited: retry after 2s")).toBe(false);
+    expect(isSessionDead("unauthorized: token rejected")).toBe(false);
+    expect(isSessionDead("spotify 503 Service Unavailable: boom")).toBe(false);
+    expect(isSessionDead(null)).toBe(false);
   });
 });

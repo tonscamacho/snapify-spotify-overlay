@@ -115,9 +115,13 @@ fn challenge_for(verifier: &str) -> String {
 }
 
 fn save_refresh_token(refresh: &str) {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER);
-    if let Ok(entry) = entry {
-        let _ = entry.set_password(refresh);
+    match keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
+        Ok(entry) => {
+            if let Err(e) = entry.set_password(refresh) {
+                eprintln!("spotify-overlay: saving refresh token failed: {e}");
+            }
+        }
+        Err(e) => eprintln!("spotify-overlay: saving refresh token failed: {e}"),
     }
 }
 
@@ -136,6 +140,10 @@ fn clear_refresh_token() {
 
 fn is_invalid_grant(body: &str) -> bool {
     body.contains("invalid_grant")
+}
+
+fn transient_refresh_error(body: &str) -> String {
+    format!("token refresh transient: {body}")
 }
 
 /// Drop a dead session everywhere: memory, OS keyring, and the frontend gate.
@@ -423,7 +431,7 @@ async fn refresh_tokens(refresh: &str) -> Result<Tokens, String> {
         .map_err(|e| e.to_string())?;
     if !res.status().is_success() {
         let body = res.text().await.unwrap_or_default();
-        return Err(format!("refresh failed: {body}"));
+        return Err(transient_refresh_error(&body));
     }
     let body: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
     let new_refresh = body
@@ -608,8 +616,8 @@ pub async fn logout(app: AppHandle, state: State<'_, AuthState>) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_error_message, load_verifier_at, save_verifier_at, verifier_is_fresh,
-        VERIFIER_TTL_SECS, SCOPES,
+        bind_error_message, is_invalid_grant, load_verifier_at, save_verifier_at,
+        transient_refresh_error, verifier_is_fresh, VERIFIER_TTL_SECS, SCOPES,
     };
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -673,6 +681,18 @@ mod tests {
         std::fs::write(&path, "{not json").expect("write corrupt fixture");
         assert_eq!(load_verifier_at(&path), None);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn revoked_body_kills_session_transient_body_retries() {
+        assert!(is_invalid_grant(
+            r#"{"error":"invalid_grant","error_description":"Refresh token revoked"}"#
+        ));
+        assert!(!is_invalid_grant("token refresh transient: 503 Service Unavailable"));
+        assert!(!is_invalid_grant(""));
+        let t = transient_refresh_error("503 Service Unavailable");
+        assert!(t.contains("503 Service Unavailable"));
+        assert!(!t.contains("invalid_grant"));
     }
 
     #[test]

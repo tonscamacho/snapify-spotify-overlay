@@ -1,0 +1,117 @@
+import { test, expect, type Page } from "@playwright/test";
+import { stubTauri, commandsNamed, failNext } from "./tauri-mock";
+import { TRACK_NAME } from "./fixtures";
+
+const TRANSIENT_BOOT = "token refresh transient: accounts hiccup";
+const REVOKED_BODY = 'refresh failed: {"error":"invalid_grant","error_description":"revoked"}';
+const EXPIRED_MSG = "Session expired. Please login again.";
+
+async function bootWithFault(page: Page, cmd: string, message: string, times: number) {
+  await stubTauri(page);
+  await page.addInitScript(
+    ({ cmd, message, times }: { cmd: string; message: string; times: number }) => {
+      const w = window as unknown as {
+        __MOCK_FAIL_NEXT__?: (cmd: string, error: string, times: number) => void;
+      };
+      w.__MOCK_FAIL_NEXT__?.(cmd, message, times);
+    },
+    { cmd, message, times },
+  );
+  await page.goto("/");
+}
+
+function emitAuthChanged(page: Page) {
+  return page.evaluate(() => {
+    const w = window as unknown as {
+      __TAURI_EMIT_TO_APP__?: (event: string, payload: unknown) => void;
+    };
+    w.__TAURI_EMIT_TO_APP__?.("auth-changed", true);
+  });
+}
+
+test("transient failure at boot keeps the session and recovers", async ({ page }) => {
+  await bootWithFault(page, "get_fresh_token", TRANSIENT_BOOT, 1);
+
+  await expect
+    .poll(async () => (await commandsNamed(page, "get_fresh_token")).length, { timeout: 10000 })
+    .toBeGreaterThanOrEqual(2);
+
+  await expect(page.locator(".gate")).toHaveCount(0);
+  await expect(page.locator(".stage")).toBeVisible();
+
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME)).toBeVisible({ timeout: 15000 });
+  await expect(page.locator(".gate")).toHaveCount(0);
+});
+
+test("expired session at boot opens a clean login prompt", async ({ page }) => {
+  await stubTauri(page);
+  await page.addInitScript(
+    ({ message }: { message: string }) => {
+      const w = window as unknown as {
+        __MOCK_FAIL_NEXT__?: (cmd: string, error: string, times: number) => void;
+      };
+      w.__MOCK_FAIL_NEXT__?.("get_fresh_token", message, 50);
+    },
+    { message: EXPIRED_MSG },
+  );
+  await page.goto("/");
+
+  const gate = page.locator(".gate");
+  await expect(gate).toBeVisible({ timeout: 10000 });
+  await expect(gate.getByRole("button", { name: "Login with Spotify" })).toBeVisible();
+  await page.screenshot({ path: "verify/web/test-results/session-expired-gate.png" });
+});
+
+test("revoked session at boot opens the login gate", async ({ page }) => {
+  await bootWithFault(page, "get_player", REVOKED_BODY, 50);
+
+  const gate = page.locator(".gate");
+  await expect(gate).toBeVisible({ timeout: 10000 });
+  await expect(gate.getByRole("button", { name: "Login with Spotify" })).toBeVisible();
+});
+
+test("transient failure mid-run never opens the gate", async ({ page }) => {
+  await stubTauri(page);
+  await page.goto("/");
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME)).toBeVisible();
+
+  const before = (await commandsNamed(page, "get_player")).length;
+  await failNext(page, "get_player", TRANSIENT_BOOT, 50);
+  await emitAuthChanged(page);
+  await expect
+    .poll(async () => (await commandsNamed(page, "get_player")).length, { timeout: 10000 })
+    .toBeGreaterThan(before);
+  await expect(page.locator(".gate")).toHaveCount(0);
+  await expect(player.getByText(TRACK_NAME)).toBeVisible();
+});
+
+test("revoked session mid-run drops to the login gate", async ({ page }) => {
+  await stubTauri(page);
+  await page.goto("/");
+  await expect(page.locator('section[data-pane="player"]').getByText(TRACK_NAME)).toBeVisible();
+
+  const before = (await commandsNamed(page, "get_player")).length;
+  await failNext(page, "get_player", REVOKED_BODY, 50);
+  await emitAuthChanged(page);
+  await expect
+    .poll(async () => (await commandsNamed(page, "get_player")).length, { timeout: 10000 })
+    .toBeGreaterThan(before);
+
+  const gate = page.locator(".gate");
+  await expect(gate).toBeVisible({ timeout: 10000 });
+  await expect(gate.getByRole("button", { name: "Login with Spotify" })).toBeVisible();
+});
+
+test("reload keeps the session without another login", async ({ page }) => {
+  await stubTauri(page);
+  await page.goto("/");
+  await expect(page.locator('section[data-pane="player"]').getByText(TRACK_NAME)).toBeVisible();
+  await expect(page.locator(".gate")).toHaveCount(0);
+
+  await page.reload();
+  await expect(page.locator('section[data-pane="player"]').getByText(TRACK_NAME)).toBeVisible();
+  await expect(page.locator(".gate")).toHaveCount(0);
+  expect(await commandsNamed(page, "start_login")).toHaveLength(0);
+});
