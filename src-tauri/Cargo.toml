@@ -1,6 +1,6 @@
 [package]
 name = "snapify-overlay"
-version = "2.5.6"
+version = "2.6.0"
 description = "Snapify glass Spotify overlay with snappable panes"
 authors = ["you"]
 edition = "2021"
