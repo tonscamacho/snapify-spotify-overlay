@@ -538,16 +538,10 @@ export default function SettingsModal(p: Props) {
                         >
                           <i
                             aria-hidden="true"
+                            className="finish-thumb"
                             style={{
-                              display: "inline-block",
-                              width: 24,
-                              height: 34,
-                              borderRadius: 6,
                               background: FINISH_THUMBNAILS[n],
-                              verticalAlign: "middle",
-                              marginRight: 6,
                               outline: mode.variant === n ? "2px solid var(--signal)" : "1px solid currentColor",
-                              outlineOffset: 1,
                             }}
                           />
                           {n}

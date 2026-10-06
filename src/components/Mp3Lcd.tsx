@@ -1,7 +1,8 @@
 import { memo } from "react";
 import type { ReactNode } from "react";
+import type { LcdView } from "../lib/overlayMode";
 
-export type Mp3LcdView = "track" | "time" | "eq";
+export type Mp3LcdView = LcdView;
 export type Mp3Power = "on" | "boot" | "goodbye";
 
 export interface Mp3LcdProps {

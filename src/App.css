@@ -3960,3 +3960,27 @@ select:focus-visible,
     text-overflow: ellipsis;
   }
 }
+
+/* PR8 integration: MP3 stage layout (moved from App.tsx inline styles) +
+ * settings finish thumbnails (static geometry; background/outline stay inline). */
+.app[data-overlay-mode="mp3"] .mp3-stage {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.app[data-overlay-mode="mp3"] .mp3-player {
+  pointer-events: auto;
+}
+
+.finish-thumb {
+  display: inline-block;
+  width: 24px;
+  height: 34px;
+  border-radius: 6px;
+  vertical-align: middle;
+  margin-right: 6px;
+  outline-offset: 1px;
+}

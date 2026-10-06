@@ -2610,15 +2610,8 @@ export default function App() {
                 tabIndex={-1}
                 role="region"
                 aria-label="MP3 player"
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  display: "grid",
-                  placeItems: "center",
-                  pointerEvents: "none",
-                }}
               >
-                <div className="mp3-player" style={{ pointerEvents: "auto" }}>
+                <div className="mp3-player">
                   <Mp3Player
                     snapshot={snap}
                     progressMs={progressMs}
