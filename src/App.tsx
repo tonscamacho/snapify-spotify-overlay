@@ -1129,6 +1129,17 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const onContextMenu = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.("input, textarea, select, [contenteditable]")) return;
+      if (t?.isContentEditable) return;
+      e.preventDefault();
+    };
+    window.addEventListener("contextmenu", onContextMenu);
+    return () => window.removeEventListener("contextmenu", onContextMenu);
+  }, []);
+
   // Serialized transport: one in-flight slot. A second next/prev while one
   // is pending is ignored; a seek queues the latest position only. The
   // trailing fetchPlayer was removed: the next scheduled poll confirms.
@@ -2267,6 +2278,7 @@ export default function App() {
       <section
         key={`${preset}:${pane.id}`}
         className={`pane${editing ? " editing" : ""}`}
+        onContextMenu={suppressContextMenu}
         data-pane={pane.type}
         data-pane-id={pane.id}
         data-density={density}
@@ -2466,9 +2478,17 @@ export default function App() {
           "--overlay-glass": overlayColorToRgba(overlayColor, overlayGlassAlpha),
         } as React.CSSProperties);
 
+  const suppressContextMenu = useCallback((e: React.MouseEvent) => {
+    const t = e.target as HTMLElement | null;
+    if (t?.closest?.("input, textarea, select, [contenteditable]")) return;
+    if (t?.isContentEditable) return;
+    e.preventDefault();
+  }, []);
+
   return (
     <div
       className="app"
+      onContextMenu={suppressContextMenu}
       data-theme={theme}
       data-surface={surface}
       data-corners={corners}
@@ -2496,6 +2516,7 @@ export default function App() {
         <div style={{ zoom: uiScale } as React.CSSProperties}>
           <div
             className={`stage${stageNarrow ? " stage-narrow" : ""}${stageShort ? " stage-short" : ""}`}
+            onContextMenu={suppressContextMenu}
             onPointerMove={onStageMove}
             onPointerUp={onStageUp}
             onPointerCancel={onStageUp}
@@ -2520,7 +2541,7 @@ export default function App() {
       )}
 
       {(editing || interactive) && loggedIn && (
-        <div className="dock" role="toolbar" aria-label="Overlay editor">
+        <div className="dock" role="toolbar" aria-label="Overlay editor" onContextMenu={suppressContextMenu}>
           <button
             className="tbtn"
             onClick={toggleVisibility}
