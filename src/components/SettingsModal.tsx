@@ -20,6 +20,14 @@ import {
 import type { UpdateStatus } from "../lib/updater";
 import { SCENE_NAMES, SCENE_LABELS } from "../lib/layout";
 import { XIcon, RefreshIcon, OpenIcon } from "./icons";
+import { DEFAULT_OVERLAY_MODE } from "../lib/overlayMode";
+import type { Mp3Settings, Mp3Variant } from "../lib/overlayMode";
+const FINISH_THUMBNAILS: Record<Mp3Variant, string> = {
+  purple: "linear-gradient(160deg, #9a72e0 0%, #6a3fb5 45%, #4a2683 100%)",
+  silver: "linear-gradient(160deg, #f2f4f6 0%, #c9ccd2 45%, #9aa0a8 100%)",
+  pink: "linear-gradient(160deg, #f7c3da 0%, #e58bb4 45%, #b44e82 100%)",
+  black: "linear-gradient(160deg, #5a5d66 0%, #33343a 45%, #17181c 100%)",
+};
 
 interface Props {
   open: boolean;
@@ -33,6 +41,8 @@ interface Props {
   /** Custom overlay background: "" = theme default, else #rrggbb. */
   overlayColor: string;
   onOverlayColor: (v: string) => void;
+  overlayMode?: Mp3Settings;
+  onOverlayMode?: (patch: Partial<Mp3Settings>) => void;
   autostart: boolean;
   interactive: boolean;
   editing?: boolean;
@@ -488,6 +498,91 @@ export default function SettingsModal(p: Props) {
             {clearingLyrics ? "Clearing…" : "Clear"}
           </button>
         </div>
+        {(() => {
+          const mode = p.overlayMode ?? DEFAULT_OVERLAY_MODE;
+          const setMode = (patch: Partial<Mp3Settings>) => p.onOverlayMode?.(patch);
+          const isMp3 = mode.mode === "mp3";
+          return (
+            <>
+              <div className="row">
+                <span>Overlay Mode</span>
+                <span className="seg" role="group" aria-label="Overlay Mode">
+                  <button
+                    className={mode.mode === "classic" ? "seg-on" : ""}
+                    onClick={() => setMode({ mode: "classic" })}
+                    aria-pressed={mode.mode === "classic"}
+                  >
+                    Classic
+                  </button>
+                  <button
+                    className={isMp3 ? "seg-on" : ""}
+                    onClick={() => setMode({ mode: "mp3" })}
+                    aria-pressed={isMp3}
+                  >
+                    MP3 Player
+                  </button>
+                </span>
+              </div>
+              {isMp3 && (
+                <>
+                  <div className="row">
+                    <span>Finish</span>
+                    <span className="seg" role="group" aria-label="MP3 finish">
+                      {(["purple", "silver", "pink", "black"] as const).map((n) => (
+                        <button
+                          key={n}
+                          className={mode.variant === n ? "seg-on" : ""}
+                          onClick={() => setMode({ variant: n })}
+                          aria-pressed={mode.variant === n}
+                          title={n}
+                        >
+                          <i
+                            aria-hidden="true"
+                            className="finish-thumb"
+                            style={{
+                              background: FINISH_THUMBNAILS[n],
+                              outline: mode.variant === n ? "2px solid var(--signal)" : "1px solid currentColor",
+                            }}
+                          />
+                          {n}
+                        </button>
+                      ))}
+                    </span>
+                  </div>
+                  <div className="row">
+                    <span>LCD view</span>
+                    <span className="seg" role="group" aria-label="LCD view">
+                      {(["track", "time", "eq"] as const).map((n) => (
+                        <button
+                          key={n}
+                          className={mode.lcd === n ? "seg-on" : ""}
+                          onClick={() => setMode({ lcd: n })}
+                          aria-pressed={mode.lcd === n}
+                        >
+                          {n}
+                        </button>
+                      ))}
+                    </span>
+                  </div>
+                  <div className="row">
+                    <span>Motion</span>
+                    <input
+                      type="checkbox"
+                      checked={mode.motion}
+                      aria-label="MP3 motion"
+                      onChange={(e) => setMode({ motion: e.target.checked })}
+                    />
+                  </div>
+                  <div className="hint">
+                    MP3 Player replaces the panes with a clip-player card driving the
+                    same Spotify session. Esc (or Classic above) restores your exact
+                    pane arrangement. Motion off freezes every card animation.
+                  </div>
+                </>
+              )}
+            </>
+          );
+        })()}
         <div className="row">
           <span>Theme</span>
           <span className="seg" role="group" aria-label="Theme">

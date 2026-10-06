@@ -1306,6 +1306,12 @@ select:focus-visible,
   letter-spacing: -0.01em;
   margin-bottom: 8px;
   color: var(--txt);
+  position: sticky;
+  top: -16px;
+  z-index: 2;
+  background: var(--surface);
+  margin-inline: -18px;
+  padding-inline: 18px;
 }
 
 .modal .row {
@@ -3959,4 +3965,28 @@ select:focus-visible,
     overflow: hidden;
     text-overflow: ellipsis;
   }
+}
+
+/* PR8 integration: MP3 stage layout (moved from App.tsx inline styles) +
+ * settings finish thumbnails (static geometry; background/outline stay inline). */
+.app[data-overlay-mode="mp3"] .mp3-stage {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.app[data-overlay-mode="mp3"] .mp3-player {
+  pointer-events: auto;
+}
+
+.finish-thumb {
+  display: inline-block;
+  width: 24px;
+  height: 34px;
+  border-radius: 6px;
+  vertical-align: middle;
+  margin-right: 6px;
+  outline-offset: 1px;
 }

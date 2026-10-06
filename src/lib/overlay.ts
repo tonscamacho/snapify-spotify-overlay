@@ -15,10 +15,10 @@ const SELECTORS = [
   ".modal",
   ".gate-card",
   ".toasts .toast",
-  // Coach pill (PR1 gap): display-only until it resolves to a region. Once
-  // listed here the pill is clickable in interactive mode; passive mode is
-  // unaffected because the Rust side ignores regions unless interactive.
   ".hint-chip",
+  ".mp3-player",
+  ".mp3-body",
+  ".mp3w",
 ] as const;
 
 /** Painted corner radius of an element in CSS px: the minimum of its four
