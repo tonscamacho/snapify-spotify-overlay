@@ -221,8 +221,20 @@ export function getRetryAfterSec(input: unknown): number | null {
   return toThrottleError(input)?.retryAfterSec ?? null;
 }
 
+export function isSessionDead(input: unknown): boolean {
+  const s = messageOf(input).toLowerCase();
+  if (s.includes("not logged in")) return true;
+  if (s.includes("session expired")) return true;
+  if (s.includes("invalid_grant")) return true;
+  return false;
+}
+
 export const api = {
   authStatus: () => invoke<{ logged_in: boolean; awaiting_callback: boolean }>("auth_status"),
+  credentialStatus: () =>
+    invoke<{ stored: boolean; location: string; verified_at: number | null; keyring_ok: boolean }>(
+      "credential_status",
+    ),
   startLogin: () => invoke<string>("start_login"),
   logout: () => invoke<void>("logout"),
   freshToken: () => invoke<string>("get_fresh_token"),

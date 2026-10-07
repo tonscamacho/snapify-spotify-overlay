@@ -259,6 +259,15 @@ pub fn run() {
                     let _ = win.hide();
                 }
             }
+            if let Some(win) = app.get_webview_window("main") {
+                let hidden = win.clone();
+                win.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = hidden.hide();
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -266,6 +275,7 @@ pub fn run() {
             auth::start_login,
             auth::logout,
             auth::get_fresh_token,
+            auth::credential_status,
             spotify::get_player,
             spotify::get_devices,
             spotify::get_queue,

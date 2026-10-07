@@ -114,28 +114,137 @@ fn challenge_for(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(digest)
 }
 
-fn save_refresh_token(refresh: &str) {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER);
-    if let Ok(entry) = entry {
-        let _ = entry.set_password(refresh);
+const FALLBACK_FILE: &str = "refresh-token.fallback.json";
+
+fn credential_verified_at() -> &'static Mutex<Option<i64>> {
+    static VERIFIED: OnceLock<Mutex<Option<i64>>> = OnceLock::new();
+    VERIFIED.get_or_init(|| Mutex::new(None))
+}
+
+fn mark_credential_verified() {
+    if let Ok(mut g) = credential_verified_at().lock() {
+        *g = Some(now_unix());
     }
 }
 
-fn load_refresh_token() -> Option<String> {
-    keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
-        .ok()?
-        .get_password()
+fn fallback_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_local_data_dir()
         .ok()
+        .map(|d| d.join(FALLBACK_FILE))
 }
 
-fn clear_refresh_token() {
+fn save_fallback_at(path: &std::path::Path, refresh: &str) -> Result<(), String> {
+    let body = serde_json::json!({ "refresh_token": refresh }).to_string();
+    crate::overlay::atomic_write_json(path, &body).map_err(|e| e.to_string())
+}
+
+fn load_fallback_at(path: &std::path::Path) -> Option<String> {
+    let text = crate::overlay::read_json_guarded(path, |t| {
+        serde_json::from_str::<serde_json::Value>(t)
+            .ok()
+            .and_then(|v| {
+                v.get("refresh_token")
+                    .and_then(|r| r.as_str())
+                    .map(|s| !s.is_empty())
+            })
+            .unwrap_or(false)
+    })?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let s = v.get("refresh_token")?.as_str()?.to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+fn save_fallback(app: &AppHandle, refresh: &str) -> Result<(), String> {
+    let path = fallback_path(app).ok_or_else(|| "credential store unavailable".to_string())?;
+    save_fallback_at(&path, refresh)?;
+    match load_fallback_at(&path) {
+        Some(back) if back == refresh => {
+            mark_credential_verified();
+            Ok(())
+        }
+        _ => Err("credential fallback verify failed".to_string()),
+    }
+}
+
+fn save_refresh_token(app: &AppHandle, refresh: &str) -> Result<(), String> {
+    if refresh.is_empty() {
+        return Err("credential store unavailable".to_string());
+    }
+    let mut keyring_hit = false;
+    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
+        match entry.set_password(refresh) {
+            Ok(()) => match entry.get_password() {
+                Ok(back) if back == refresh => {
+                    keyring_hit = true;
+                }
+                _ => {
+                    let _ = entry.delete_credential();
+                }
+            },
+            Err(_) => {}
+        }
+    }
+    if keyring_hit {
+        mark_credential_verified();
+        if let Some(path) = fallback_path(app) {
+            let _ = std::fs::remove_file(&path);
+        }
+        return Ok(());
+    }
+    save_fallback(app, refresh)
+}
+
+fn load_refresh_token(app: &AppHandle) -> Option<String> {
+    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
+        if let Ok(pw) = entry.get_password() {
+            if !pw.is_empty() {
+                return Some(pw);
+            }
+        }
+    }
+    fallback_path(app).and_then(|p| load_fallback_at(&p))
+}
+
+fn clear_refresh_token(app: &AppHandle) {
     if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
         let _ = entry.delete_credential();
     }
+    if let Some(path) = fallback_path(app) {
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::overlay::backup_path_for(&path));
+    }
 }
 
-fn is_invalid_grant(body: &str) -> bool {
-    body.contains("invalid_grant")
+enum RefreshError {
+    InvalidGrant,
+    Transient(String),
+}
+
+impl RefreshError {
+    fn from_body(body: &str) -> Self {
+        let invalid = serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| {
+                v.get("error")
+                    .and_then(|e| e.as_str())
+                    .map(|s| s.to_string())
+            })
+            == Some("invalid_grant".to_string());
+        if invalid {
+            Self::InvalidGrant
+        } else {
+            Self::Transient(format!("token refresh transient: {body}"))
+        }
+    }
+
+    fn transport(message: String) -> Self {
+        Self::Transient(format!("token refresh transient: {message}"))
+    }
 }
 
 /// Drop a dead session everywhere: memory, OS keyring, and the frontend gate.
@@ -143,7 +252,7 @@ fn kill_session(app: &AppHandle, state: &AuthState) {
     if let Ok(mut tokens) = state.tokens.lock() {
         *tokens = None;
     }
-    clear_refresh_token();
+    clear_refresh_token(app);
     let _ = app.emit("auth-changed", false);
 }
 
@@ -362,7 +471,9 @@ fn wait_for_callback(app: AppHandle) {
                 clear_verifier_disk();
             }
             if let Some(refresh) = t.refresh_token.clone() {
-                save_refresh_token(&refresh);
+                if let Err(message) = save_refresh_token(&app, &refresh) {
+                    let _ = app.emit("auth-error", message);
+                }
             }
             reply_page(&mut stream, true, "Spotify is connected.");
             finish(true);
@@ -408,7 +519,7 @@ async fn exchange_code(code: &str, verifier: &str) -> Result<Tokens, String> {
     })
 }
 
-async fn refresh_tokens(refresh: &str) -> Result<Tokens, String> {
+async fn refresh_tokens(app: &AppHandle, refresh: &str) -> Result<Tokens, RefreshError> {
     let client = reqwest::Client::new();
     let params = [
         ("grant_type", "refresh_token"),
@@ -420,18 +531,23 @@ async fn refresh_tokens(refresh: &str) -> Result<Tokens, String> {
         .form(&params)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| RefreshError::transport(e.to_string()))?;
     if !res.status().is_success() {
         let body = res.text().await.unwrap_or_default();
-        return Err(format!("refresh failed: {body}"));
+        return Err(RefreshError::from_body(&body));
     }
-    let body: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+    let body: serde_json::Value = res
+        .json()
+        .await
+        .map_err(|e| RefreshError::transport(e.to_string()))?;
     let new_refresh = body
         .get("refresh_token")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| refresh.to_string());
-    save_refresh_token(&new_refresh);
+    if let Err(message) = save_refresh_token(app, &new_refresh) {
+        let _ = app.emit("auth-error", message);
+    }
     Ok(Tokens {
         access_token: body
             .get("access_token")
@@ -499,9 +615,9 @@ pub async fn refresh_now(app: &AppHandle) -> Result<String, String> {
         let tokens = state.tokens.lock().map_err(|e| e.to_string())?;
         tokens.clone().and_then(|t| t.refresh_token.clone())
     }
-    .or_else(load_refresh_token)
+    .or_else(|| load_refresh_token(app))
     .ok_or("Not logged in. Start login first.")?;
-    match refresh_tokens(&refresh).await {
+    match refresh_tokens(app, &refresh).await {
         Ok(fresh) => {
             let token = fresh.access_token.clone();
             if let Ok(mut tokens) = state.tokens.lock() {
@@ -511,13 +627,13 @@ pub async fn refresh_now(app: &AppHandle) -> Result<String, String> {
             let _ = app.emit("auth-changed", true);
             Ok(token)
         }
-        Err(e) => {
-            if is_invalid_grant(&e) {
-                kill_session(app, &state);
-                return Err("Session expired. Please login again.".into());
-            }
+        Err(RefreshError::InvalidGrant) => {
+            kill_session(app, &state);
+            return Err("Session expired. Please login again.".into());
+        }
+        Err(RefreshError::Transient(message)) => {
             mark_refresh_failed();
-            Err(e)
+            Err(message)
         }
     }
 }
@@ -552,7 +668,7 @@ pub async fn access_token(app: &AppHandle) -> Result<String, String> {
 /// restart resumes; a stale one is already deleted by the loader, and the
 /// next callback fails clean with "Login session expired. Start again."
 pub fn restore_session(app: &AppHandle) {
-    if let Some(refresh) = load_refresh_token() {
+    if let Some(refresh) = load_refresh_token(app) {
         if let Some(state) = app.try_state::<AuthState>() {
             if let Ok(mut tokens) = state.tokens.lock() {
                 *tokens = Some(Tokens {
@@ -591,12 +707,50 @@ pub async fn get_fresh_token(app: AppHandle) -> Result<String, String> {
     access_token(&app).await
 }
 
+#[derive(Clone, serde::Serialize)]
+pub struct CredentialStatus {
+    pub stored: bool,
+    pub location: String,
+    pub verified_at: Option<i64>,
+    pub keyring_ok: bool,
+}
+
+#[tauri::command]
+pub async fn credential_status(app: AppHandle) -> Result<CredentialStatus, String> {
+    let keyring_ok = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
+        .ok()
+        .and_then(|e| e.get_password().ok())
+        .map(|pw| !pw.is_empty())
+        .unwrap_or(false);
+    let fallback_ok = fallback_path(&app)
+        .and_then(|p| load_fallback_at(&p))
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    let (stored, location) = if keyring_ok {
+        (true, "keyring".to_string())
+    } else if fallback_ok {
+        (true, "fallback".to_string())
+    } else {
+        (false, "none".to_string())
+    };
+    let verified_at = credential_verified_at()
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    Ok(CredentialStatus {
+        stored,
+        location,
+        verified_at,
+        keyring_ok,
+    })
+}
+
 #[tauri::command]
 pub async fn logout(app: AppHandle, state: State<'_, AuthState>) -> Result<(), String> {
     *state.tokens.lock().map_err(|e| e.to_string())? = None;
     *state.verifier.lock().map_err(|e| e.to_string())? = None;
     *state.awaiting.lock().map_err(|e| e.to_string())? = false;
-    clear_refresh_token();
+    clear_refresh_token(&app);
     // A logout must also drop a pending PKCE verifier: it is single-use and
     // bound to the abandoned login, so leaving it on disk would let the next
     // callback attempt a stale exchange instead of failing clean.
@@ -608,8 +762,8 @@ pub async fn logout(app: AppHandle, state: State<'_, AuthState>) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_error_message, load_verifier_at, save_verifier_at, verifier_is_fresh,
-        VERIFIER_TTL_SECS, SCOPES,
+        bind_error_message, load_fallback_at, load_verifier_at, save_fallback_at,
+        save_verifier_at, verifier_is_fresh, RefreshError, VERIFIER_TTL_SECS, SCOPES,
     };
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -619,6 +773,14 @@ mod tests {
         let n = SCRATCH_SEQ.fetch_add(1, Ordering::SeqCst);
         std::env::temp_dir().join(format!(
             "snapify-pkce-verifier-test-{}-{n}.json",
+            std::process::id()
+        ))
+    }
+
+    fn scratch_fallback_path() -> std::path::PathBuf {
+        let n = SCRATCH_SEQ.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!(
+            "snapify-refresh-fallback-test-{}-{n}.json",
             std::process::id()
         ))
     }
@@ -673,6 +835,73 @@ mod tests {
         std::fs::write(&path, "{not json").expect("write corrupt fixture");
         assert_eq!(load_verifier_at(&path), None);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn fallback_roundtrip_drop_restore() {
+        let path = scratch_fallback_path();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(load_fallback_at(&path), None);
+        save_fallback_at(&path, "refresh-abc").expect("save fallback");
+        assert_eq!(
+            load_fallback_at(&path),
+            Some("refresh-abc".to_string())
+        );
+        assert!(path.exists());
+        std::fs::remove_file(&path).expect("drop fallback");
+        assert_eq!(load_fallback_at(&path), None);
+        std::fs::write(&path, "{not json").expect("write corrupt fixture");
+        assert_eq!(load_fallback_at(&path), None);
+        std::fs::write(&path, r#"{"refresh_token":""}"#).expect("write empty fixture");
+        assert_eq!(load_fallback_at(&path), None);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn refresh_classifier_exact_grant_vs_transient() {
+        assert!(matches!(
+            RefreshError::from_body(r#"{"error":"invalid_grant"}"#),
+            RefreshError::InvalidGrant
+        ));
+        assert!(matches!(
+            RefreshError::from_body(
+                r#"{"error":"invalid_grant","error_description":"refresh token revoked"}"#
+            ),
+            RefreshError::InvalidGrant
+        ));
+        for body in [
+            "",
+            "503 Service Unavailable",
+            "token refresh transient: accounts hiccup",
+            "rate-limited: retry after 2s",
+            "quota-exceeded: back off and retry after 30s",
+            "refresh cooling down after recent failure",
+            "unauthorized: token rejected",
+            r#"{"error":"invalid_grant_extra"}"#,
+            r#"{"error_description":"invalid_grant"}"#,
+            r#"{"error":"invalid grant"}"#,
+        ] {
+            match RefreshError::from_body(body) {
+                RefreshError::Transient(message) => {
+                    assert!(
+                        message.starts_with("token refresh transient: "),
+                        "transient prefix missing: {message}"
+                    );
+                }
+                RefreshError::InvalidGrant => panic!("must stay transient: {body}"),
+            }
+        }
+        match RefreshError::from_body("") {
+            RefreshError::Transient(message) => assert!(!message.contains("invalid_grant")),
+            RefreshError::InvalidGrant => panic!("empty body stays transient"),
+        }
+        match RefreshError::transport("connection reset".to_string()) {
+            RefreshError::Transient(message) => {
+                assert!(message.contains("connection reset"));
+                assert!(!message.contains("invalid_grant"));
+            }
+            RefreshError::InvalidGrant => panic!("transport stays transient"),
+        }
     }
 
     #[test]
