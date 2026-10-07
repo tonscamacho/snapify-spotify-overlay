@@ -1,4 +1,4 @@
-﻿import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -15,11 +15,6 @@ const MemoVisualizerPane = memo(VisualizerPane);
 import BrowsePane from "./components/BrowsePane";
 const MemoBrowsePane = memo(BrowsePane);
 import SettingsModal from "./components/SettingsModal";
-import Mp3Player from "./components/Mp3Player";
-import type { Mp3Power } from "./components/Mp3Player";
-import Mp3Wheel, { nextMp3View } from "./components/Mp3Wheel";
-import { loadOverlayMode, parseOverlayMode, saveOverlayMode } from "./lib/overlayMode";
-import type { Mp3Settings } from "./lib/overlayMode";
 import {
   CursorIcon,
   EyeIcon,
@@ -135,6 +130,7 @@ const HANDLE_LABELS: Record<Handle, string> = {
   se: "bottom right corner",
   sw: "bottom left corner",
 };
+
 /** Arrow-key nudge step for keyboard move/resize, in logical px. */
 const KB_STEP = 8;
 
@@ -228,86 +224,6 @@ export default function App() {
   const [stream, setStream] = useState<StreamSettings>(() => loadStreamSettings());
   // True once a pause outlasts STREAM_HIDE_DELAY_MS; resume clears it.
   const [streamHidden, setStreamHidden] = useState(false);
-  const [overlayMode, setOverlayMode] = useState<Mp3Settings>(() => loadOverlayMode());
-  const isMp3 = overlayMode.mode === "mp3";
-  const overlayModeRef = useRef<Mp3Settings>(overlayMode);
-  useEffect(() => {
-    overlayModeRef.current = overlayMode;
-  }, [overlayMode]);
-  const patchOverlayMode = useCallback((patch: Partial<Mp3Settings>) => {
-    const next = parseOverlayMode({ ...overlayModeRef.current, ...patch });
-    overlayModeRef.current = next;
-    saveOverlayMode(next);
-    setOverlayMode(next);
-  }, []);
-  const exitMp3ToClassic = useCallback(() => {
-    const next = parseOverlayMode({ ...overlayModeRef.current, mode: "classic" });
-    overlayModeRef.current = next;
-    saveOverlayMode(next);
-    setOverlayMode(next);
-  }, []);
-  const exitMp3Ref = useRef(() => {});
-  useEffect(() => {
-    exitMp3Ref.current = exitMp3ToClassic;
-  }, [exitMp3ToClassic]);
-  const cycleMp3View = useCallback(() => {
-    patchOverlayMode({ lcd: nextMp3View(overlayModeRef.current.lcd) });
-  }, [patchOverlayMode]);
-  const [mp3Power, setMp3Power] = useState<Mp3Power>("on");
-  const [mp3Locked, setMp3Locked] = useState(false);
-  const [volArmed, setVolArmed] = useState(false);
-  const volTimer = useRef(0);
-  const mp3CardRef = useRef<HTMLDivElement | null>(null);
-  const preMp3Focus = useRef<Element | null>(null);
-  const powerTimer = useRef(0);
-  useEffect(() => {
-    return () => {
-      if (volTimer.current) window.clearTimeout(volTimer.current);
-      if (powerTimer.current) window.clearTimeout(powerTimer.current);
-    };
-  }, []);
-  useEffect(() => {
-    if (isMp3) {
-      preMp3Focus.current = document.activeElement;
-      setMp3Power(overlayMode.motion ? "boot" : "on");
-      setMp3Locked(false);
-      setVolArmed(false);
-      if (powerTimer.current) window.clearTimeout(powerTimer.current);
-      if (overlayMode.motion) {
-        powerTimer.current = window.setTimeout(() => setMp3Power("on"), 600);
-      }
-      const t = window.setTimeout(() => mp3CardRef.current?.focus(), 0);
-      return () => {
-        window.clearTimeout(t);
-        if (powerTimer.current) window.clearTimeout(powerTimer.current);
-      };
-    } else {
-      setMp3Power("on");
-      setMp3Locked(false);
-      setVolArmed(false);
-      if (preMp3Focus.current instanceof HTMLElement) {
-        preMp3Focus.current.focus();
-      }
-      preMp3Focus.current = null;
-      return undefined;
-    }
-  }, [isMp3, overlayMode.motion]);
-  const armVol = useCallback(() => {
-    if (mp3Locked) return;
-    setVolArmed(true);
-    if (volTimer.current) window.clearTimeout(volTimer.current);
-    volTimer.current = window.setTimeout(() => setVolArmed(false), 1500);
-  }, [mp3Locked]);
-  const powerOffMp3 = useCallback(() => {
-    if (!overlayModeRef.current || overlayModeRef.current.mode !== "mp3") return;
-    if (!overlayModeRef.current.motion) {
-      exitMp3Ref.current();
-      return;
-    }
-    setMp3Power("goodbye");
-    if (powerTimer.current) window.clearTimeout(powerTimer.current);
-    powerTimer.current = window.setTimeout(() => exitMp3Ref.current(), 500);
-  }, []);
   // Bounded layout-undo stack (cap LAYOUT_UNDO_DEPTH). Snapshots are pushed
   // before geometry-changing ops; Ctrl+Z while editing pops the last.
   const [undoStack, setUndoStack] = useState<LayoutUndoEntry[]>([]);
@@ -336,8 +252,6 @@ export default function App() {
       return false;
     }
   });
-  const effInteractive = isMp3 ? true : interactive;
-  const effEditing = isMp3 ? false : editing;
   const [visible, setVisible] = useState(true);
   const [toasts, setToasts] = useState<Array<{ id: number; kind: "success" | "info" | "error"; text: string }>>([]);
   const [tier, setTier] = useState<"premium" | "free">("premium");
@@ -1020,17 +934,13 @@ export default function App() {
   // Resume restores instantly. CSS-only via data-stream on .app; the Rust
   // visibility truth (toggle_visibility) is never touched.
   useEffect(() => {
-    if (isMp3) {
-      setStreamHidden(false);
-      return;
-    }
     if (!stream.hideOnPause || !loggedIn || snap.isPlaying) {
       setStreamHidden(false);
       return;
     }
     const t = window.setTimeout(() => setStreamHidden(true), STREAM_HIDE_DELAY_MS);
     return () => window.clearTimeout(t);
-  }, [stream.hideOnPause, loggedIn, snap.isPlaying, snap.track?.id, isMp3]);
+  }, [stream.hideOnPause, loggedIn, snap.isPlaying, snap.track?.id]);
 
   useEffect(() => {
     queueVisibleRef.current = layout.some((p) => p.type === "queue" && p.visible);
@@ -1059,7 +969,7 @@ export default function App() {
   // Visibility (true hide/show) is a separate global action that hides the
   // window entirely.
   useEffect(() => {
-    const passive = loggedIn && !effInteractive && !effEditing && !settingsOpen;
+    const passive = loggedIn && !interactive && !editing && !settingsOpen;
     void reportOverlayMode(!passive);
     if (passive) {
       void getCurrentWindow().setIgnoreCursorEvents(true).catch(() => {});
@@ -1070,7 +980,7 @@ export default function App() {
     } catch {
       // Private mode. Prefs last the session.
     }
-  }, [loggedIn, interactive, settingsOpen, editing, effInteractive, effEditing]);
+  }, [loggedIn, interactive, settingsOpen, editing]);
 
   // Hit regions follow the visible UI so empty stage pixels stay
   // click-through even while interactive. Dirty-rect diffing lives in
@@ -1091,7 +1001,7 @@ export default function App() {
 
   useEffect(() => {
     scheduleRegionReport();
-  }, [layout, preset, interactive, editing, settingsOpen, toasts, loggedIn, uiScale, visible, isMp3, scheduleRegionReport]);
+  }, [layout, preset, interactive, editing, settingsOpen, toasts, loggedIn, uiScale, visible, scheduleRegionReport]);
 
   // Runtime twin of the boot clamp. An OS shrink after boot (game
   // resolution switch, un-maximize/restore, monitor hop — the windowed-game
@@ -1160,9 +1070,9 @@ export default function App() {
   }, [interactive]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Bare Esc exits edit first, then settings: one exit rule.
       if (e.key === "Escape" && !e.ctrlKey && !e.altKey && !e.metaKey) {
         if (settingsOpenRef.current) closeSettings();
-        else if (overlayModeRef.current.mode === "mp3") exitMp3Ref.current();
         else if (editingRef.current) setEditing(false);
         else if (interactiveRef.current) setInteractive(false);
         return;
@@ -1185,7 +1095,6 @@ export default function App() {
           e.key === "ArrowDown")
       ) {
         if (settingsOpenRef.current) return;
-        if (overlayModeRef.current.mode === "mp3") return;
         if (!editingRef.current && !interactiveRef.current) return;
         e.preventDefault();
         keyboardGeometryRef.current(e.shiftKey ? "resize" : "move", e.key);
@@ -1195,7 +1104,6 @@ export default function App() {
       // geometry snapshot. Guarded to edit mode so game-time chords pass.
       if (
         editingRef.current &&
-        overlayModeRef.current.mode !== "mp3" &&
         (e.ctrlKey || e.metaKey) &&
         !e.altKey &&
         !e.shiftKey &&
@@ -1219,6 +1127,17 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const onContextMenu = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.("input, textarea, select, [contenteditable]")) return;
+      if (t?.isContentEditable) return;
+      e.preventDefault();
+    };
+    window.addEventListener("contextmenu", onContextMenu);
+    return () => window.removeEventListener("contextmenu", onContextMenu);
   }, []);
 
   // Serialized transport: one in-flight slot. A second next/prev while one
@@ -2359,6 +2278,7 @@ export default function App() {
       <section
         key={`${preset}:${pane.id}`}
         className={`pane${editing ? " editing" : ""}`}
+        onContextMenu={suppressContextMenu}
         data-pane={pane.type}
         data-pane-id={pane.id}
         data-density={density}
@@ -2558,9 +2478,17 @@ export default function App() {
           "--overlay-glass": overlayColorToRgba(overlayColor, overlayGlassAlpha),
         } as React.CSSProperties);
 
+  const suppressContextMenu = useCallback((e: React.MouseEvent) => {
+    const t = e.target as HTMLElement | null;
+    if (t?.closest?.("input, textarea, select, [contenteditable]")) return;
+    if (t?.isContentEditable) return;
+    e.preventDefault();
+  }, []);
+
   return (
     <div
       className="app"
+      onContextMenu={suppressContextMenu}
       data-theme={theme}
       data-surface={surface}
       data-corners={corners}
@@ -2568,10 +2496,7 @@ export default function App() {
       style={overlayStyle}
       data-narrow={stageNarrow ? "true" : undefined}
       data-short={stageShort ? "true" : undefined}
-      data-overlay-mode={isMp3 ? "mp3" : undefined}
-      data-variant={isMp3 ? overlayMode.variant : undefined}
-      data-motion={isMp3 && !overlayMode.motion ? "off" : undefined}
-      data-stream={!isMp3 && streamHidden ? (stream.dimInstead ? "dimmed" : "hidden") : undefined}
+      data-stream={streamHidden ? (stream.dimInstead ? "dimmed" : "hidden") : undefined}
     >
       {!loggedIn ? (
         <div className="gate">
@@ -2591,6 +2516,7 @@ export default function App() {
         <div style={{ zoom: uiScale } as React.CSSProperties}>
           <div
             className={`stage${stageNarrow ? " stage-narrow" : ""}${stageShort ? " stage-short" : ""}`}
+            onContextMenu={suppressContextMenu}
             onPointerMove={onStageMove}
             onPointerUp={onStageUp}
             onPointerCancel={onStageUp}
@@ -2603,138 +2529,19 @@ export default function App() {
               }
             }}
           >
-            {isMp3 ? (
-              <div
-                ref={mp3CardRef}
-                className="mp3-stage"
-                tabIndex={-1}
-                role="region"
-                aria-label="MP3 player"
-              >
-                <div className="mp3-player">
-                  <Mp3Player
-                    snapshot={snap}
-                    progressMs={progressMs}
-                    busyPrev={busyPrev}
-                    busyPlayPause={busyPlayPause}
-                    busyNext={busyNext}
-                    pendingAction={pendingAction}
-                    tier={tier}
-                    degraded={degradedUi}
-                    variant={overlayMode.variant}
-                    lcd={overlayMode.lcd}
-                    motion={overlayMode.motion}
-                    power={mp3Power}
-                    locked={mp3Locked}
-                    onPlay={() => {
-                      if (mp3Locked || tier === "free") return;
-                      playCb();
-                    }}
-                    onPause={() => {
-                      if (mp3Locked) return;
-                      pauseCb();
-                    }}
-                    onNext={() => {
-                      if (mp3Locked || tier === "free" || busyNext) return;
-                      nextCb();
-                    }}
-                    onPrev={() => {
-                      if (mp3Locked || tier === "free" || busyPrev) return;
-                      prevCb();
-                    }}
-                    onSeek={(ms: number) => {
-                      if (mp3Locked || tier === "free") return;
-                      seekCb(ms);
-                    }}
-                    onVolume={(v: number) => {
-                      if (mp3Locked || tier === "free") return;
-                      volumeCb(v);
-                    }}
-                    onShuffle={() => {
-                      if (mp3Locked || tier === "free") return;
-                      shuffleCb();
-                    }}
-                    onRepeat={() => {
-                      if (mp3Locked || tier === "free") return;
-                      repeatCb();
-                    }}
-                    onRetry={retryPlayerCb}
-                  />
-                  <Mp3Wheel
-                    onPrev={() => {
-                      if (mp3Locked) return;
-                      if (volArmed) {
-                        if (tier === "free") return;
-                        const base = typeof snap.volume === "number" ? snap.volume : 50;
-                        const next = Math.min(100, Math.max(0, Math.round(base - 5)));
-                        volumeCb(next);
-                        if (volTimer.current) window.clearTimeout(volTimer.current);
-                        volTimer.current = window.setTimeout(() => setVolArmed(false), 1500);
-                        return;
-                      }
-                      if (tier === "free" || busyPrev) return;
-                      prevCb();
-                    }}
-                    onNext={() => {
-                      if (mp3Locked) return;
-                      if (volArmed) {
-                        if (tier === "free") return;
-                        const base = typeof snap.volume === "number" ? snap.volume : 50;
-                        const next = Math.min(100, Math.max(0, Math.round(base + 5)));
-                        volumeCb(next);
-                        if (volTimer.current) window.clearTimeout(volTimer.current);
-                        volTimer.current = window.setTimeout(() => setVolArmed(false), 1500);
-                        return;
-                      }
-                      if (tier === "free" || busyNext) return;
-                      nextCb();
-                    }}
-                    onMenu={() => {
-                      if (mp3Locked) return;
-                      cycleMp3View();
-                    }}
-                    onVol={armVol}
-                    onPlayPause={() => {
-                      if (mp3Locked) return;
-                      if (snap.isPlaying) {
-                        if (busyPlayPause) return;
-                        pauseCb();
-                      } else {
-                        if (tier === "free" || busyPlayPause) return;
-                        playCb();
-                      }
-                    }}
-                    onCenterHold={powerOffMp3}
-                    onMenuHold={() => {
-                      setMp3Locked((v: boolean) => !v);
-                      setVolArmed(false);
-                    }}
-                    disabled={false}
-                    variant={overlayMode.variant}
-                    volArmed={volArmed}
-                    playing={snap.isPlaying}
-                    motion={overlayMode.motion}
-                    size={140}
-                  />
-                </div>
-              </div>
-            ) : (
-              <>
-                {layout.map(renderPane)}
-                {guides.v.map((x) => (
-                  <div key={`v${x}`} className="guide-v" style={{ left: x }} />
-                ))}
-                {guides.h.map((y) => (
-                  <div key={`h${y}`} className="guide-h" style={{ top: y }} />
-                ))}
-              </>
-            )}
+            {layout.map(renderPane)}
+            {guides.v.map((x) => (
+              <div key={`v${x}`} className="guide-v" style={{ left: x }} />
+            ))}
+            {guides.h.map((y) => (
+              <div key={`h${y}`} className="guide-h" style={{ top: y }} />
+            ))}
           </div>
         </div>
       )}
 
-      {(effEditing || effInteractive) && loggedIn && !isMp3 && (
-        <div className="dock" role="toolbar" aria-label="Overlay editor">
+      {(editing || interactive) && loggedIn && (
+        <div className="dock" role="toolbar" aria-label="Overlay editor" onContextMenu={suppressContextMenu}>
           <button
             className="tbtn"
             onClick={toggleVisibility}
@@ -2881,8 +2688,6 @@ export default function App() {
         corners={corners}
         overlayColor={overlayColor}
         onOverlayColor={setOverlayColor}
-        overlayMode={overlayMode}
-        onOverlayMode={patchOverlayMode}
         autostart={autostart}
         interactive={interactive}
         clickToSeek={clickToSeek}
