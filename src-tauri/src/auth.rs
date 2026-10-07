@@ -193,6 +193,7 @@ fn save_refresh_token(app: &AppHandle, refresh: &str) -> Result<(), String> {
         mark_credential_verified();
         if let Some(path) = fallback_path(app) {
             let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(crate::overlay::backup_path_for(&path));
         }
         return Ok(());
     }

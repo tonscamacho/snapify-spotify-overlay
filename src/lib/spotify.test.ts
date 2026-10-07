@@ -295,6 +295,13 @@ describe("session dead signal", () => {
   it("keeps the session for transient refresh and throttle noise", () => {
     expect(isSessionDead("token refresh transient: accounts hiccup")).toBe(false);
     expect(isSessionDead("token refresh transient: 503 Service Unavailable")).toBe(false);
+    // The transient wrapper body can echo an `invalid_grant`-like
+    // substring (Rust classifies `invalid_grant_extra` as Transient):
+    // the prefix is authoritative, so the session stays alive.
+    expect(isSessionDead('token refresh transient: {"error":"invalid_grant_extra"}')).toBe(false);
+    expect(
+      isSessionDead('token refresh transient: {"error":"invalid_grant","error_description":"revoked"}'),
+    ).toBe(false);
     expect(isSessionDead("refresh cooling down after recent failure")).toBe(false);
     expect(isSessionDead("rate-limited: retry after 2s")).toBe(false);
     expect(isSessionDead("quota-exceeded: back off and retry after 30s")).toBe(false);

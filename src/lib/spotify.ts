@@ -222,7 +222,14 @@ export function getRetryAfterSec(input: unknown): number | null {
 }
 
 export function isSessionDead(input: unknown): boolean {
-  const s = messageOf(input).toLowerCase();
+  const raw = messageOf(input);
+  const s = raw.toLowerCase();
+  // Rust wraps every non-InvalidGrant refresh failure as
+  // `token refresh transient: {body}`. The body can echo an
+  // `invalid_grant`-like substring (e.g. `invalid_grant_extra`),
+  // which must not trip the substring check below: the prefix is
+  // authoritative, exactly like the Rust RefreshError enum.
+  if (s.startsWith("token refresh transient:")) return false;
   if (s.includes("not logged in")) return true;
   if (s.includes("session expired")) return true;
   if (s.includes("invalid_grant")) return true;

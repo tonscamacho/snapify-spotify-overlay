@@ -3,7 +3,10 @@ import { stubTauri, commandsNamed, failNext } from "./tauri-mock";
 import { TRACK_NAME } from "./fixtures";
 
 const TRANSIENT_BOOT = "token refresh transient: accounts hiccup";
-const REVOKED_BODY = 'refresh failed: {"error":"invalid_grant","error_description":"revoked"}';
+// Production InvalidGrant surface: Rust RefreshError::InvalidGrant reaches
+// the UI through get_fresh_token as EXPIRED_MSG. The backend never emits a
+// `refresh failed: {...}` string, so revoked cases fail get_fresh_token
+// with EXPIRED_MSG instead of forging that legacy shape through get_player.
 const EXPIRED_MSG = "Session expired. Please login again.";
 
 async function bootWithFault(page: Page, cmd: string, message: string, times: number) {
@@ -64,7 +67,9 @@ test("expired session at boot opens a clean login prompt", async ({ page }) => {
 });
 
 test("revoked session at boot opens the login gate", async ({ page }) => {
-  await bootWithFault(page, "get_player", REVOKED_BODY, 50);
+  // A revoked refresh token is an InvalidGrant: the backend kills the
+  // session and get_fresh_token rejects with the production EXPIRED_MSG.
+  await bootWithFault(page, "get_fresh_token", EXPIRED_MSG, 50);
 
   const gate = page.locator(".gate");
   await expect(gate).toBeVisible({ timeout: 10000 });
@@ -98,7 +103,7 @@ test("transient mid-run never opens the gate, revoked mid-run does", async ({ pa
   await expect(page.locator(".gate")).toHaveCount(0);
   await expect(player.getByText(TRACK_NAME)).toBeVisible();
 
-  await failNext(page, "get_player", REVOKED_BODY, 50);
+  await failNext(page, "get_fresh_token", EXPIRED_MSG, 50);
   await emitAuthChanged(page);
   const gate = page.locator(".gate");
   await expect(gate).toBeVisible({ timeout: 10000 });
