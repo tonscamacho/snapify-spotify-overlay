@@ -13,6 +13,7 @@ export interface StubTauriOptions {
   layout?: Record<string, unknown> | null;
   /** Seeds snapify-interact so the dock renders. Defaults to true. */
   interact?: boolean;
+  authStatus?: { logged_in: boolean; awaiting_callback: boolean } | null;
 }
 
 /**
@@ -27,12 +28,14 @@ function buildInitScript(
   fixtures: VerifyFixtures,
   layout: Record<string, unknown> | null,
   interact: boolean,
+  authSeed: { logged_in: boolean; awaiting_callback: boolean } | null,
 ): string {
   const fx = JSON.stringify(fixtures).replace(/</g, "\\u003c");
   const seedLayout = layout ? JSON.stringify(layout).replace(/</g, "\\u003c") : "null";
+  const seedAuth = authSeed ? JSON.stringify(authSeed).replace(/</g, "\\u003c") : "null";
   return (
     "(" +
-    "function(FIXTURES, SEED_LAYOUT, SEED_INTERACT) {\n" +
+    "function(FIXTURES, SEED_LAYOUT, SEED_INTERACT, SEED_AUTH) {\n" +
     "  try {\n" +
     "    localStorage.setItem('snapify-interact', SEED_INTERACT ? '1' : '0');\n" +
     "    if (SEED_LAYOUT) localStorage.setItem('snapify-layout-v3', JSON.stringify(SEED_LAYOUT));\n" +
@@ -84,6 +87,10 @@ function buildInitScript(
   "  var lyricsCache = { entries: 3, bytes: 4096 };\n" +
     "  function emptyPage() { return { items: [], total: 0 }; }\n" +
     "  var mockFaults = {};\n" +
+    "  var mockAuthStatus = SEED_AUTH;\n" +
+    "  window.__MOCK_AUTH_STATUS__ = function (s) {\n" +
+    "    mockAuthStatus = s;\n" +
+    "  };\n" +
     "  window.__MOCK_FAIL_NEXT__ = function (cmd, error, times) {\n" +
     "    mockFaults[cmd] = { error: error, remaining: times || 1 };\n" +
     "  };\n" +
@@ -109,7 +116,8 @@ function buildInitScript(
     "      await new Promise(function (r) { setTimeout(r, dl.ms); });\n" +
     "    }\n" +
     "    switch (cmd) {\n" +
-    "      case 'auth_status': return { logged_in: true, awaiting_callback: false };\n" +
+    "      case 'auth_status': return mockAuthStatus || { logged_in: true, awaiting_callback: false };\n" +
+    "      case 'credential_status': return { stored: true, location: 'keyring', verified_at: null, keyring_ok: true };\n" +
     "      case 'start_login': return 'https://example.invalid/authorize';\n" +
     "      case 'logout': return null;\n" +
     "      case 'get_fresh_token': return 'fixture-token';\n" +
@@ -246,6 +254,8 @@ function buildInitScript(
     seedLayout +
     "," +
     (interact ? "true" : "false") +
+    "," +
+    seedAuth +
     ");"
   );
 }
@@ -257,7 +267,9 @@ function buildInitScript(
  */
 export async function stubTauri(page: Page, opts: StubTauriOptions = {}): Promise<VerifyFixtures> {
   const fixtures = buildFixtures(opts.fixtures);
-  await page.addInitScript(buildInitScript(fixtures, opts.layout ?? null, opts.interact ?? true));
+  await page.addInitScript(
+    buildInitScript(fixtures, opts.layout ?? null, opts.interact ?? true, opts.authStatus ?? null),
+  );
   // index.html references the real SDK tag; keep the suite hermetic by
   // serving a stub that fires the ready callback. The injected
   // <script data-spotify-sdk> tag from the init script does not survive HTML
