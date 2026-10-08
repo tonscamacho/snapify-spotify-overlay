@@ -112,7 +112,7 @@ async function expectRadii(page, paneRadius: number) {
 
 for (const w of [280, 360]) {
   test(`chrome census at ${w}px: header-only, zero spill, painted radii`, async ({ page }) => {
-    await stubTauri(page, { layout: layoutFor(w) });
+    await stubTauri(page, { layout: layoutFor(w), edit: true });
     await page.goto("/");
     await expect(page.locator('section[data-pane="player"]').getByText(TRACK_NAME).first()).toBeAttached();
     await collapse(page, "lyrics");
@@ -140,6 +140,7 @@ for (const w of [280, 360]) {
 test("chrome census on narrow stage", async ({ page }) => {
   await page.setViewportSize({ width: 460, height: 800 });
   await stubTauri(page, {
+    edit: true,
     layout: {
       version: 3,
       preset: "custom",

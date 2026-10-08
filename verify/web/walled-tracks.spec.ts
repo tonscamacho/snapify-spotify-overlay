@@ -62,6 +62,8 @@ function itemsOf(tracks: typeof FRIEND_TRACKS) {
 async function bootFriendPlaylist(page: Page, fixtures?: Partial<VerifyFixtures>) {
   const seed = buildFixtures();
   await stubTauri(page, {
+    // Edit mode is seeded: the pane chips live in the edit-only dock.
+    edit: true,
     fixtures: {
       queue: {
         ...(seed.queue as Record<string, unknown>),

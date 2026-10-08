@@ -3,7 +3,7 @@ import { stubTauri, commandsNamed, delayNext, failNext } from "./tauri-mock";
 import { TRACK_NAME, buildFixtures } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
-  await stubTauri(page);
+  await stubTauri(page, { edit: true });
   await page.goto("/");
 });
 

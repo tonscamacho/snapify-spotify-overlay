@@ -161,7 +161,7 @@ test("reduced-motion kills the mini marquee", async ({ page }) => {
 });
 
 test("mini volume slider drives the set_volume + curved-gain contract", async ({ page }) => {
-  await stubTauri(page, { layout: layoutFor(300) });
+  await stubTauri(page, { layout: layoutFor(300), edit: true });
   await page.goto("/");
   const player = page.locator('section[data-pane="player"]');
   const mini = player.locator(".mini-row");

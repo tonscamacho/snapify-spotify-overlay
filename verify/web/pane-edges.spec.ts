@@ -20,7 +20,7 @@ const STRANDED = {
 };
 
 test.beforeEach(async ({ page }) => {
-  await stubTauri(page, { layout: STRANDED });
+  await stubTauri(page, { layout: STRANDED, edit: true });
   await page.goto("/");
 });
 
@@ -41,7 +41,7 @@ test("boot pulls a stranded pane fully on-screen", async ({ page }) => {
 });
 
 test("dragged pane cannot leave the east edge", async ({ page }) => {
-  await page.getByRole("button", { name: "Toggle edit lock" }).click();
+  // Edit mode is seeded (pane drags are edit-only): no toggle needed.
   const pane = page.locator('section[data-pane="player"]');
   await expect(pane).toBeVisible();
   const handle = pane.locator(".pane-handle");

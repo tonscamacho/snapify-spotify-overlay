@@ -11,8 +11,16 @@ export interface StubTauriOptions {
   fixtures?: Partial<VerifyFixtures>;
   /** When set, seeded into localStorage as snapify-layout-v3 before boot. */
   layout?: Record<string, unknown> | null;
-  /** Seeds snapify-interact so the dock renders. Defaults to true. */
+  /** Seeds snapify-interact (panes stay interactive). Defaults to true. */
   interact?: boolean;
+  /** Seeds snapify-edit: the editor dock/notch render only while editing.
+   *  Defaults to false; specs that drive dock controls pass edit: true. */
+  edit?: boolean;
+  /** Seeds snapify-notch-hover. Defaults to false so an edit-seeded dock
+   *  stays visible without hover choreography; the autohide-ON path is
+   *  covered by notch-hover.spec.ts (plus the layout.ts default-true unit
+   *  test for the missing-key default). */
+  notchHover?: boolean;
   authStatus?: { logged_in: boolean; awaiting_callback: boolean } | null;
 }
 
@@ -28,6 +36,8 @@ function buildInitScript(
   fixtures: VerifyFixtures,
   layout: Record<string, unknown> | null,
   interact: boolean,
+  edit: boolean,
+  notchHover: boolean,
   authSeed: { logged_in: boolean; awaiting_callback: boolean } | null,
 ): string {
   const fx = JSON.stringify(fixtures).replace(/</g, "\\u003c");
@@ -35,9 +45,11 @@ function buildInitScript(
   const seedAuth = authSeed ? JSON.stringify(authSeed).replace(/</g, "\\u003c") : "null";
   return (
     "(" +
-    "function(FIXTURES, SEED_LAYOUT, SEED_INTERACT, SEED_AUTH) {\n" +
+    "function(FIXTURES, SEED_LAYOUT, SEED_INTERACT, SEED_EDIT, SEED_NOTCH, SEED_AUTH) {\n" +
     "  try {\n" +
     "    localStorage.setItem('snapify-interact', SEED_INTERACT ? '1' : '0');\n" +
+    "    localStorage.setItem('snapify-edit', SEED_EDIT ? '1' : '0');\n" +
+    "    localStorage.setItem('snapify-notch-hover', SEED_NOTCH ? '1' : '0');\n" +
     "    if (SEED_LAYOUT) localStorage.setItem('snapify-layout-v3', JSON.stringify(SEED_LAYOUT));\n" +
     "  } catch (e) {}\n" +
     "  window.__INVOKED__ = [];\n" +
@@ -255,6 +267,10 @@ function buildInitScript(
     "," +
     (interact ? "true" : "false") +
     "," +
+    (edit ? "true" : "false") +
+    "," +
+    (notchHover ? "true" : "false") +
+    "," +
     seedAuth +
     ");"
   );
@@ -268,7 +284,14 @@ function buildInitScript(
 export async function stubTauri(page: Page, opts: StubTauriOptions = {}): Promise<VerifyFixtures> {
   const fixtures = buildFixtures(opts.fixtures);
   await page.addInitScript(
-    buildInitScript(fixtures, opts.layout ?? null, opts.interact ?? true, opts.authStatus ?? null),
+    buildInitScript(
+      fixtures,
+      opts.layout ?? null,
+      opts.interact ?? true,
+      opts.edit ?? false,
+      opts.notchHover ?? false,
+      opts.authStatus ?? null,
+    ),
   );
   // index.html references the real SDK tag; keep the suite hermetic by
   // serving a stub that fires the ready callback. The injected

@@ -3,7 +3,7 @@ import { stubTauri, commandsNamed, invokedCommands } from "./tauri-mock";
 import { MINIMAL_LAYOUT } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
-  await stubTauri(page, { interact: true });
+  await stubTauri(page, { interact: true, edit: true });
   await page.goto("/");
 });
 
@@ -71,7 +71,7 @@ test("empty-stage clicks hit nothing interactive, even with the coach pill up", 
     for (const pt of picks) {
       const el = document.elementFromPoint(pt.x, pt.y) as HTMLElement | null;
       if (!el) continue;
-      if (el.closest("section.pane, .dock, .modal, .toast, .hint-chip, .gate-card")) continue;
+      if (el.closest("section.pane, .dock, .notch, .notch-strip, .modal, .toast, .hint-chip, .gate-card")) continue;
       return { x: pt.x, y: pt.y, tag: el.tagName, cls: el.className?.toString?.() ?? "" };
     }
     return null;
@@ -89,10 +89,10 @@ test("empty-stage clicks hit nothing interactive, even with the coach pill up", 
 // dirty-rect diff skips unchanged resolves, so a drag reports at most
 // ~8/s by construction (1 per 120 ms window).
 test("region reports stay under 10 per second during a drag", async ({ page }) => {
-  await stubTauri(page, { layout: MINIMAL_LAYOUT });
+  await stubTauri(page, { layout: MINIMAL_LAYOUT, edit: true });
   await page.goto("/");
   await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
-  await page.getByRole("button", { name: "Toggle edit lock" }).click();
+  // Edit mode is seeded (the dock is edit-only): no toggle needed.
 
   const pane = page.locator('section[data-pane="player"]');
   await expect(pane).toBeVisible();
@@ -179,7 +179,7 @@ test("boot timing mark is present through first region report", async ({ page })
 // Measured 2026-09-19: pane {"x":31,"y":31,"w":442,"h":307} == region
 // {"x":31,"y":31,"w":442,"h":307} (exact, <=1px tolerance) — zoom kept.
 test("130% UI scale keeps reported regions aligned with panes", async ({ page }) => {
-  await stubTauri(page, { layout: MINIMAL_LAYOUT });
+  await stubTauri(page, { layout: MINIMAL_LAYOUT, edit: true });
   await page.goto("/");
   await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
 

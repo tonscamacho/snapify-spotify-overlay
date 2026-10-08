@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { stubTauri } from "./tauri-mock";
 
 test.beforeEach(async ({ page }) => {
-  await stubTauri(page);
+  await stubTauri(page, { edit: true });
   await page.goto("/");
 });
 

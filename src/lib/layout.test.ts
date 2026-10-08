@@ -13,14 +13,17 @@ import {
   isCompactPane,
   LAYOUT_UNDO_DEPTH,
   loadSceneLayout,
+  loadNotchHover,
   loadStreamSettings,
   migrateV3ToV4,
   newPaneForType,
+  NOTCH_HOVER_KEY,
   PANE_MIN,
   PLAYER_FULL_H,
   pushLayoutUndo,
   revealPaneType,
   saveSceneLayout,
+  saveNotchHover,
   saveStreamSettings,
   SCENE_PRESETS,
   setActiveSlot,
@@ -637,5 +640,31 @@ describe("stream settings", () => {
     expect(store.has("snapify-stream")).toBe(true);
     expect(store.has("snapify-layout-v3")).toBe(false);
     expect(loadStreamSettings()).toEqual({ hideOnPause: true, dimInstead: true });
+  });
+});
+
+describe("notch hover setting", () => {
+  it("defaults to autohide-on when nothing is stored", () => {
+    stubStorage();
+    expect(loadNotchHover()).toBe(true);
+  });
+
+  it("round-trips the toggle under the snapify-notch-hover key", () => {
+    expect(NOTCH_HOVER_KEY).toBe("snapify-notch-hover");
+    const store = stubStorage();
+    saveNotchHover(false);
+    expect(store.get("snapify-notch-hover")).toBe("0");
+    expect(store.has("snapify-layout-v3")).toBe(false);
+    expect(loadNotchHover()).toBe(false);
+    saveNotchHover(true);
+    expect(store.get("snapify-notch-hover")).toBe("1");
+    expect(loadNotchHover()).toBe(true);
+  });
+
+  it("treats a missing key as on and only an explicit 0 as off", () => {
+    stubStorage({ "snapify-notch-hover": "1" });
+    expect(loadNotchHover()).toBe(true);
+    stubStorage({ "snapify-notch-hover": "0" });
+    expect(loadNotchHover()).toBe(false);
   });
 });

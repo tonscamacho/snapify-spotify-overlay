@@ -12,6 +12,11 @@ interface OverlayRect {
 const SELECTORS = [
   "section.pane",
   ".dock",
+  // Edit-only notch: the collapsed dock pill plus its full-width top-edge
+  // hover strip. Both render only while editing with notch autohide on, so
+  // passive mode is unaffected (Rust ignores regions unless interactive).
+  ".notch",
+  ".notch-strip",
   ".modal",
   ".gate-card",
   ".toasts .toast",
