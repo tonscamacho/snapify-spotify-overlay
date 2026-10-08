@@ -218,6 +218,26 @@ pub(crate) fn backup_path_for(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// Restricts a credential-adjacent file to owner-only access.
+///
+/// Unix: chmod 0600. Windows: the refresh-token fallback already lives under
+/// the user-only `app_local_data_dir` (%APPDATA%/<app>), whose default ACLs
+/// grant access only to the current user plus SYSTEM/Administrators, so no
+/// extra ACL call is made here (no such Windows ACL pattern exists in this
+/// codebase; comment documents the assumption). Best effort: a hardening
+/// miss never blocks the credential write itself.
+fn restrict_file_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
 /// Atomically replaces `path` with `text`: write a temp file in the SAME
 /// directory, keep one backup of the previous payload, then rename over.
 /// The rename is atomic on one volume, so readers never see a half-written
@@ -233,10 +253,13 @@ pub(crate) fn atomic_write_json(path: &Path, text: &str) -> std::io::Result<()> 
         let bak = backup_path_for(path);
         let _ = std::fs::remove_file(&bak);
         let _ = std::fs::copy(path, &bak);
+        restrict_file_permissions(&bak);
     }
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, text)?;
+    restrict_file_permissions(&tmp);
     std::fs::rename(&tmp, path)?;
+    restrict_file_permissions(path);
     Ok(())
 }
 
@@ -277,7 +300,9 @@ pub(crate) fn read_json_guarded(
     }
     let tmp = path.with_extension("tmp");
     if std::fs::write(&tmp, &btext).is_ok() {
+        restrict_file_permissions(&tmp);
         let _ = std::fs::rename(&tmp, path);
+        restrict_file_permissions(path);
     }
     Some(btext)
 }
@@ -792,5 +817,45 @@ mod tests {
         std::fs::write(&path, "{bad").unwrap();
         std::fs::write(backup_path_for(&path), "{alsobad").unwrap();
         assert!(read_json_guarded(&path, parse_ok_json).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_restricts_owner_only_perms() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = test_dir("perms");
+        let path = dir.join("cred.json");
+        atomic_write_json(&path, r#"{"a":1}"#).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "fallback primary must be owner-only"
+        );
+        atomic_write_json(&path, r#"{"a":2}"#).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "rewritten fallback must stay owner-only"
+        );
+        assert_eq!(
+            std::fs::metadata(backup_path_for(&path))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600,
+            "backup copy must be owner-only too"
+        );
+        // The temp file is renamed over the primary, so no stray remains.
+        assert!(!path.with_extension("tmp").exists());
+        // Guarded-restore path re-applies the same restriction.
+        std::fs::write(&path, "{corrupt").unwrap();
+        let back = read_json_guarded(&path, parse_ok_json).expect("backup rescue");
+        assert_eq!(back, r#"{"a":1}"#);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "restored primary must stay owner-only"
+        );
     }
 }

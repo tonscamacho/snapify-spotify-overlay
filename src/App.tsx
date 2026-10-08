@@ -56,10 +56,12 @@ import {
   defaultSceneLayoutFor,
   getPaneMin,
   isCompactPane,
+  loadNotchHover,
   loadSceneLayout,
   loadStreamSettings,
   pushLayoutUndo,
   revealPaneType,
+  saveNotchHover,
   saveSceneLayout,
   saveStreamSettings,
   setActiveSlot,
@@ -108,6 +110,11 @@ const EMPTY_SNAP: PlayerSnapshot = {
 };
 
 const PRESET_ORDER = ["minimal", "full", "lyrics", "spotlight"];
+// Boot credential backoff: the OS keyring can be locked/busy for seconds at
+// autostart (--minimized), and the network may be down. get_fresh_token
+// failures that are not session-dead retry across ~11 s before giving up;
+// a revoked refresh (isSessionDead) still gates on the first failure.
+const BOOT_FRESH_TOKEN_BACKOFF_MS = [300, 700, 1500, 3000, 6000];
 const PANE_TYPES: PaneType[] = ["player", "lyrics", "queue", "visualizer", "browse"];
 type Handle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 const HANDLES: Handle[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
@@ -252,6 +259,13 @@ export default function App() {
       return false;
     }
   });
+  // Notch autohide (snapify-notch-hover key, default on): while editing the
+  // full dock hides behind a top-center notch until the cursor reaches the
+  // top edge. Off keeps the dock pinned while editing.
+  const [notchHover, setNotchHover] = useState(() => loadNotchHover());
+  // True while the collapsed notch is expanded to the full dock. Only
+  // meaningful while editing with notchHover on; forced false otherwise.
+  const [notchRevealed, setNotchRevealed] = useState(false);
   const [visible, setVisible] = useState(true);
   const [toasts, setToasts] = useState<Array<{ id: number; kind: "success" | "info" | "error"; text: string }>>([]);
   const [tier, setTier] = useState<"premium" | "free">("premium");
@@ -768,7 +782,7 @@ export default function App() {
       setLyrics({ kind: "idle" });
       return;
     }
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt <= BOOT_FRESH_TOKEN_BACKOFF_MS.length; attempt++) {
       try {
         await api.freshToken();
         break;
@@ -779,18 +793,29 @@ export default function App() {
           syncLoginWindow(false);
           setSnap(EMPTY_SNAP);
           setLyrics({ kind: "idle" });
+          // The backend clears dead credentials (keyring + fallback file);
+          // consult the status for the log so a revoked-vs-missing split is
+          // visible without ever exposing token material.
+          try {
+            const cs = await api.credentialStatus();
+            console.info(`snapify: boot session dead; credential stored=${cs?.stored ?? false} location=${cs?.location ?? "unknown"}`);
+          } catch {
+          }
           return;
         }
-        if (attempt >= 2) {
+        if (attempt >= BOOT_FRESH_TOKEN_BACKOFF_MS.length) {
           flashErrThrottledAware(m);
           break;
         }
-        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+        await new Promise((r) => setTimeout(r, BOOT_FRESH_TOKEN_BACKOFF_MS[attempt]));
       }
     }
     try {
       const cs = await api.credentialStatus();
-      if (cs && cs.stored && cs.location === "fallback") {
+      console.info(`snapify: boot credential stored=${cs?.stored ?? false} location=${cs?.location ?? "unknown"}`);
+      if (!cs || !cs.stored) {
+        pushToast("error", "Session could not be saved — login will not survive a restart.");
+      } else if (cs.location === "fallback") {
         pushToast("info", "Keychain unavailable — session saved locally.");
       }
     } catch {
@@ -1021,7 +1046,7 @@ export default function App() {
 
   useEffect(() => {
     scheduleRegionReport();
-  }, [layout, preset, interactive, editing, settingsOpen, toasts, loggedIn, uiScale, visible, scheduleRegionReport]);
+  }, [layout, preset, interactive, editing, settingsOpen, toasts, loggedIn, uiScale, visible, notchHover, notchRevealed, scheduleRegionReport]);
 
   // Runtime twin of the boot clamp. An OS shrink after boot (game
   // resolution switch, un-maximize/restore, monitor hop — the windowed-game
@@ -1812,6 +1837,66 @@ export default function App() {
     });
   }, []);
 
+  // Notch autohide toggle (flat-key sibling of the karaoke flag).
+  const toggleNotchHover = useCallback(() => {
+    setNotchHover((v) => {
+      const next = !v;
+      saveNotchHover(next);
+      return next;
+    });
+  }, []);
+
+  // Auto-hide timer: an edge reveal without a dock visit hides again, so a
+  // passing cursor never strands the toolbar open. Entering the dock/notch
+  // clears it; leaving the toolbar hides at once.
+  const notchHideTimer = useRef(0);
+  const clearNotchHideTimer = useCallback(() => {
+    if (notchHideTimer.current) {
+      window.clearTimeout(notchHideTimer.current);
+      notchHideTimer.current = 0;
+    }
+  }, []);
+  const revealNotch = useCallback(() => {
+    setNotchRevealed(true);
+    if (notchHideTimer.current) window.clearTimeout(notchHideTimer.current);
+    notchHideTimer.current = window.setTimeout(() => {
+      notchHideTimer.current = 0;
+      // The dock visit clears this timer on enter; if it fires, the cursor
+      // never arrived, so collapse back to the notch.
+      const over = document.querySelector(".dock:hover, .notch:hover");
+      if (!over) setNotchRevealed(false);
+    }, 5000);
+  }, []);
+  const hideNotch = useCallback(() => {
+    if (notchHideTimer.current) {
+      window.clearTimeout(notchHideTimer.current);
+      notchHideTimer.current = 0;
+    }
+    setNotchRevealed(false);
+  }, []);
+  useEffect(() => () => clearNotchHideTimer(), [clearNotchHideTimer]);
+
+  // Hover-top-to-reveal: while editing with autohide on, the window owns
+  // mouse events (edit mode is interactive), so a cursor reaching the top
+  // ~12 px expands the notch; dropping below the toolbar zone collapses it.
+  // The collapsed notch/strip also fire revealNotch on enter for cursors
+  // arriving over empty (click-through) pixels via the OS region.
+  useEffect(() => {
+    if (!loggedIn || !editing || !notchHover) return;
+    const onMove = (e: MouseEvent) => {
+      if (e.clientY <= 12) revealNotch();
+      else if (e.clientY > 160) hideNotch();
+    };
+    window.addEventListener("mousemove", onMove);
+    return () => window.removeEventListener("mousemove", onMove);
+  }, [loggedIn, editing, notchHover, revealNotch, hideNotch]);
+
+  // The reveal flag is edit+autohide-only state: leaving edit mode or
+  // switching autohide off collapses back immediately.
+  useEffect(() => {
+    if ((!editing || !notchHover) && notchRevealed) setNotchRevealed(false);
+  }, [editing, notchHover, notchRevealed]);
+
   // Queue "Next from" navigation: reveal the browse pane when hidden, then
   // push the playing context so its detail loads through the normal path.
   const openQueueContext = useCallback(
@@ -2560,8 +2645,36 @@ export default function App() {
         </div>
       )}
 
-      {(editing || interactive) && loggedIn && (
-        <div className="dock" role="toolbar" aria-label="Overlay editor" onContextMenu={suppressContextMenu}>
+      {editing && loggedIn && (notchHover && !notchRevealed && !stageNarrow && !stageShort ? (
+        <>
+          <div className="notch-strip" aria-hidden="true" onMouseEnter={revealNotch} />
+          <div
+            className="notch"
+            role="toolbar"
+            aria-label="Editor toolbar, collapsed"
+            onMouseEnter={revealNotch}
+            onMouseLeave={hideNotch}
+            onFocus={revealNotch}
+            onContextMenu={suppressContextMenu}
+          >
+            <button
+              className="notch-hit"
+              aria-label="Show editor toolbar"
+              onClick={revealNotch}
+            >
+              <span className="notch-handle" aria-hidden="true" />
+            </button>
+          </div>
+        </>
+      ) : (
+        <div
+          className="dock"
+          role="toolbar"
+          aria-label="Overlay editor"
+          onContextMenu={suppressContextMenu}
+          onMouseEnter={notchHover ? clearNotchHideTimer : undefined}
+          onMouseLeave={notchHover ? hideNotch : undefined}
+        >
           <button
             className="tbtn"
             onClick={toggleVisibility}
@@ -2649,7 +2762,7 @@ export default function App() {
             <span className="dock-label">Close</span>
           </button>
         </div>
-      )}
+      ))}
 
       {loggedIn && !coachDismissed && (
         <button
@@ -2726,6 +2839,8 @@ export default function App() {
         streamDimInstead={stream.dimInstead}
         onToggleStreamHide={toggleStreamHide}
         onToggleStreamDim={toggleStreamDim}
+        notchHover={notchHover}
+        onToggleNotchHover={toggleNotchHover}
         onUiScale={setUiScale}
         onLyricScale={(v) => {
           const next = Math.min(1.3, Math.max(0.85, v));

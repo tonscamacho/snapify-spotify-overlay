@@ -1217,6 +1217,62 @@ select:focus-visible,
   margin: 0 4px;
 }
 
+/* ---------- editor notch (collapsed dock) ---------- */
+/* Edit-only with notch autohide on: a plain black pill at top-center plus
+   a transparent pill-width top-edge hover strip (same 120px centered pill,
+   capped at 200px). Either hover expands the
+   full .dock; leaving the toolbar (or a short timeout) collapses back.
+   Both unmount when hidden, so pointer-events: auto applies only while
+   visible. z-index sits above panes (dock 200) and below toasts (300). */
+
+.notch-strip {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 120px;
+  max-width: 200px;
+  height: 12px;
+  z-index: 199;
+  pointer-events: auto;
+  background: transparent;
+}
+
+.notch {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 120px;
+  height: 14px;
+  background: #000;
+  border-radius: 0 0 10px 10px;
+  z-index: 201;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.notch-hit {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.notch-handle {
+  width: 40px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
 .chip {
   border: 1px solid transparent;
   background: transparent;
@@ -3069,7 +3125,10 @@ select:focus-visible,
 /* Dock, toasts, and hint (Track A3). Wide defaults are untouched; below
    the narrow/short cutoffs the dock leaves fixed-top for a bottom icon
    row, and toasts/hint split to opposite corners above it so the three
-   never cover each other or the transport. */
+   never cover each other or the transport. Narrow/short also pins the
+   dock: notch autohide is off there (JS gate forces the dock branch) and
+   this display:none is the CSS backstop so a stale notch can never cover
+   the transport or strand the toolbar. */
 .app[data-narrow="true"] .dock,
 .app[data-short="true"] .dock {
   top: auto;
@@ -3079,6 +3138,13 @@ select:focus-visible,
   overflow-x: auto;
   scrollbar-width: none;
   max-width: 94vw;
+}
+
+.app[data-narrow="true"] .notch,
+.app[data-narrow="true"] .notch-strip,
+.app[data-short="true"] .notch,
+.app[data-short="true"] .notch-strip {
+  display: none;
 }
 
 .app[data-narrow="true"] .dock::-webkit-scrollbar,

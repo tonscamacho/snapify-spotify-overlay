@@ -589,6 +589,28 @@ export function saveStreamSettings(s: StreamSettings): void {
   }
 }
 
+/** Notch autohide (flat boolean key, sibling of the karaoke flag): true
+ *  collapses the edit-mode dock behind a top-center notch until the cursor
+ *  reaches the top edge; false keeps the full dock visible while editing.
+ *  On by default so upgrades never add chrome to a running overlay. */
+export const NOTCH_HOVER_KEY = "snapify-notch-hover";
+
+export function loadNotchHover(): boolean {
+  try {
+    return localStorage.getItem(NOTCH_HOVER_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+export function saveNotchHover(on: boolean): void {
+  try {
+    localStorage.setItem(NOTCH_HOVER_KEY, on ? "1" : "0");
+  } catch {
+    // Private mode. Setting lasts the session.
+  }
+}
+
 /** Clamp one pane fully inside an area, shrinking it first when the area
  *  itself is smaller. At full-size areas the per-type content floor holds;
  *  when the stage itself is smaller, yield down to the compact floor (the

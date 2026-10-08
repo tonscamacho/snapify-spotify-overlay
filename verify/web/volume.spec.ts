@@ -3,7 +3,7 @@ import { stubTauri, commandsNamed } from "./tauri-mock";
 import { TRACK_NAME, DEVICE_ID } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
-  await stubTauri(page);
+  await stubTauri(page, { edit: true });
   await page.goto("/");
 });
 

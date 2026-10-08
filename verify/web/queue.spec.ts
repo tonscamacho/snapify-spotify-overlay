@@ -3,7 +3,7 @@ import { stubTauri, commandsNamed, failNext } from "./tauri-mock";
 import { QUEUE_NAMES, TRACK_NAME } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
-  await stubTauri(page);
+  await stubTauri(page, { edit: true });
   await page.goto("/");
 });
 
@@ -86,7 +86,7 @@ function queue25() {
 }
 
 test("25-item queue renders virtualized and scrolls to the last row", async ({ page }) => {
-  await stubTauri(page, { fixtures: { queue: queue25() } });
+  await stubTauri(page, { fixtures: { queue: queue25() }, edit: true });
   await page.goto("/");
   await page.getByTitle("Toggle Queue pane").click();
   const queue = page.locator('section[data-pane="queue"]');

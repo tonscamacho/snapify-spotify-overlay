@@ -3,7 +3,7 @@ import { stubTauri, commandsNamed } from "./tauri-mock";
 import { APP_VERSION, DEVICE_ID, TRACK_PROGRESS_MS, TRACK_URI } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
-  await stubTauri(page);
+  await stubTauri(page, { edit: true });
   await page.goto("/");
 });
 
@@ -244,6 +244,7 @@ test("stale overlay registrations collapse into a single row", async ({ page }) 
   // A previous session left a same-named registration behind: the panel
   // must still show the overlay exactly once.
   await stubTauri(page, {
+    edit: true,
     fixtures: {
       devices: {
         devices: [

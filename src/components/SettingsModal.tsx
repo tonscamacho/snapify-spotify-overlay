@@ -57,6 +57,8 @@ interface Props {
   streamDimInstead: boolean;
   onToggleStreamHide: () => void;
   onToggleStreamDim: () => void;
+  notchHover: boolean;
+  onToggleNotchHover: () => void;
   onUiScale: (v: number) => void;
   onTheme: (v: "dark" | "light" | "sparkles" | "pastel") => void;
   onDensity: (v: Density) => void;
@@ -738,6 +740,19 @@ export default function SettingsModal(p: Props) {
           goes to the game or window below. Press {p.keybinds.toggleInteract},{" "}
           {p.keybinds.toggleEdit}, {p.keybinds.toggleVisibility}, or use the tray to interact again. Mouse
           alone cannot re-enter while passing through.
+        </div>
+        <div className="row">
+          <span>Autohide editor toolbar</span>
+          <input
+            type="checkbox"
+            checked={p.notchHover}
+            aria-label="Autohide editor toolbar"
+            onChange={() => p.onToggleNotchHover()}
+          />
+        </div>
+        <div className="hint">
+          Hides the editor toolbar behind a top notch while editing; hover
+          the top edge to reveal it. Off keeps the full toolbar visible.
         </div>
         <div className="row">
           <span>Click lyric to seek</span>

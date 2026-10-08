@@ -5,6 +5,7 @@ import { buildFixtures, type VerifyFixtures } from "./fixtures";
 async function openPlaylistDetail(page: Page, fixtures?: Partial<VerifyFixtures>) {
   const seed = buildFixtures();
   await stubTauri(page, {
+    edit: true,
     fixtures: {
       queue: {
         ...(seed.queue as Record<string, unknown>),
@@ -106,6 +107,7 @@ test("search records recents locally and pages past the first window", async ({ 
     explicit: false,
   }));
   await stubTauri(page, {
+    edit: true,
     fixtures: {
       search: {
         tracks: { items: songs },
@@ -142,7 +144,7 @@ test("search records recents locally and pages past the first window", async ({ 
 });
 
 test("artist detail backfills top songs from search and marks the source", async ({ page }) => {
-  await stubTauri(page);
+  await stubTauri(page, { edit: true });
   await page.goto("/");
   await page.getByTitle("Toggle Browse pane").click();
   const browse = page.locator('section[data-pane="browse"]');
@@ -159,6 +161,7 @@ test("episode detail carries a show-notes link", async ({ page }) => {
   // The mock episode endpoint returns the trackDetail fixture verbatim, so
   // shape it like the episode the UI asked for.
   await stubTauri(page, {
+    edit: true,
     fixtures: {
       trackDetail: {
         id: "ep-verify-1",
@@ -282,6 +285,7 @@ async function openFriendPlaylist(page: Page) {
 test("friend playlist 403 recovers to tracks on retry", async ({ page }) => {
   const seed = buildFixtures();
   await stubTauri(page, {
+    edit: true,
     fixtures: {
       queue: {
         ...(seed.queue as Record<string, unknown>),
@@ -327,6 +331,7 @@ test("friend playlist 403 recovers to tracks on retry", async ({ page }) => {
 test("friend playlist embed failure keeps the honest wall", async ({ page }) => {
   const seed = buildFixtures();
   await stubTauri(page, {
+    edit: true,
     fixtures: {
       queue: {
         ...(seed.queue as Record<string, unknown>),

@@ -26,7 +26,7 @@ const FULL_LAYOUT = {
 };
 
 async function bootAt(page: Page, theme: string, surface: string) {
-  await stubTauri(page, { layout: FULL_LAYOUT });
+  await stubTauri(page, { layout: FULL_LAYOUT, edit: true });
   await page.addInitScript(
     ({ theme, surface }) => {
       try {
@@ -178,7 +178,7 @@ test("dark, light, and sparkles stay intact", async ({ page }) => {
 });
 
 test("pastel glass selectable from Settings surface controls", async ({ page }) => {
-  await stubTauri(page, { layout: FULL_LAYOUT });
+  await stubTauri(page, { layout: FULL_LAYOUT, edit: true });
   await page.goto("/");
   await expect(page.locator(".stage")).toBeVisible();
   await page.getByRole("button", { name: "Open settings" }).click();

@@ -5,6 +5,7 @@ import { buildFixtures } from "./fixtures";
 test("queue shows its playlist context and opens it in browse", async ({ page }) => {
   const seed = buildFixtures();
   await stubTauri(page, {
+    edit: true,
     fixtures: {
       queue: {
         ...(seed.queue as Record<string, unknown>),
@@ -33,6 +34,7 @@ test("queue shows its playlist context and opens it in browse", async ({ page })
 test("queue context opens from the keyboard without losing Next-from", async ({ page }) => {
   const seed = buildFixtures();
   await stubTauri(page, {
+    edit: true,
     fixtures: {
       queue: {
         ...(seed.queue as Record<string, unknown>),

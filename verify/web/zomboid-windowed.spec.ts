@@ -47,11 +47,11 @@ async function latestRegions(page) {
 test("windowed 1280x720: pane roams the full overlay surface, regions follow", async ({
   page,
 }) => {
-  await stubTauri(page, { layout: MINIMAL_LAYOUT });
+  await stubTauri(page, { layout: MINIMAL_LAYOUT, edit: true });
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto("/");
   await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
-  await page.getByRole("button", { name: "Toggle edit lock" }).click();
+  // Edit mode is seeded (pane drags are edit-only): no toggle needed.
 
   // The stage itself is the live window: no assumed/maximized rect.
   const stage = await page.evaluate(() => {
@@ -90,11 +90,11 @@ test("windowed 1280x720: pane roams the full overlay surface, regions follow", a
 });
 
 test("fullscreen 1920x1080: pane roams the full overlay surface", async ({ page }) => {
-  await stubTauri(page, { layout: MINIMAL_LAYOUT });
+  await stubTauri(page, { layout: MINIMAL_LAYOUT, edit: true });
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto("/");
   await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
-  await page.getByRole("button", { name: "Toggle edit lock" }).click();
+  // Edit mode is seeded (pane drags are edit-only): no toggle needed.
 
   await dragHandleTo(page, 1600, 820);
   await expect

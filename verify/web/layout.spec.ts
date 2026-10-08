@@ -4,7 +4,9 @@ import { MINIMAL_LAYOUT, buildFixtures } from "./fixtures";
 import fs from "node:fs";
 
 test.beforeEach(async ({ page }) => {
-  await stubTauri(page, { layout: MINIMAL_LAYOUT });
+  // Edit mode is seeded: the editor dock (pane chips, settings entry) is
+  // edit-only, and notch autohide stays off so the dock needs no hover.
+  await stubTauri(page, { layout: MINIMAL_LAYOUT, edit: true });
   await page.goto("/");
 });
 
@@ -77,6 +79,7 @@ test("toggle off/on restores the exact custom geometry", async ({ page }) => {
   const seed = buildFixtures();
   await stubTauri(page, {
     layout: CUSTOM_LAYOUT,
+    edit: true,
     fixtures: { queue: { ...(seed.queue as Record<string, unknown>) } },
   });
   await page.goto("/");
@@ -101,7 +104,7 @@ test("toggle off/on restores the exact custom geometry", async ({ page }) => {
 });
 
 test("reload keeps the persisted custom layout", async ({ page }) => {
-  await stubTauri(page, { layout: CUSTOM_LAYOUT });
+  await stubTauri(page, { layout: CUSTOM_LAYOUT, edit: true });
   await page.goto("/");
   await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
 
@@ -199,7 +202,7 @@ test("Reset still restores the default arrangement", async ({ page }) => {
 
 test("Ctrl+Z in edit mode undoes the last geometry change", async ({ page }) => {
   await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
-  await page.getByRole("button", { name: "Toggle edit lock" }).click();
+  // Edit mode is seeded (the dock is edit-only): no toggle needed.
   const undo = page.getByRole("button", { name: "Undo layout change" });
   await expect(undo).toBeDisabled();
 
@@ -221,14 +224,13 @@ test("dock has labeled distinct controls and wraps at 800px", async ({ page }) =
   const dock = page.locator(".dock");
   await expect(dock).toBeVisible();
 
-  // Seeded interactive: the interact control shows its action ("Pass").
+  // Seeded edit + interactive: the edit control shows its action ("Lock").
   let labels = (await dock.locator(".dock-label").allTextContents()).map((s) => s.trim());
-  for (const want of ["Hide", "Edit", "Pass", "Undo", "Settings", "Done", "Close"]) {
+  for (const want of ["Hide", "Lock", "Pass", "Undo", "Settings", "Done", "Close"]) {
     expect(labels).toContain(want);
   }
-  // Keep the dock up via edit mode, drop to pass-through: the control now
+  // Already in edit mode, drop to pass-through: the control now
   // offers the opposite action ("Interact").
-  await page.getByRole("button", { name: "Toggle edit lock" }).click();
   await page.getByRole("button", { name: "Toggle interact" }).click();
   labels = (await dock.locator(".dock-label").allTextContents()).map((s) => s.trim());
   expect(labels).toContain("Interact");
@@ -496,12 +498,14 @@ test("coach pill is topmost under its center and covered by reported regions", a
 });
 
 test("Alt+Arrows moves the focused pane, persists, flashes guides, undoes", async ({ page }) => {
-  await stubTauri(page, { layout: CUSTOM_LAYOUT });
+  await stubTauri(page, { layout: CUSTOM_LAYOUT, edit: true });
   await page.goto("/");
   await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
 
-  // Focus the player pane so the keyboard target is deterministic.
-  await page.locator('section[data-pane="player"] .pane-handle').click();
+  // Focus the player pane so the keyboard target is deterministic: the
+  // title (not the handle center, where the edit-mode opacity slider sits —
+  // focusing that input would make the key handler yield to it).
+  await page.locator('section[data-pane="player"] .pane-title').click();
   const before = await playerBox(page);
   expect(before).toEqual({ x: 100, y: 150, w: 340, h: 230 });
 
@@ -517,7 +521,7 @@ test("Alt+Arrows moves the focused pane, persists, flashes guides, undoes", asyn
   expect(saved.scenes[saved.activeScene].panes.find((p) => p.type === "player")).toMatchObject({ x: before.x + 8, y: 150 });
 
   // The nudge is one undo step: Ctrl+Z in edit mode restores it.
-  await page.getByRole("button", { name: "Toggle edit lock" }).click();
+  // (Edit mode is seeded: no toggle needed.)
   await page.keyboard.press("Control+z");
   await expect
     .poll(async () => (await playerBox(page)).x, { timeout: 5000 })
@@ -525,10 +529,11 @@ test("Alt+Arrows moves the focused pane, persists, flashes guides, undoes", asyn
 });
 
 test("Alt+Shift+Arrows resizes the focused pane and persists", async ({ page }) => {
-  await stubTauri(page, { layout: CUSTOM_LAYOUT });
+  await stubTauri(page, { layout: CUSTOM_LAYOUT, edit: true });
   await page.goto("/");
   await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
-  await page.locator('section[data-pane="player"] .pane-handle').click();
+  // Title, not the handle center (see the Alt+Arrows test above).
+  await page.locator('section[data-pane="player"] .pane-title').click();
 
   await page.keyboard.press("Alt+Shift+ArrowRight");
   await expect
@@ -546,10 +551,10 @@ test("Alt+Shift+Arrows resizes the focused pane and persists", async ({ page }) 
 });
 
 test("resize handles are sliders: labeled, valued, keyboard-operable, focus-ringed", async ({ page }) => {
-  await stubTauri(page, { layout: CUSTOM_LAYOUT });
+  await stubTauri(page, { layout: CUSTOM_LAYOUT, edit: true });
   await page.goto("/");
   await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
-  await page.getByRole("button", { name: "Toggle edit lock" }).click();
+  // Edit mode is seeded (resize handles are edit-only): no toggle needed.
 
   const east = page.locator('section[data-pane="player"] .rz-e');
   await expect(east).toHaveAttribute("role", "slider");
@@ -600,7 +605,7 @@ const SCENES_V4 = {
 };
 
 test("Game/Focus/Stream swap per-scene geometry and persist it", async ({ page }) => {
-  await stubTauri(page, { layout: SCENES_V4 });
+  await stubTauri(page, { layout: SCENES_V4, edit: true });
   await page.goto("/");
   await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
 
