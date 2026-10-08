@@ -171,33 +171,58 @@ fn save_fallback(app: &AppHandle, refresh: &str) -> Result<(), String> {
     }
 }
 
-fn save_refresh_token(app: &AppHandle, refresh: &str) -> Result<(), String> {
+/// Restart-loss warning attached to every credential-save failure surface.
+/// The session stays live in memory for this run, so callers still finish
+/// logged-in; the message makes the reboot consequence visible now instead
+/// of only after a restart drops the login.
+fn persist_failure_message(message: &str) -> String {
+    format!("{message} — this login will not survive a restart.")
+}
+
+/// Testable persistence core: `set_keyring_verified` mirrors
+/// `Entry::set_password` plus the read-back check (true only on a verified
+/// hit); `save_fallback_verified` mirrors `save_fallback` (read-back
+/// verified). The refresh token is ALWAYS mirrored to the fallback file,
+/// even on a keyring hit: a later locked Credential Manager (autostart,
+/// slow keyring) must still find the credential on disk, so a keyring
+/// success never deletes the fallback. Overall success needs at least one
+/// verified store; both failing returns an error so a restart-loss is
+/// visible immediately instead of only after reboot.
+fn save_refresh_token_with(
+    refresh: &str,
+    set_keyring_verified: impl FnOnce(&str) -> bool,
+    save_fallback_verified: impl FnOnce(&str) -> Result<(), String>,
+) -> Result<(), String> {
     if refresh.is_empty() {
         return Err("credential store unavailable".to_string());
     }
-    let mut keyring_hit = false;
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
-        match entry.set_password(refresh) {
-            Ok(()) => match entry.get_password() {
-                Ok(back) if back == refresh => {
-                    keyring_hit = true;
-                }
-                _ => {
-                    let _ = entry.delete_credential();
-                }
-            },
-            Err(_) => {}
-        }
-    }
-    if keyring_hit {
+    let keyring_hit = set_keyring_verified(refresh);
+    let fallback_result = save_fallback_verified(refresh);
+    if keyring_hit || fallback_result.is_ok() {
         mark_credential_verified();
-        if let Some(path) = fallback_path(app) {
-            let _ = std::fs::remove_file(&path);
-            let _ = std::fs::remove_file(crate::overlay::backup_path_for(&path));
-        }
         return Ok(());
     }
-    save_fallback(app, refresh)
+    Err(fallback_result.unwrap_err())
+}
+
+fn save_refresh_token(app: &AppHandle, refresh: &str) -> Result<(), String> {
+    save_refresh_token_with(
+        refresh,
+        |candidate| match keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
+            Ok(entry) => match entry.set_password(candidate) {
+                Ok(()) => match entry.get_password() {
+                    Ok(back) if back == candidate => true,
+                    _ => {
+                        let _ = entry.delete_credential();
+                        false
+                    }
+                },
+                Err(_) => false,
+            },
+            Err(_) => false,
+        },
+        |candidate| save_fallback(app, candidate),
+    )
 }
 
 fn load_refresh_token(app: &AppHandle) -> Option<String> {
@@ -473,7 +498,10 @@ fn wait_for_callback(app: AppHandle) {
             }
             if let Some(refresh) = t.refresh_token.clone() {
                 if let Err(message) = save_refresh_token(&app, &refresh) {
-                    let _ = app.emit("auth-error", message);
+                    // The login itself succeeded (tokens are live in memory),
+                    // so still finish logged-in — but the restart-loss must
+                    // be visible now, not only after the next reboot.
+                    let _ = app.emit("auth-error", persist_failure_message(&message));
                 }
             }
             reply_page(&mut stream, true, "Spotify is connected.");
@@ -547,7 +575,7 @@ async fn refresh_tokens(app: &AppHandle, refresh: &str) -> Result<Tokens, Refres
         .map(|s| s.to_string())
         .unwrap_or_else(|| refresh.to_string());
     if let Err(message) = save_refresh_token(app, &new_refresh) {
-        let _ = app.emit("auth-error", message);
+        let _ = app.emit("auth-error", persist_failure_message(&message));
     }
     Ok(Tokens {
         access_token: body
@@ -716,6 +744,21 @@ pub struct CredentialStatus {
     pub keyring_ok: bool,
 }
 
+/// Honest credential location: the refresh token is always mirrored, so a
+/// keyring hit must not mask a fallback copy on disk. `stored` stays
+/// `keyring_ok || fallback_ok`; only the label gains the combined case.
+fn credential_location(keyring_ok: bool, fallback_ok: bool) -> (bool, String) {
+    if keyring_ok && fallback_ok {
+        (true, "keyring+fallback".to_string())
+    } else if keyring_ok {
+        (true, "keyring".to_string())
+    } else if fallback_ok {
+        (true, "fallback".to_string())
+    } else {
+        (false, "none".to_string())
+    }
+}
+
 #[tauri::command]
 pub async fn credential_status(app: AppHandle) -> Result<CredentialStatus, String> {
     let keyring_ok = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
@@ -727,13 +770,7 @@ pub async fn credential_status(app: AppHandle) -> Result<CredentialStatus, Strin
         .and_then(|p| load_fallback_at(&p))
         .map(|s| !s.is_empty())
         .unwrap_or(false);
-    let (stored, location) = if keyring_ok {
-        (true, "keyring".to_string())
-    } else if fallback_ok {
-        (true, "fallback".to_string())
-    } else {
-        (false, "none".to_string())
-    };
+    let (stored, location) = credential_location(keyring_ok, fallback_ok);
     let verified_at = credential_verified_at()
         .lock()
         .map_err(|e| e.to_string())?
@@ -763,8 +800,9 @@ pub async fn logout(app: AppHandle, state: State<'_, AuthState>) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_error_message, load_fallback_at, load_verifier_at, save_fallback_at,
-        save_verifier_at, verifier_is_fresh, RefreshError, VERIFIER_TTL_SECS, SCOPES,
+        bind_error_message, credential_location, load_fallback_at, load_verifier_at,
+        save_fallback_at, save_verifier_at, verifier_is_fresh, RefreshError, VERIFIER_TTL_SECS,
+        SCOPES,
     };
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -859,6 +897,82 @@ mod tests {
     }
 
     #[test]
+    fn persist_mirrors_fallback_even_on_keyring_hit() {
+        let mut mirrored = false;
+        let r = super::save_refresh_token_with(
+            "refresh-abc",
+            |_| true,
+            |candidate| {
+                mirrored = true;
+                assert_eq!(candidate, "refresh-abc");
+                Ok(())
+            },
+        );
+        assert!(r.is_ok());
+        assert!(
+            mirrored,
+            "keyring success must still mirror to the fallback file"
+        );
+    }
+
+    #[test]
+    fn persist_keyring_hit_survives_fallback_failure() {
+        let r = super::save_refresh_token_with("refresh-abc", |_| true, |_| {
+            Err("disk gone".to_string())
+        });
+        assert!(r.is_ok(), "stored in keyring: session persists");
+    }
+
+    #[test]
+    fn persist_falls_back_when_keyring_misses() {
+        let r = super::save_refresh_token_with("refresh-abc", |_| false, |_| Ok(()));
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn persist_fails_only_when_both_stores_fail() {
+        let r = super::save_refresh_token_with("refresh-abc", |_| false, |_| {
+            Err("disk gone".to_string())
+        });
+        assert_eq!(r, Err("disk gone".to_string()));
+    }
+
+    #[test]
+    fn persist_rejects_empty_refresh() {
+        let r = super::save_refresh_token_with("", |_| true, |_| Ok(()));
+        assert_eq!(r, Err("credential store unavailable".to_string()));
+    }
+
+    #[test]
+    fn persist_failure_names_restart_loss() {
+        let msg = super::persist_failure_message("credential store unavailable");
+        assert!(msg.contains("credential store unavailable"));
+        assert!(
+            msg.contains("restart"),
+            "must name the reboot consequence: {msg}"
+        );
+    }
+
+    #[test]
+    fn fallback_backup_rescues_corrupt_primary() {
+        let path = scratch_fallback_path();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::overlay::backup_path_for(&path));
+        save_fallback_at(&path, "refresh-abc").expect("save fallback");
+        // The second write rotates the first payload into the `.bak` copy,
+        // so a later torn primary still has a rescue copy.
+        save_fallback_at(&path, "refresh-abc").expect("save fallback again");
+        std::fs::write(&path, "{not json").expect("corrupt primary");
+        assert_eq!(
+            load_fallback_at(&path),
+            Some("refresh-abc".to_string()),
+            "corrupt primary must fall back to the backup copy"
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::overlay::backup_path_for(&path));
+    }
+
+    #[test]
     fn refresh_classifier_exact_grant_vs_transient() {
         assert!(matches!(
             RefreshError::from_body(r#"{"error":"invalid_grant"}"#),
@@ -903,6 +1017,23 @@ mod tests {
             }
             RefreshError::InvalidGrant => panic!("transport stays transient"),
         }
+    }
+
+    #[test]
+    fn credential_location_names_combined_mirror() {
+        // The refresh token is always mirrored, so a keyring hit must not
+        // mask the fallback copy: both present reports the combined label
+        // while `stored` keeps its OR semantics.
+        assert_eq!(
+            credential_location(true, true),
+            (true, "keyring+fallback".to_string())
+        );
+        assert_eq!(credential_location(true, false), (true, "keyring".to_string()));
+        assert_eq!(
+            credential_location(false, true),
+            (true, "fallback".to_string())
+        );
+        assert_eq!(credential_location(false, false), (false, "none".to_string()));
     }
 
     #[test]

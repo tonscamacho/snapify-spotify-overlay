@@ -75,6 +75,11 @@ test("revoked session at boot opens the login gate", async ({ page }) => {
   await expect(gate).toBeVisible({ timeout: 10000 });
   await expect(gate.getByRole("button", { name: "Login with Spotify" })).toBeVisible();
   expect(await commandsNamed(page, "start_login")).toHaveLength(0);
+  // Even gated, the app consults credential_status (the backend clears the
+  // dead credential from keyring + fallback file) without auto-login.
+  await expect
+    .poll(async () => (await commandsNamed(page, "credential_status")).length, { timeout: 10000 })
+    .toBeGreaterThanOrEqual(1);
 });
 
 test("logged-out boot shows the gate without auto login", async ({ page }) => {
@@ -119,5 +124,38 @@ test("reload keeps the session without another login", async ({ page }) => {
   await page.reload();
   await expect(page.locator('section[data-pane="player"]').getByText(TRACK_NAME)).toBeVisible();
   await expect(page.locator(".gate")).toHaveCount(0);
+  expect(await commandsNamed(page, "start_login")).toHaveLength(0);
+});
+
+test("restart keeping disk relaunches without a login gate", async ({ page }) => {
+  await stubTauri(page);
+  await page.goto("/");
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME)).toBeVisible();
+  await expect(page.locator(".gate")).toHaveCount(0);
+  expect(await commandsNamed(page, "get_fresh_token")).not.toHaveLength(0);
+
+  // Quit keeping disk, relaunch: reload re-boots the app while the stored
+  // credential survives (mock auth_status stays logged_in, like the
+  // keyring/fallback pair surviving a process restart). The init script
+  // re-runs on reload, so the command log below reflects the fresh boot.
+  await page.reload();
+  await expect(player.getByText(TRACK_NAME)).toBeVisible({ timeout: 15000 });
+  await expect(page.locator(".gate")).toHaveCount(0);
+  expect(await commandsNamed(page, "get_fresh_token")).not.toHaveLength(0);
+  expect(await commandsNamed(page, "start_login")).toHaveLength(0);
+});
+
+test("offline-then-online boot recovers without a gate", async ({ page }) => {
+  // Locked keyring / no network at autostart: the first refreshes fail
+  // transiently, then the network comes back. Boot backoff must ride
+  // through (a 4th get_fresh_token attempt) instead of giving up after 3.
+  await bootWithFault(page, "get_fresh_token", TRANSIENT_BOOT, 3);
+
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME)).toBeVisible({ timeout: 30000 });
+  await expect(page.locator(".gate")).toHaveCount(0);
+  expect(await commandsNamed(page, "get_fresh_token")).not.toHaveLength(0);
+  expect((await commandsNamed(page, "get_fresh_token")).length).toBeGreaterThanOrEqual(4);
   expect(await commandsNamed(page, "start_login")).toHaveLength(0);
 });
