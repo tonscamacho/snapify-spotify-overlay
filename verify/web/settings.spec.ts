@@ -21,7 +21,7 @@ test("theme toggle persists across reload", async ({ page }) => {
   await expect(dialog).toBeVisible();
 
   await dialog
-    .getByRole("group", { name: "Theme", exact: true })
+    .getByRole("group", { name: "Theme" })
     .getByRole("button", { name: "light", exact: true })
     .click();
 
@@ -304,7 +304,7 @@ test("sparkles theme selectable, persisted, and coherent", async ({ page }) => {
   await expect(dialog).toBeVisible();
 
   await dialog
-    .getByRole("group", { name: "Theme", exact: true })
+    .getByRole("group", { name: "Theme" })
     .getByRole("button", { name: "sparkles", exact: true })
     .click();
 
@@ -336,7 +336,7 @@ test("pastel theme selectable, persisted, and coherent", async ({ page }) => {
   await expect(dialog).toBeVisible();
 
   await dialog
-    .getByRole("group", { name: "Theme", exact: true })
+    .getByRole("group", { name: "Theme" })
     .getByRole("button", { name: "pastel", exact: true })
     .click();
 
