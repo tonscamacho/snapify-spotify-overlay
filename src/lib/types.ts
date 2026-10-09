@@ -22,6 +22,48 @@ export type OverlayColor = string;
 /** localStorage key for the custom overlay background color. */
 export const OVERLAY_COLOR_KEY = "snapify-overlay-color";
 
+/** Per-pane theme override. Absent (`undefined`) inherits the global
+ *  theme — the same empty-means-default contract as OverlayColor. */
+export type PaneThemeOverride =
+  | "dark"
+  | "light"
+  | "sparkles"
+  | "pastel"
+  | "neo-light"
+  | "neo-dark";
+
+/** Shadow finish for one pane. `neu` is the neumorphic dual-shadow
+ *  pair; otherwise sm/lg map to the existing shadow tokens. */
+export type PaneShadow = "none" | "sm" | "lg" | "neu";
+
+/** Opacity/blur finish for one pane. `glass` opts this pane into the
+ *  backdrop-filter + sheen treatment even when the global surface is
+ *  solid (neo panes force `solid` per the glass-x-neo default). */
+export type PaneSurfaceOverride = "solid" | "glass";
+
+/** All optional. Absent (`undefined`) field inherits the corresponding
+ *  global value, so a fresh/legacy pane renders pixel-identical. */
+export interface PaneStyleOverride {
+  /** Normalized lowercase #rrggbb, or undefined = theme default. */
+  bg?: string;
+  /** Undefined = inherit global theme. */
+  theme?: PaneThemeOverride;
+  /** Font family stack token or CSS font-family value. */
+  fontFamily?: string;
+  /** px value. */
+  fontSize?: number;
+  /** CSS font-weight. */
+  fontWeight?: number | string;
+  /** CSS text-align. */
+  textAlign?: "left" | "center" | "right";
+  /** px value; neo panes floor at 20. */
+  radius?: number;
+  shadow?: PaneShadow;
+  surface?: PaneSurfaceOverride;
+  /** 0.4-1, same range as PaneState.opacity; undefined keeps opacity. */
+  opacity?: number;
+}
+
 /** Theme-default surface hex, mirrored from App.css `--surface` per
  *  theme. Used as the native color-input value and hex placeholder
  *  while `OverlayColor` is "" (theme default). */
@@ -30,6 +72,8 @@ export const THEME_DEFAULT_SURFACE: Record<string, string> = {
   light: "#ffffff",
   sparkles: "#0b1330",
   pastel: "#fff9ef",
+  "neo-light": "#e0e5ec",
+  "neo-dark": "#2A2D34",
 };
 
 /** Parse an unknown stored/input value into a valid OverlayColor.
@@ -70,6 +114,9 @@ export interface PaneState {
   h: number;
   /** Per-pane opacity, 0.4–1. Persisted in layout v3. */
   opacity: number;
+  /** Per-pane style override. Absent = fully inherit the global theme
+   *  (pixel-identical to pre-per-pane rendering). Persisted in v5. */
+  style?: PaneStyleOverride;
   visible: boolean;
   /** PR8 collapse: true hides the pane body so the pane is header only
    *  (all types, including the player). The player mini card is an
@@ -104,11 +151,13 @@ export interface SceneSlot {
   panes: PaneState[];
 }
 
-/** Schema v4 layout doc, stored under the same `snapify-layout-v3` key.
+/** Schema v5 layout doc, stored under the same `snapify-layout-v3` key.
  *  v3 JSON (`{ version: 3, preset, panes }`) still loads via the v3
- *  fallback and migrates (see `migrateV3ToV4` in layout.ts). */
+ *  fallback and migrates (see `migrateV3ToV4` in layout.ts); v4 docs
+ *  migrate via `migrateV4ToV5` (pure version stamp: absent `style` =
+ *  inherit). */
 export interface SceneLayout {
-  version: 4;
+  version: 5;
   activeScene: SceneName;
   scenes: Record<SceneName, SceneSlot>;
 }
