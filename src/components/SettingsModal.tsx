@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { TRANS_LANGS, type TransLang } from "../lib/translate";
 import { api } from "../lib/spotify";
-import type { Density, Surface, Corners, SceneName, DeviceInfo, PaneState, PaneStyleOverride } from "../lib/types";
+import type { Density, Surface, Corners, SceneName, DeviceInfo } from "../lib/types";
 import {
   THEME_DEFAULT_SURFACE,
   parseOverlayColor,
@@ -26,16 +26,13 @@ interface Props {
   loggedIn: boolean;
   preset: string;
   uiScale: number;
-  theme: "dark" | "light" | "sparkles" | "pastel" | "neo-light" | "neo-dark";
+  theme: "dark" | "light" | "sparkles" | "pastel";
   density: Density;
   surface: Surface;
   corners: Corners;
   /** Custom overlay background: "" = theme default, else #rrggbb. */
   overlayColor: string;
   onOverlayColor: (v: string) => void;
-  /** Live panes for the per-pane style section (additive; preset/scene untouched). */
-  panes: PaneState[];
-  onPaneStyle: (id: string, patch: Partial<PaneStyleOverride>) => void;
   autostart: boolean;
   interactive: boolean;
   editing?: boolean;
@@ -63,7 +60,7 @@ interface Props {
   notchHover: boolean;
   onToggleNotchHover: () => void;
   onUiScale: (v: number) => void;
-  onTheme: (v: "dark" | "light" | "sparkles" | "pastel" | "neo-light" | "neo-dark") => void;
+  onTheme: (v: "dark" | "light" | "sparkles" | "pastel") => void;
   onDensity: (v: Density) => void;
   onSurface: (v: Surface) => void;
   onCorners: (v: Corners) => void;
@@ -327,12 +324,6 @@ export default function SettingsModal(p: Props) {
   const commitColorDraft = () => {
     p.onOverlayColor(parseOverlayColor(colorDraft));
   };
-  const [paneSel, setPaneSel] = useState<string | null>(null);
-  const selPane = p.panes.find((x) => x.id === paneSel) ?? p.panes[0] ?? null;
-  const selStyle: PaneStyleOverride = selPane?.style ?? {};
-  const selThemeHex =
-    THEME_DEFAULT_SURFACE[selStyle.theme ?? p.theme] ?? themeDefaultHex;
-  const selBgHex = selStyle.bg ?? selThemeHex;
   // The modal mounts transiently, so one fetch on open covers its lifetime.
   useEffect(() => {
     if (!p.open) return;
@@ -502,7 +493,7 @@ export default function SettingsModal(p: Props) {
         <div className="row">
           <span>Theme</span>
           <span className="seg" role="group" aria-label="Theme">
-            {(["dark", "light", "sparkles", "pastel", "neo-light", "neo-dark"] as const).map((n) => (
+            {(["dark", "light", "sparkles", "pastel"] as const).map((n) => (
               <button
                 key={n}
                 className={p.theme === n ? "seg-on" : ""}
@@ -597,241 +588,6 @@ export default function SettingsModal(p: Props) {
           <div className="hint">Theme default — pick a color to override the overlay background.</div>
         ) : (
           <div className="hint">Custom overlay background {p.overlayColor} — Reset returns to the theme default.</div>
-        )}
-        <div className="row">
-          <span>Pane style</span>
-          <select
-            className="device"
-            style={{ flex: "none" }}
-            value={selPane?.id ?? ""}
-            aria-label="Per-pane style pane"
-            onChange={(e) => setPaneSel(e.target.value)}
-          >
-            {p.panes.map((x) => (
-              <option key={x.id} value={x.id}>
-                {x.type} ({x.id})
-              </option>
-            ))}
-          </select>
-        </div>
-        {selPane !== null && (
-          <div role="group" aria-label="Per-pane style">
-            <div className="row">
-              <span>Pane background</span>
-              <span className="overlay-color-controls">
-                <input
-                  type="color"
-                  value={selBgHex}
-                  aria-label="Per-pane background"
-                  title={selStyle.bg ?? `Theme default (${selThemeHex})`}
-                  onChange={(e) => p.onPaneStyle(selPane.id, { bg: e.target.value.toLowerCase() })}
-                />
-                <button
-                  className="btn sm"
-                  onClick={() => p.onPaneStyle(selPane.id, { bg: undefined })}
-                  disabled={selStyle.bg === undefined}
-                  title="Reset to inherit"
-                >
-                  Reset
-                </button>
-              </span>
-            </div>
-            <div className="row">
-              <span>Pane theme</span>
-              <span className="seg" role="group" aria-label="Per-pane theme">
-                <button
-                  className={selStyle.theme === undefined ? "seg-on" : ""}
-                  onClick={() => p.onPaneStyle(selPane.id, { theme: undefined })}
-                  aria-pressed={selStyle.theme === undefined}
-                >
-                  inherit
-                </button>
-                {(["dark", "light", "sparkles", "pastel", "neo-light", "neo-dark"] as const).map((n) => (
-                  <button
-                    key={n}
-                    className={selStyle.theme === n ? "seg-on" : ""}
-                    onClick={() => p.onPaneStyle(selPane.id, { theme: n })}
-                    aria-pressed={selStyle.theme === n}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </span>
-            </div>
-            <div className="row">
-              <span>Pane font</span>
-              <select
-                className="device"
-                style={{ flex: "none" }}
-                value={selStyle.fontFamily ?? ""}
-                aria-label="Per-pane font"
-                onChange={(e) =>
-                  p.onPaneStyle(selPane.id, {
-                    fontFamily: e.target.value === "" ? undefined : e.target.value,
-                  })
-                }
-              >
-                <option value="">inherit</option>
-                <option value='-apple-system, "Segoe UI", system-ui, sans-serif'>system</option>
-                <option value='Georgia, "Times New Roman", serif'>serif</option>
-                <option value='"SF Mono", Consolas, monospace'>mono</option>
-              </select>
-            </div>
-            <div className="row">
-              <span>Pane text size</span>
-              <span className="overlay-color-controls">
-                <input
-                  type="range"
-                  min={10}
-                  max={24}
-                  value={selStyle.fontSize ?? 14}
-                  aria-label="Per-pane text size"
-                  onChange={(e) => p.onPaneStyle(selPane.id, { fontSize: Number(e.target.value) })}
-                />
-                <button
-                  className="btn sm"
-                  onClick={() => p.onPaneStyle(selPane.id, { fontSize: undefined })}
-                  disabled={selStyle.fontSize === undefined}
-                  title="Reset to inherit"
-                >
-                  Reset
-                </button>
-              </span>
-            </div>
-            <div className="row">
-              <span>Pane weight</span>
-              <span className="seg" role="group" aria-label="Per-pane weight">
-                <button
-                  className={selStyle.fontWeight === undefined ? "seg-on" : ""}
-                  onClick={() => p.onPaneStyle(selPane.id, { fontWeight: undefined })}
-                  aria-pressed={selStyle.fontWeight === undefined}
-                >
-                  inherit
-                </button>
-                {([400, 600, 700] as const).map((n) => (
-                  <button
-                    key={n}
-                    className={selStyle.fontWeight === n ? "seg-on" : ""}
-                    onClick={() => p.onPaneStyle(selPane.id, { fontWeight: n })}
-                    aria-pressed={selStyle.fontWeight === n}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </span>
-            </div>
-            <div className="row">
-              <span>Pane align</span>
-              <span className="seg" role="group" aria-label="Per-pane align">
-                <button
-                  className={selStyle.textAlign === undefined ? "seg-on" : ""}
-                  onClick={() => p.onPaneStyle(selPane.id, { textAlign: undefined })}
-                  aria-pressed={selStyle.textAlign === undefined}
-                >
-                  inherit
-                </button>
-                {(["left", "center", "right"] as const).map((n) => (
-                  <button
-                    key={n}
-                    className={selStyle.textAlign === n ? "seg-on" : ""}
-                    onClick={() => p.onPaneStyle(selPane.id, { textAlign: n })}
-                    aria-pressed={selStyle.textAlign === n}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </span>
-            </div>
-            <div className="row">
-              <span>Pane radius</span>
-              <span className="overlay-color-controls">
-                <input
-                  type="range"
-                  min={0}
-                  max={32}
-                  value={selStyle.radius ?? 14}
-                  aria-label="Per-pane radius"
-                  onChange={(e) => p.onPaneStyle(selPane.id, { radius: Number(e.target.value) })}
-                />
-                <button
-                  className="btn sm"
-                  onClick={() => p.onPaneStyle(selPane.id, { radius: undefined })}
-                  disabled={selStyle.radius === undefined}
-                  title="Reset to inherit"
-                >
-                  Reset
-                </button>
-              </span>
-            </div>
-            <div className="row">
-              <span>Pane shadow</span>
-              <span className="seg" role="group" aria-label="Per-pane shadow">
-                <button
-                  className={selStyle.shadow === undefined ? "seg-on" : ""}
-                  onClick={() => p.onPaneStyle(selPane.id, { shadow: undefined })}
-                  aria-pressed={selStyle.shadow === undefined}
-                >
-                  inherit
-                </button>
-                {(["none", "sm", "lg", "neu"] as const).map((n) => (
-                  <button
-                    key={n}
-                    className={selStyle.shadow === n ? "seg-on" : ""}
-                    onClick={() => p.onPaneStyle(selPane.id, { shadow: n })}
-                    aria-pressed={selStyle.shadow === n}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </span>
-            </div>
-            <div className="row">
-              <span>Pane surface</span>
-              <span className="seg" role="group" aria-label="Per-pane surface">
-                <button
-                  className={selStyle.surface === undefined ? "seg-on" : ""}
-                  onClick={() => p.onPaneStyle(selPane.id, { surface: undefined })}
-                  aria-pressed={selStyle.surface === undefined}
-                >
-                  inherit
-                </button>
-                {(["solid", "glass"] as const).map((n) => (
-                  <button
-                    key={n}
-                    className={selStyle.surface === n ? "seg-on" : ""}
-                    onClick={() => p.onPaneStyle(selPane.id, { surface: n })}
-                    aria-pressed={selStyle.surface === n}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </span>
-            </div>
-            <div className="row">
-              <span>Pane opacity</span>
-              <span className="overlay-color-controls">
-                <input
-                  type="range"
-                  min={40}
-                  max={100}
-                  value={Math.round((selStyle.opacity ?? selPane.opacity) * 100)}
-                  aria-label="Per-pane opacity"
-                  onChange={(e) =>
-                    p.onPaneStyle(selPane.id, { opacity: Number(e.target.value) / 100 })
-                  }
-                />
-                <button
-                  className="btn sm"
-                  onClick={() => p.onPaneStyle(selPane.id, { opacity: undefined })}
-                  disabled={selStyle.opacity === undefined}
-                  title="Reset to inherit"
-                >
-                  Reset
-                </button>
-              </span>
-            </div>
-            <div className="hint">Unset fields inherit the global theme; Reset returns one field to inherit.</div>
-          </div>
         )}
         <div className="row">
           <span>Preset</span>

@@ -78,7 +78,6 @@ import type {
   DeviceInfo,
   LayoutUndoEntry,
   LyricsState,
-  PaneStyleOverride,
   OverlayColor,
   PaneState,
   PaneType,
@@ -172,50 +171,6 @@ function resolveKeyboardPane(panes: PaneState[]): PaneState | null {
   const hit = id ? vis.find((p) => p.id === id) : undefined;
   if (hit) return hit;
   return vis.reduce((a, b) => (b.z > a.z ? b : a));
-}
-
-/** Per-pane style binding: unset panes emit no attr and no vars, so the
- *  global cascade renders pixel-identical. Neo panes floor the radius at
- *  20px and force opaque (glass x neo disabled per the prototype
- *  defaults); the CSS per-pane block consumes the vars/attrs. Pure. */
-function paneStyleBinding(pane: PaneState): {
-  paneTheme?: string;
-  paneSurface?: string;
-  paneShadow?: string;
-  paneOverride?: string;
-  vars: Record<string, string>;
-  opacity: number;
-} {
-  const s = pane.style;
-  if (!s || Object.keys(s).length === 0) return { vars: {}, opacity: pane.opacity };
-  const vars: Record<string, string> = {};
-  const isNeo = s.theme === "neo-light" || s.theme === "neo-dark";
-  if (s.bg !== undefined) vars["--pane-bg"] = s.bg;
-  const radius = s.radius !== undefined ? s.radius : isNeo ? 20 : undefined;
-  if (radius !== undefined) vars["--pane-radius"] = `${isNeo ? Math.max(20, radius) : radius}px`;
-  if (s.shadow === "none") vars["--pane-shadow"] = "none";
-  else if (s.shadow === "sm") vars["--pane-shadow"] = "var(--shadow-sm)";
-  else if (s.shadow === "lg") vars["--pane-shadow"] = "var(--shadow)";
-  if (s.fontFamily !== undefined) vars["--pane-font"] = s.fontFamily;
-  if (s.fontSize !== undefined) vars["--pane-size"] = `${s.fontSize}px`;
-  if (s.fontWeight !== undefined) vars["--pane-weight"] = String(s.fontWeight);
-  if (s.textAlign !== undefined) vars["--pane-align"] = s.textAlign;
-  if (isNeo) {
-    vars["--neu-inset"] =
-      s.theme === "neo-dark"
-        ? "inset 2px 2px 5px rgba(0, 0, 0, 0.5), inset -2px -2px 5px rgba(255, 255, 255, 0.1)"
-        : "inset 2px 2px 5px #a3b1c6, inset -2px -2px 5px #ffffff";
-  }
-  return {
-    paneTheme: s.theme,
-    // Neo forces opaque: the attr still rides for reset semantics, the
-    // CSS per-pane block neutralizes any glass treatment on neo panes.
-    paneSurface: s.surface,
-    paneShadow: s.shadow,
-    paneOverride: "true",
-    vars,
-    opacity: s.opacity ?? pane.opacity,
-  };
 }
 
 /** Display name for a queue context. One lookup per context, silent on
@@ -363,19 +318,10 @@ export default function App() {
       return false;
     }
   });
-  const [theme, setTheme] = useState<
-    "dark" | "light" | "sparkles" | "pastel" | "neo-light" | "neo-dark"
-  >(() => {
+  const [theme, setTheme] = useState<"dark" | "light" | "sparkles" | "pastel">(() => {
     try {
       const v = localStorage.getItem("snapify-theme");
-      if (
-        v === "light" ||
-        v === "sparkles" ||
-        v === "pastel" ||
-        v === "neo-light" ||
-        v === "neo-dark"
-      )
-        return v;
+      if (v === "light" || v === "sparkles" || v === "pastel") return v;
       return localStorage.getItem("nebula-theme") === "light" ? "light" : "dark";
     } catch {
       return "dark";
@@ -1875,37 +1821,6 @@ export default function App() {
     [persist, pushUndoSnapshot],
   );
 
-  // Per-pane style patch: merges one pane's `style` override, pruning
-  // fields set back to undefined. An emptied override drops the key so
-  // the pane inherits (pixel-identical global). One undo step; the
-  // preset label stays: style is a flag on the arrangement.
-  const setPaneStyle = useCallback(
-    (id: string, patch: Partial<PaneStyleOverride>) => {
-      pushUndoSnapshot();
-      previewBaseRef.current = null;
-      setPreviewing(false);
-      setLayout((l) => {
-        const panes = l.map((x) => {
-          if (x.id !== id) return x.style === undefined ? { ...x } : { ...x, style: { ...x.style } };
-          const merged: PaneStyleOverride = { ...(x.style ?? {}) };
-          for (const k of Object.keys(patch) as (keyof PaneStyleOverride)[]) {
-            const v = patch[k];
-            if (v === undefined) delete merged[k];
-            else (merged[k] as unknown) = v;
-          }
-          if (Object.keys(merged).length === 0) {
-            const { style: _drop, ...rest } = x;
-            return rest;
-          }
-          return { ...x, style: merged };
-        });
-        persist(panes, presetRef.current);
-        return panes;
-      });
-    },
-    [persist, pushUndoSnapshot],
-  );
-
   // Streaming-safe toggles (snapify-stream key; geometry untouched).
   const toggleStreamHide = useCallback(() => {
     setStream((s) => {
@@ -2464,7 +2379,6 @@ export default function App() {
     // height): below 360 px wide or below the pane's own content floor the
     // pane sheds cover art and secondary metadata first.
     const compactPane = isCompactPane(pane.w, pane.h, pane.type);
-    const paneBind = paneStyleBinding(pane);
     return (
       <section
         key={`${preset}:${pane.id}`}
@@ -2475,10 +2389,6 @@ export default function App() {
         data-density={density}
         data-compact={compactPane ? "true" : undefined}
         data-collapsed={collapsed ? "true" : undefined}
-        data-pane-theme={paneBind.paneTheme}
-        data-pane-surface={paneBind.paneSurface}
-        data-pane-shadow={paneBind.paneShadow}
-        data-pane-override={paneBind.paneOverride}
         tabIndex={-1}
         style={{
           left: pane.x,
@@ -2488,9 +2398,8 @@ export default function App() {
           // in CSS); the stored h survives in state so expand restores it.
           height: collapsed ? "auto" : pane.h,
           zIndex: pane.z,
-          opacity: paneBind.opacity,
-          ...paneBind.vars,
-        } as React.CSSProperties}
+          opacity: pane.opacity,
+        }}
         onPointerDown={(e) => {
           if (editing) e.stopPropagation();
         }}
@@ -2912,8 +2821,6 @@ export default function App() {
         corners={corners}
         overlayColor={overlayColor}
         onOverlayColor={setOverlayColor}
-        panes={layout}
-        onPaneStyle={setPaneStyle}
         autostart={autostart}
         interactive={interactive}
         clickToSeek={clickToSeek}

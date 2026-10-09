@@ -9,7 +9,7 @@ import { stubTauri } from "./tauri-mock";
 // (0,4,0) with translucent inner surfaces; solid pastel and
 // dark/light/sparkles stay pixel-identical.
 
-const THEMES = ["dark", "light", "sparkles", "pastel", "neo-light", "neo-dark"] as const;
+const THEMES = ["dark", "light", "sparkles", "pastel"] as const;
 const SURFACES = ["solid", "glass"] as const;
 
 // All five panes visible at once so every wash/scrim resolves in one DOM.
@@ -163,57 +163,6 @@ test("solid pastel keeps opaque candy washes including browse", async ({ page })
   await page.screenshot({ path: "docs/bug-reports/2.5.4/theme-pastel-solid-modal.png" });
 });
 
-test("neo themes render matte base, dual shadows, and passing focus", async ({ page }) => {
-  await bootAt(page, "neo-light", "solid");
-  expect(await bgOf(page, 'section[data-pane="player"]')).toBe("rgb(224, 229, 236)");
-  const lightRadius = await page.evaluate(() => {
-    const el = document.querySelector('section[data-pane="player"]') as HTMLElement | null;
-    return el ? getComputedStyle(el).borderRadius : null;
-  });
-  expect(lightRadius).toBe("20px");
-  const lightShadow = await page.evaluate(() => {
-    const el = document.querySelector('section[data-pane="player"]') as HTMLElement | null;
-    return el ? getComputedStyle(el).boxShadow : null;
-  });
-  expect(lightShadow).not.toBeNull();
-  expect(lightShadow!.replace(/\s+/g, "")).toContain("163,177,198");
-  await bootAt(page, "neo-dark", "solid");
-  expect(await bgOf(page, 'section[data-pane="player"]')).toBe("rgb(42, 45, 52)");
-  const darkShadow = await page.evaluate(() => {
-    const el = document.querySelector('section[data-pane="player"]') as HTMLElement | null;
-    return el ? getComputedStyle(el).boxShadow : null;
-  });
-  expect(darkShadow).not.toBeNull();
-  expect(darkShadow!.replace(/\s+/g, "")).toContain("0,0,0,0.5");
-  // Prototype-measured focus tokens ship as spec assertions.
-  const rules = await page.evaluate(() => {
-    const found: string[] = [];
-    for (const sheet of Array.from(document.styleSheets)) {
-      let css: CSSRuleList | null = null;
-      try {
-        css = (sheet as CSSStyleSheet).cssRules;
-      } catch { continue; }
-      for (const r of Array.from(css)) found.push(r.cssText);
-    }
-    return found.join("\n");
-  });
-  expect(rules).toContain("#005bd1");
-  expect(rules).toContain("--neu-inset");
-  await page.screenshot({ path: "docs/bug-reports/2.5.4/theme-neo-solid.png" });
-});
-
-test("neo disables glass: opaque base with no backdrop even when opted in", async ({ page }) => {
-  await bootAt(page, "neo-light", "glass");
-  const player = await bgOf(page, 'section[data-pane="player"]');
-  expect(player).not.toBeNull();
-  expect(alphaOf(player!)).toBe(1);
-  const backdrop = await page.evaluate(() => {
-    const el = document.querySelector('section[data-pane="player"]') as HTMLElement | null;
-    return el ? getComputedStyle(el).backdropFilter : null;
-  });
-  expect(backdrop === "none" || backdrop === "").toBe(true);
-});
-
 test("dark, light, and sparkles stay intact", async ({ page }) => {
   await bootAt(page, "dark", "solid");
   expect(await bgOf(page, 'section[data-pane="player"]')).toBe("rgb(23, 23, 26)");
@@ -235,8 +184,8 @@ test("pastel glass selectable from Settings surface controls", async ({ page }) 
   await page.getByRole("button", { name: "Open settings" }).click();
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog).toBeVisible();
-  await dialog.getByRole("group", { name: "Theme", exact: true }).getByRole("button", { name: "pastel", exact: true }).click();
-  await dialog.getByRole("group", { name: "Surface", exact: true }).getByRole("button", { name: "glass", exact: true }).click();
+  await dialog.getByRole("group", { name: "Theme" }).getByRole("button", { name: "pastel", exact: true }).click();
+  await dialog.getByRole("group", { name: "Surface" }).getByRole("button", { name: "glass", exact: true }).click();
   await expect(page.locator(".app")).toHaveAttribute("data-theme", "pastel");
   await expect(page.locator(".app")).toHaveAttribute("data-surface", "glass");
   expect(await page.evaluate(() => localStorage.getItem("snapify-theme"))).toBe("pastel");
@@ -244,17 +193,4 @@ test("pastel glass selectable from Settings surface controls", async ({ page }) 
   const player = await bgOf(page, 'section[data-pane="player"]');
   expect(player).not.toBeNull();
   expect(alphaOf(player!)).toBeLessThan(1);
-});
-
-test("neo-light selectable from Settings theme controls", async ({ page }) => {
-  await stubTauri(page, { layout: FULL_LAYOUT, edit: true });
-  await page.goto("/");
-  await expect(page.locator(".stage")).toBeVisible();
-  await page.getByRole("button", { name: "Open settings" }).click();
-  const dialog = page.getByRole("dialog", { name: "Settings" });
-  await expect(dialog).toBeVisible();
-  await dialog.getByRole("group", { name: "Theme", exact: true }).getByRole("button", { name: "neo-light", exact: true }).click();
-  await expect(page.locator(".app")).toHaveAttribute("data-theme", "neo-light");
-  expect(await page.evaluate(() => localStorage.getItem("snapify-theme"))).toBe("neo-light");
-  expect(await bgOf(page, 'section[data-pane="player"]')).toBe("rgb(224, 229, 236)");
 });
