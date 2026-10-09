@@ -2,6 +2,7 @@ import type {
   LayoutState,
   LayoutUndoEntry,
   PaneState,
+  PaneStyleOverride,
   PaneType,
   SceneLayout,
   SceneName,
@@ -134,9 +135,13 @@ export const PRESETS: Record<string, () => LayoutState> = {
 /** Maximum layout-undo steps kept. Ctrl+Z in edit mode pops the last. */
 export const LAYOUT_UNDO_DEPTH = 20;
 
-/** Deep copy so undo snapshots never alias live pane objects. */
+/** Deep copy so undo snapshots never alias live pane objects. The
+ *  per-pane `style` object is copied too; panes without `style` keep
+ *  no key so the inherit contract stays pixel-identical. */
 export function clonePanes(panes: PaneState[]): PaneState[] {
-  return panes.map((p) => ({ ...p }));
+  return panes.map((p) =>
+    p.style === undefined ? { ...p } : { ...p, style: { ...p.style } },
+  );
 }
 
 /** Push a snapshot, dropping the oldest entries past the cap. Pure: the
@@ -300,11 +305,74 @@ function num(v: unknown, fallback: number): number {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
 
+function coercePaneBg(v: unknown): string | undefined {
+  if (typeof v !== "string") return undefined;
+  const t = v.trim().toLowerCase();
+  if (t === "") return undefined;
+  const hex = t.startsWith("#") ? t.slice(1) : t;
+  if (/^[0-9a-f]{6}$/.test(hex)) return `#${hex}`;
+  if (/^[0-9a-f]{3}$/.test(hex)) {
+    return `#${hex[0]}${hex[0]}${hex[1]}${hex[1]}${hex[2]}${hex[2]}`;
+  }
+  return undefined;
+}
+
+/** Parse-boundary coercion for the per-pane style override. Unknown or
+ *  invalid fields coerce to `undefined` (inherit), mirroring the
+ *  OverlayColor empty-means-default contract, so illegal states are
+ *  unrepresentable past parsing. Returns `undefined` when no valid
+ *  field survives. */
+export function coercePaneStyle(raw: unknown): PaneStyleOverride | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const s = raw as Partial<PaneStyleOverride>;
+  const out: PaneStyleOverride = {};
+  const bg = coercePaneBg(s.bg);
+  if (bg !== undefined) out.bg = bg;
+  if (
+    s.theme === "dark" ||
+    s.theme === "light" ||
+    s.theme === "sparkles" ||
+    s.theme === "pastel" ||
+    s.theme === "neo-light" ||
+    s.theme === "neo-dark"
+  ) {
+    out.theme = s.theme;
+  }
+  if (typeof s.fontFamily === "string" && s.fontFamily.trim() !== "") {
+    out.fontFamily = s.fontFamily.slice(0, 120);
+  }
+  if (typeof s.fontSize === "number" && Number.isFinite(s.fontSize) && s.fontSize > 0) {
+    out.fontSize = Math.min(64, Math.max(8, Math.round(s.fontSize)));
+  }
+  if (typeof s.fontWeight === "number" && Number.isFinite(s.fontWeight)) {
+    out.fontWeight = Math.min(900, Math.max(100, Math.round(s.fontWeight)));
+  } else if (typeof s.fontWeight === "string" && s.fontWeight.trim() !== "") {
+    out.fontWeight = s.fontWeight.slice(0, 24);
+  }
+  if (s.textAlign === "left" || s.textAlign === "center" || s.textAlign === "right") {
+    out.textAlign = s.textAlign;
+  }
+  if (typeof s.radius === "number" && Number.isFinite(s.radius) && s.radius >= 0) {
+    out.radius = Math.min(48, Math.round(s.radius));
+  }
+  if (s.shadow === "none" || s.shadow === "sm" || s.shadow === "lg" || s.shadow === "neu") {
+    out.shadow = s.shadow;
+  }
+  if (s.surface === "solid" || s.surface === "glass") {
+    out.surface = s.surface;
+  }
+  if (typeof s.opacity === "number" && Number.isFinite(s.opacity)) {
+    out.opacity = Math.min(1, Math.max(0.4, s.opacity));
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
+}
+
 function coercePane(raw: Partial<PaneState>, z: number): PaneState | null {
   const types = ["player", "lyrics", "queue", "visualizer", "browse"];
   if (!raw || typeof raw.id !== "string" || !types.includes(raw.type as string)) return null;
   const min = getPaneMin(raw.type as PaneType);
-  return {
+  const style = coercePaneStyle((raw as { style?: unknown }).style);
+  const base: PaneState = {
     id: raw.id,
     type: raw.type as PaneState["type"],
     x: Math.max(0, Math.round(num(raw.x, 24))),
@@ -316,6 +384,8 @@ function coercePane(raw: Partial<PaneState>, z: number): PaneState | null {
     collapsed: raw.collapsed === true,
     z: num(raw.z, z),
   };
+  if (style !== undefined) base.style = style;
+  return base;
 }
 
 function coerceLayout(parsed: unknown): LayoutState | null {
@@ -424,7 +494,7 @@ export function defaultScenes(): Record<SceneName, SceneSlot> {
 }
 
 export function defaultSceneLayout(): SceneLayout {
-  return { version: 4, activeScene: "game", scenes: defaultScenes() };
+  return { version: 5, activeScene: "game", scenes: defaultScenes() };
 }
 
 /** First-run doc for a known canvas: the game scene opens the historic
@@ -436,7 +506,7 @@ export function defaultSceneLayoutFor(areaW: number, areaH: number): SceneLayout
   const first = defaultLayoutFor(areaW, areaH);
   const factories = defaultScenes();
   return {
-    version: 4,
+    version: 5,
     activeScene: "game",
     scenes: {
       game: { preset: first.preset, panes: clonePanes(first.panes) },
@@ -446,16 +516,17 @@ export function defaultSceneLayoutFor(areaW: number, areaH: number): SceneLayout
   };
 }
 
-/** v3 → v4 migration: the stored v3 arrangement seeds every scene so a
+/** v3 → v5 migration: the stored v3 arrangement seeds every scene so a
  *  pre-v4 custom layout survives the upgrade on all three scenes, then
- *  each scene diverges as the user arranges it. Pure. */
+ *  each scene diverges as the user arranges it. v3 panes carry no
+ *  `style` key, so the result inherits everywhere. Pure. */
 export function migrateV3ToV4(v3: LayoutState): SceneLayout {
   const slot = (preset: string, panes: PaneState[]): SceneSlot => ({
     preset,
     panes: clonePanes(panes),
   });
   return {
-    version: 4,
+    version: 5,
     activeScene: "game",
     scenes: {
       game: slot(v3.preset, v3.panes),
@@ -465,20 +536,38 @@ export function migrateV3ToV4(v3: LayoutState): SceneLayout {
   };
 }
 
+/** v4 → v5 migration: additive-only (`style` absent = inherit), so a
+ *  stored v4 arrangement loads with pixel-identical panes. Pure. */
+export function migrateV4ToV5(v4: SceneLayout): SceneLayout {
+  const slot = (s: SceneSlot): SceneSlot => ({
+    preset: s.preset,
+    panes: clonePanes(s.panes),
+  });
+  return {
+    version: 5,
+    activeScene: v4.activeScene,
+    scenes: {
+      game: slot(v4.scenes.game),
+      focus: slot(v4.scenes.focus),
+      stream: slot(v4.scenes.stream),
+    },
+  };
+}
+
 function coerceSceneLayout(parsed: unknown): SceneLayout | null {
   if (!parsed || typeof parsed !== "object") return null;
-  const d = parsed as Partial<SceneLayout> & Partial<LayoutState>;
-  if (d.version === 4 && d.scenes && typeof d.scenes === "object") {
+  const d = parsed as Partial<SceneLayout> & Partial<LayoutState> & { version?: unknown };
+  if ((d.version === 5 || d.version === 4) && d.scenes && typeof d.scenes === "object") {
     const scenes = d.scenes as Record<string, unknown>;
     const game = coerceSceneSlot(scenes["game"]);
     const focus = coerceSceneSlot(scenes["focus"]);
     const stream = coerceSceneSlot(scenes["stream"]);
-    // A v4 doc with no usable scene is corrupt; fall through to null so
-    // the caller falls back to defaults instead of an empty stage.
+    // A scene doc with no usable scene is corrupt; fall through to null
+    // so the caller falls back to defaults instead of an empty stage.
     if (!game && !focus && !stream) return null;
     const fallback = defaultScenes();
-    return {
-      version: 4,
+    const doc: SceneLayout = {
+      version: 5,
       activeScene: isSceneName(d.activeScene) ? d.activeScene : "game",
       scenes: {
         game: game ?? fallback.game,
@@ -486,6 +575,9 @@ function coerceSceneLayout(parsed: unknown): SceneLayout | null {
         stream: stream ?? fallback.stream,
       },
     };
+    // Stored v4 docs read through the same path; the stamp to v5 is
+    // implicit (absent style = inherit), matching migrateV4ToV5.
+    return doc;
   }
   // v3 read fallback: any v3-shaped doc migrates in place.
   const v3 = coerceLayout(parsed);
@@ -507,7 +599,7 @@ export function loadSceneLayout(): SceneLayout | null {
 
 export function saveSceneLayout(doc: SceneLayout): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify({ ...doc, version: 4 }));
+    localStorage.setItem(KEY, JSON.stringify({ ...doc, version: 5 }));
   } catch {
     // Storage full or blocked. Scenes stay in memory.
   }
@@ -529,7 +621,7 @@ export function setActiveSlot(
   preset: string,
 ): SceneLayout {
   return {
-    version: 4,
+    version: 5,
     activeScene: doc.activeScene,
     scenes: {
       ...doc.scenes,

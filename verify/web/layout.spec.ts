@@ -98,7 +98,7 @@ test("toggle off/on restores the exact custom geometry", async ({ page }) => {
 
   // The toggle persisted as custom, not as a factory preset.
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
-  expect(saved.version).toBe(4);
+  expect(saved.version).toBe(5);
   expect(saved.scenes[saved.activeScene].preset).toBe("custom");
   expect(saved.scenes[saved.activeScene].panes.find((p) => p.type === "player")).toMatchObject(before);
 });
@@ -366,7 +366,7 @@ test("overlay chrome paints only inside interactive elements", async ({ page }) 
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(dialog).toBeVisible();
   await dialog
-    .getByRole("group", { name: "Surface" })
+    .getByRole("group", { name: "Surface", exact: true })
     .getByRole("button", { name: "glass", exact: true })
     .click();
   await page.keyboard.press("Escape");
@@ -382,7 +382,7 @@ test("overlay chrome paints only inside interactive elements", async ({ page }) 
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(dialog).toBeVisible();
   await dialog
-    .getByRole("group", { name: "Surface" })
+    .getByRole("group", { name: "Surface", exact: true })
     .getByRole("button", { name: "solid", exact: true })
     .click();
   await page.keyboard.press("Escape");
@@ -392,7 +392,7 @@ test("overlay chrome paints only inside interactive elements", async ({ page }) 
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(dialog).toBeVisible();
   await dialog
-    .getByRole("group", { name: "Theme" })
+    .getByRole("group", { name: "Theme", exact: true })
     .getByRole("button", { name: "light", exact: true })
     .click();
   await page.keyboard.press("Escape");
@@ -408,7 +408,7 @@ test("overlay chrome paints only inside interactive elements", async ({ page }) 
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(dialog).toBeVisible();
   await dialog
-    .getByRole("group", { name: "Theme" })
+    .getByRole("group", { name: "Theme", exact: true })
     .getByRole("button", { name: "dark", exact: true })
     .click();
   await page.keyboard.press("Escape");
@@ -622,7 +622,7 @@ test("Game/Focus/Stream swap per-scene geometry and persist it", async ({ page }
   await expect(page.locator('section[data-pane="lyrics"]')).toBeVisible();
   await expect(scenes.getByRole("button", { name: "Focus", exact: true })).toHaveAttribute("aria-pressed", "true");
   let saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
-  expect(saved.version).toBe(4);
+  expect(saved.version).toBe(5);
   expect(saved.activeScene).toBe("focus");
 
   // Per-scene divergence: hide the player in Focus only. The dock chip sits
@@ -655,7 +655,7 @@ test("Game/Focus/Stream swap per-scene geometry and persist it", async ({ page }
   expect(reloaded.activeScene).toBe("focus");
 });
 
-test("stored v3 migrates into every v4 scene", async ({ page }) => {
+test("stored v3 migrates into every v5 scene", async ({ page }) => {
   await stubTauri(page, { layout: CUSTOM_LAYOUT });
   await page.goto("/");
   await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
@@ -663,7 +663,7 @@ test("stored v3 migrates into every v4 scene", async ({ page }) => {
   // The v3 seed upgrades to a v4 doc on boot, parked on Game, with the
   // custom arrangement seeded into every scene.
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
-  expect(saved.version).toBe(4);
+  expect(saved.version).toBe(5);
   expect(saved.activeScene).toBe("game");
   for (const s of ["game", "focus", "stream"]) {
     expect(saved.scenes[s].preset).toBe("custom");

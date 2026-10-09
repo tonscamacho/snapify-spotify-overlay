@@ -2533,6 +2533,105 @@ select:focus-visible,
   background-image: none;
 }
 
+/* ---------- per-pane overrides ----------
+   Every rule here carries (0,5,0) (`.app[data-theme]
+   .pane[data-pane-id][data-pane-*]`): it beats the candy washes
+   (0,4,0) and the custom neutralize (0,4,0) outright, ties the
+   pastel-glass twins (0,5,0) and wins by later source order. Panes
+   without `style` emit no attr and no vars, so the global cascade
+   stays pixel-identical. Never reorder the pastel / glass / custom
+   blocks above to accommodate these rules. */
+
+/* Radius + text style: fallbacks equal the base .pane values, so a
+   pane that overrides only another field renders identically here. */
+.app[data-theme] .pane[data-pane-id][data-pane-override] {
+  border-radius: var(--pane-radius, var(--r-lg));
+  font-family: var(--pane-font, inherit);
+  font-size: var(--pane-size, inherit);
+  font-weight: var(--pane-weight, inherit);
+  text-align: var(--pane-align, inherit);
+}
+
+/* Background override: matches only when --pane-bg is bound, so a
+   pane with no bg keeps its candy wash / starfield / custom tint. */
+.app[data-theme] .pane[data-pane-id][data-pane-override][style*="--pane-bg"] {
+  background-color: var(--pane-bg);
+  background-image: none;
+}
+
+/* Shadow override: the binding maps none/sm/lg to --pane-shadow; neu
+   is restyled by the neo rules at the tail. */
+.app[data-theme] .pane[data-pane-id][data-pane-shadow] {
+  box-shadow: var(--pane-shadow, var(--shadow));
+}
+
+/* Per-pane glass under a solid global: opt this pane into the
+   backdrop-filter + sheen treatment. */
+.app[data-theme] .pane[data-pane-id][data-pane-surface="glass"] {
+  background-color: var(--pane-bg, var(--glass-regular, rgba(20, 24, 32, 0.42)));
+  backdrop-filter: blur(var(--lg-blur-regular, 16px)) saturate(var(--lg-saturate, 175%));
+  -webkit-backdrop-filter: blur(var(--lg-blur-regular, 16px)) saturate(var(--lg-saturate, 175%));
+}
+
+.app[data-theme] .pane[data-pane-id][data-pane-surface="glass"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.18), transparent 40%);
+}
+
+/* Per-pane solid under a glass global: stay opaque. */
+.app[data-theme="dark"][data-surface="glass"] .pane[data-pane-id][data-pane-surface="solid"],
+.app[data-theme="light"][data-surface="glass"] .pane[data-pane-id][data-pane-surface="solid"],
+.app[data-theme="sparkles"][data-surface="glass"] .pane[data-pane-id][data-pane-surface="solid"],
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane-id][data-pane-surface="solid"],
+.app[data-theme="neo-light"][data-surface="glass"] .pane[data-pane-id][data-pane-surface="solid"],
+.app[data-theme="neo-dark"][data-surface="glass"] .pane[data-pane-id][data-pane-surface="solid"] {
+  background-color: var(--pane-bg, var(--surface));
+  background-image: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.app[data-theme="dark"][data-surface="glass"] .pane[data-pane-id][data-pane-surface="solid"]::before,
+.app[data-theme="light"][data-surface="glass"] .pane[data-pane-id][data-pane-surface="solid"]::before,
+.app[data-theme="sparkles"][data-surface="glass"] .pane[data-pane-id][data-pane-surface="solid"]::before,
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane-id][data-pane-surface="solid"]::before,
+.app[data-theme="neo-light"][data-surface="glass"] .pane[data-pane-id][data-pane-surface="solid"]::before,
+.app[data-theme="neo-dark"][data-surface="glass"] .pane[data-pane-id][data-pane-surface="solid"]::before {
+  content: none;
+}
+
+/* Per-pane non-neo theme overrides: flat theme base, starfield and
+   candy neutralized (a sparkles override reads as a flat patch, the
+   documented tradeoff). Neo per-pane themes are fully restyled at
+   the tail. */
+.app[data-theme] .pane[data-pane-id][data-pane-theme="dark"] {
+  background-color: var(--pane-bg, #17171a);
+  background-image: none;
+  color: #f5f5f7;
+}
+
+.app[data-theme] .pane[data-pane-id][data-pane-theme="light"] {
+  background-color: var(--pane-bg, #ffffff);
+  background-image: none;
+  color: #1d1d1f;
+}
+
+.app[data-theme] .pane[data-pane-id][data-pane-theme="sparkles"] {
+  background-color: var(--pane-bg, #0b1330);
+  background-image: none;
+  color: #edf1ff;
+}
+
+.app[data-theme] .pane[data-pane-id][data-pane-theme="pastel"] {
+  background-color: var(--pane-bg, #fff9ef);
+  background-image: none;
+  color: #443728;
+}
+
 /* Settings row controls: swatch plus hex field plus reset. */
 .overlay-color-controls {
   display: inline-flex;
@@ -3377,5 +3476,244 @@ select:focus-visible,
   }
   .player-full .volume-row .vol {
     height: 22px;
+  }
+}
+
+/* ---------- neumorphism preset (neo-light / neo-dark) ----------
+   Soft matte base, dual light+dark shadows, inset wells on
+   headers/controls, 20px minimum radius. Same block shape as the
+   light / pastel theme blocks above: tokens on the app root, then
+   component twins. Prototype-measured contrast: neo-light text
+   #3d4657 on #e0e5ec (7.50:1), neo-dark #d7dce3 on #2A2D34
+   (10.00:1); neo-light focus #005bd1 (4.85:1), neo-dark #0a84ff
+   (3.78:1). Neo disables glass: the matte base the dual shadows
+   need is destroyed by translucency, so neo panes stay opaque with
+   no sheen even under data-surface="glass". */
+
+.app[data-theme="neo-light"] {
+  --surface: #e0e5ec;
+  --surface-2: #d1d9e6;
+  --stroke: rgba(61, 70, 87, 0.16);
+  --stroke-soft: rgba(61, 70, 87, 0.09);
+  --txt: #3d4657;
+  --dim: rgba(61, 70, 87, 0.72);
+  --faint: rgba(61, 70, 87, 0.58);
+  --track: rgba(61, 70, 87, 0.16);
+  --skel: rgba(61, 70, 87, 0.07);
+  --accent: #006666;
+  --focus: #005bd1;
+  --shadow: 8px 8px 16px #a3b1c6, -8px -8px 16px #ffffff;
+  --shadow-sm: 4px 4px 8px #a3b1c6, -4px -4px 8px #ffffff;
+  --neu-inset: inset 2px 2px 5px #a3b1c6, inset -2px -2px 5px #ffffff;
+}
+
+.app[data-theme="neo-dark"] {
+  --surface: #2a2d34;
+  --surface-2: #22252b;
+  --stroke: rgba(215, 220, 227, 0.16);
+  --stroke-soft: rgba(215, 220, 227, 0.09);
+  --txt: #d7dce3;
+  --dim: rgba(215, 220, 227, 0.72);
+  --faint: rgba(215, 220, 227, 0.58);
+  --track: rgba(215, 220, 227, 0.16);
+  --skel: rgba(215, 220, 227, 0.09);
+  --accent: #00d4d4;
+  --focus: #0a84ff;
+  --shadow: 8px 8px 16px rgba(0, 0, 0, 0.5), -8px -8px 16px rgba(255, 255, 255, 0.1);
+  --shadow-sm: 4px 4px 8px rgba(0, 0, 0, 0.5), -4px -4px 8px rgba(255, 255, 255, 0.1);
+  --neu-inset: inset 2px 2px 5px rgba(0, 0, 0, 0.5), inset -2px -2px 5px rgba(255, 255, 255, 0.1);
+}
+
+.app[data-theme="neo-light"]::selection {
+  background: rgba(0, 91, 209, 0.24);
+}
+
+.app[data-theme="neo-dark"]::selection {
+  background: rgba(0, 212, 212, 0.28);
+}
+
+.app[data-theme="neo-light"] button:focus-visible,
+.app[data-theme="neo-light"] input:focus-visible,
+.app[data-theme="neo-light"] select:focus-visible,
+.app[data-theme="neo-light"] .bar:focus-visible,
+.app[data-theme="neo-light"] .line:focus-visible {
+  outline: 2px solid #005bd1;
+  outline-offset: 2px;
+}
+
+.app[data-theme="neo-light"] .bar i,
+.app[data-theme="neo-light"] .mini-progress i {
+  background: #006666;
+}
+
+.app[data-theme="neo-dark"] .bar i,
+.app[data-theme="neo-dark"] .mini-progress i {
+  background: #00d4d4;
+}
+
+.app[data-theme="neo-light"] .play-disc,
+.app[data-theme="neo-light"] .btn.primary {
+  background: #006666;
+  color: #f2f5f9;
+}
+
+.app[data-theme="neo-dark"] .play-disc,
+.app[data-theme="neo-dark"] .btn.primary {
+  background: #00d4d4;
+  color: #1a2226;
+}
+
+.app[data-theme="neo-light"] .icon-btn {
+  color: rgba(61, 70, 87, 0.72);
+}
+
+.app[data-theme="neo-light"] .icon-btn:hover:not(:disabled) {
+  background: rgba(61, 70, 87, 0.07);
+  color: #3d4657;
+}
+
+.app[data-theme="neo-dark"] .icon-btn {
+  color: rgba(215, 220, 227, 0.72);
+}
+
+.app[data-theme="neo-dark"] .icon-btn:hover:not(:disabled) {
+  background: rgba(215, 220, 227, 0.08);
+  color: #d7dce3;
+}
+
+.app[data-theme="neo-light"] .settings-device {
+  background: #d1d9e6;
+  box-shadow: var(--neu-inset);
+}
+
+.app[data-theme="neo-dark"] .settings-device {
+  background: #22252b;
+  box-shadow: var(--neu-inset);
+}
+
+/* Inset wells on headers/controls inside neo panes. */
+.app[data-theme="neo-light"] .pane-handle,
+.app[data-theme="neo-light"] .pane[data-pane="lyrics"] .lyrics-meta,
+.app[data-theme="neo-light"] .pane[data-pane="queue"] .pane-subhead,
+.app[data-theme="neo-light"] .pane[data-pane="visualizer"] .viz-meta,
+.app[data-theme="neo-light"] .pane[data-pane="browse"] .browse-tabs,
+.app[data-theme="neo-light"] .pane[data-pane="browse"] .search-wrap {
+  box-shadow: var(--neu-inset);
+  border-radius: 12px;
+}
+
+.app[data-theme="neo-dark"] .pane-handle,
+.app[data-theme="neo-dark"] .pane[data-pane="lyrics"] .lyrics-meta,
+.app[data-theme="neo-dark"] .pane[data-pane="queue"] .pane-subhead,
+.app[data-theme="neo-dark"] .pane[data-pane="visualizer"] .viz-meta,
+.app[data-theme="neo-dark"] .pane[data-pane="browse"] .browse-tabs,
+.app[data-theme="neo-dark"] .pane[data-pane="browse"] .search-wrap {
+  box-shadow: var(--neu-inset);
+  border-radius: 12px;
+}
+
+/* Global neo + global glass: neo stays opaque, no sheen. */
+.app[data-theme="neo-light"][data-surface="glass"] .pane,
+.app[data-theme="neo-light"][data-surface="glass"] .dock,
+.app[data-theme="neo-light"][data-surface="glass"] .modal,
+.app[data-theme="neo-dark"][data-surface="glass"] .pane,
+.app[data-theme="neo-dark"][data-surface="glass"] .dock,
+.app[data-theme="neo-dark"][data-surface="glass"] .modal {
+  background-color: var(--surface);
+  background-image: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: var(--shadow);
+}
+
+.app[data-theme="neo-light"][data-surface="glass"] .pane::before,
+.app[data-theme="neo-light"][data-surface="glass"] .dock::before,
+.app[data-theme="neo-light"][data-surface="glass"] .modal::before,
+.app[data-theme="neo-dark"][data-surface="glass"] .pane::before,
+.app[data-theme="neo-dark"][data-surface="glass"] .dock::before,
+.app[data-theme="neo-dark"][data-surface="glass"] .modal::before {
+  content: none;
+}
+
+/* Sharp x neo floor: neo keeps a 20px minimum radius even when the
+   global corners value is sharp (the binding enforces the same floor
+   inline; this covers theme-level neo without a bound var). */
+.app[data-corners="sharp"] .pane[data-pane-theme="neo-light"],
+.app[data-corners="sharp"] .pane[data-pane-theme="neo-dark"],
+.app[data-theme="neo-light"] .pane,
+.app[data-theme="neo-dark"] .pane {
+  border-radius: 20px;
+}
+
+.app[data-theme] .pane[data-pane-id][data-pane-theme="neo-light"],
+.app[data-theme] .pane[data-pane-id][data-pane-theme="neo-dark"] {
+  border-radius: var(--pane-radius, 20px);
+}
+
+/* Per-pane neo themes: full token restyle scoped to the pane, so one
+   neo pane coexists with untouched global panes. */
+.app[data-theme] .pane[data-pane-id][data-pane-theme="neo-light"] {
+  --surface: #e0e5ec;
+  --surface-2: #d1d9e6;
+  --txt: #3d4657;
+  --dim: rgba(61, 70, 87, 0.72);
+  --faint: rgba(61, 70, 87, 0.58);
+  --track: rgba(61, 70, 87, 0.16);
+  --skel: rgba(61, 70, 87, 0.07);
+  --neu-inset: inset 2px 2px 5px #a3b1c6, inset -2px -2px 5px #ffffff;
+  background-color: var(--pane-bg, #e0e5ec);
+  background-image: none;
+  color: #3d4657;
+  border-color: rgba(61, 70, 87, 0.16);
+  box-shadow: 8px 8px 16px #a3b1c6, -8px -8px 16px #ffffff;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.app[data-theme] .pane[data-pane-id][data-pane-theme="neo-dark"] {
+  --surface: #2a2d34;
+  --surface-2: #22252b;
+  --txt: #d7dce3;
+  --dim: rgba(215, 220, 227, 0.72);
+  --faint: rgba(215, 220, 227, 0.58);
+  --track: rgba(215, 220, 227, 0.16);
+  --skel: rgba(215, 220, 227, 0.09);
+  --neu-inset: inset 2px 2px 5px rgba(0, 0, 0, 0.5), inset -2px -2px 5px rgba(255, 255, 255, 0.1);
+  background-color: var(--pane-bg, #2a2d34);
+  background-image: none;
+  color: #d7dce3;
+  border-color: rgba(215, 220, 227, 0.16);
+  box-shadow: 8px 8px 16px rgba(0, 0, 0, 0.5), -8px -8px 16px rgba(255, 255, 255, 0.1);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.app[data-theme] .pane[data-pane-id][data-pane-theme="neo-light"]::before,
+.app[data-theme] .pane[data-pane-id][data-pane-theme="neo-dark"]::before {
+  content: none;
+}
+
+.app[data-theme] .pane[data-pane-id][data-pane-theme="neo-light"] .pane-handle,
+.app[data-theme] .pane[data-pane-id][data-pane-theme="neo-dark"] .pane-handle {
+  box-shadow: var(--neu-inset);
+  border-radius: 12px;
+}
+
+/* Per-pane neu shadow finish on non-neo panes. */
+.app[data-theme] .pane[data-pane-id][data-pane-shadow="neu"]:not([data-pane-theme="neo-light"]):not([data-pane-theme="neo-dark"]) {
+  box-shadow: 8px 8px 16px rgba(163, 177, 198, 0.7), -8px -8px 16px rgba(255, 255, 255, 0.7);
+}
+
+/* Custom color x neo: the shadow pair derives from --pane-bg via
+   color-mix, with the precomputed static pair above as the fallback
+   for engines without color-mix. */
+@supports (box-shadow: color-mix(in srgb, red 50%, blue)) {
+  .app[data-theme] .pane[data-pane-id][data-pane-theme="neo-light"][style*="--pane-bg"] {
+    box-shadow: 8px 8px 16px color-mix(in srgb, var(--pane-bg) 80%, #5a6b85),
+      -8px -8px 16px color-mix(in srgb, var(--pane-bg) 55%, #ffffff);
+  }
+  .app[data-theme] .pane[data-pane-id][data-pane-theme="neo-dark"][style*="--pane-bg"] {
+    box-shadow: 8px 8px 16px color-mix(in srgb, var(--pane-bg) 70%, #000000),
+      -8px -8px 16px color-mix(in srgb, var(--pane-bg) 70%, #ffffff);
   }
 }

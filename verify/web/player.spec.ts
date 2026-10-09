@@ -313,7 +313,7 @@ test("player collapses to header-only and persists", async ({ page }) => {
 
   // The collapsed flag persists per scene, not as a preset swap.
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("snapify-layout-v3")!));
-  expect(saved.version).toBe(4);
+  expect(saved.version).toBe(5);
   expect(
     saved.scenes[saved.activeScene].panes.find((p) => p.type === "player").collapsed,
   ).toBe(true);

@@ -121,7 +121,7 @@ test("custom color stays coherent on pastel, sparkles, and glass", async ({ page
   const dialog = await openSettings(page);
 
   await dialog
-    .getByRole("group", { name: "Theme" })
+    .getByRole("group", { name: "Theme", exact: true })
     .getByRole("button", { name: "pastel", exact: true })
     .click();
   const hex = dialog.getByLabel("Overlay color hex");
@@ -137,7 +137,7 @@ test("custom color stays coherent on pastel, sparkles, and glass", async ({ page
 
   // Sparkles starfield yields too (no layered star gradients).
   await dialog
-    .getByRole("group", { name: "Theme" })
+    .getByRole("group", { name: "Theme", exact: true })
     .getByRole("button", { name: "sparkles", exact: true })
     .click();
   expect(await player.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(
@@ -148,7 +148,7 @@ test("custom color stays coherent on pastel, sparkles, and glass", async ({ page
 
   // Glass stays translucent in the custom tint, never opaque.
   await dialog
-    .getByRole("group", { name: "Surface" })
+    .getByRole("group", { name: "Surface", exact: true })
     .getByRole("button", { name: "glass", exact: true })
     .click();
   const glassBg = await player.evaluate((el) => getComputedStyle(el).backgroundColor);

@@ -3,6 +3,7 @@ import {
   clampLayoutToArea,
   clampPaneToArea,
   clonePanes,
+  coercePaneStyle,
   DEFAULT_STREAM,
   defaultLayoutFor,
   defaultSceneLayout,
@@ -16,6 +17,7 @@ import {
   loadNotchHover,
   loadStreamSettings,
   migrateV3ToV4,
+  migrateV4ToV5,
   newPaneForType,
   NOTCH_HOVER_KEY,
   PANE_MIN,
@@ -490,7 +492,7 @@ describe("migrateV3ToV4", () => {
   it("seeds every scene with the v3 arrangement and parks on game", () => {
     const v3 = layout([pane({ id: "a", x: 111, y: 222 })]);
     const v4 = migrateV3ToV4(v3);
-    expect(v4.version).toBe(4);
+    expect(v4.version).toBe(5);
     expect(v4.activeScene).toBe("game");
     for (const s of ["game", "focus", "stream"] as const) {
       expect(v4.scenes[s].preset).toBe("custom");
@@ -534,7 +536,7 @@ describe("defaultScenes", () => {
 
   it("parks a fresh doc on the game scene", () => {
     const doc = defaultSceneLayout();
-    expect(doc).toMatchObject({ version: 4, activeScene: "game" });
+    expect(doc).toMatchObject({ version: 5, activeScene: "game" });
   });
 
   it("opens the first-run stage (lyrics + player) on game, factories elsewhere", () => {
@@ -597,7 +599,7 @@ describe("loadSceneLayout", () => {
     const v3 = layout([pane({ id: "a", x: 100, y: 150, w: 340, h: 230 })]);
     stubStorage({ "snapify-layout-v3": JSON.stringify(v3) });
     const doc = loadSceneLayout();
-    expect(doc?.version).toBe(4);
+    expect(doc?.version).toBe(5);
     expect(doc?.activeScene).toBe("game");
     expect(doc?.scenes.game.panes[0]).toMatchObject({ id: "a", x: 100, y: 150 });
     expect(doc?.scenes.stream.panes[0]).toMatchObject({ id: "a", x: 100, y: 150 });
@@ -623,6 +625,111 @@ describe("loadSceneLayout", () => {
   it("returns null when nothing is stored", () => {
     stubStorage();
     expect(loadSceneLayout()).toBeNull();
+  });
+});
+
+describe("coercePaneStyle", () => {
+  it("returns undefined for absent or non-object input (inherit)", () => {
+    expect(coercePaneStyle(undefined)).toBeUndefined();
+    expect(coercePaneStyle(null)).toBeUndefined();
+    expect(coercePaneStyle({})).toBeUndefined();
+    expect(coercePaneStyle("neo-light")).toBeUndefined();
+  });
+
+  it("keeps a fully valid override", () => {
+    expect(
+      coercePaneStyle({
+        bg: "#DDEEFF",
+        theme: "neo-dark",
+        fontFamily: "Georgia, serif",
+        fontSize: 18,
+        fontWeight: 600,
+        textAlign: "center",
+        radius: 24,
+        shadow: "neu",
+        surface: "glass",
+        opacity: 0.8,
+      }),
+    ).toEqual({
+      bg: "#ddeeff",
+      theme: "neo-dark",
+      fontFamily: "Georgia, serif",
+      fontSize: 18,
+      fontWeight: 600,
+      textAlign: "center",
+      radius: 24,
+      shadow: "neu",
+      surface: "glass",
+      opacity: 0.8,
+    });
+  });
+
+  it("coerces unknown values to undefined (inherit), keeping valid fields", () => {
+    expect(
+      coercePaneStyle({ bg: "not-a-color", theme: "hologram", shadow: "xxl", surface: "frost" }),
+    ).toBeUndefined();
+    expect(
+      coercePaneStyle({ bg: "zzz", theme: "neo-light", radius: -4, opacity: 99 }),
+    ).toEqual({ theme: "neo-light", opacity: 1 });
+  });
+
+  it("normalizes short hex and clamps ranges", () => {
+    expect(coercePaneStyle({ bg: "#abc" })).toEqual({ bg: "#aabbcc" });
+    expect(coercePaneStyle({ opacity: 0.1 })).toEqual({ opacity: 0.4 });
+    expect(coercePaneStyle({ fontSize: 200 })).toEqual({ fontSize: 64 });
+  });
+});
+
+describe("migrateV4ToV5", () => {
+  it("stamps the version while preserving geometry and style", () => {
+    const v4: SceneLayout = {
+      ...defaultSceneLayout(),
+      version: 4 as unknown as 5,
+      scenes: {
+        ...defaultSceneLayout().scenes,
+        game: {
+          preset: "custom",
+          panes: [pane({ id: "a", x: 111, style: { theme: "neo-light" } })],
+        },
+      },
+    };
+    const v5 = migrateV4ToV5(v4);
+    expect(v5.version).toBe(5);
+    expect(v5.activeScene).toBe("game");
+    expect(v5.scenes.game.panes[0]).toMatchObject({ id: "a", x: 111, style: { theme: "neo-light" } });
+    expect(v5.scenes.focus.preset).toBe("lyrics");
+  });
+
+  it("loads a stored v4 doc through the migration", () => {
+    const v4 = { ...defaultSceneLayout(), version: 4 };
+    stubStorage({ "snapify-layout-v3": JSON.stringify(v4) });
+    const doc = loadSceneLayout();
+    expect(doc?.version).toBe(5);
+    expect(doc?.activeScene).toBe("game");
+  });
+
+  it("round-trips a v5 doc carrying per-pane style", () => {
+    stubStorage();
+    const doc: SceneLayout = {
+      ...defaultSceneLayout(),
+      activeScene: "focus",
+      scenes: {
+        ...defaultSceneLayout().scenes,
+        focus: { preset: "custom", panes: [pane({ id: "f", style: { bg: "#ddeeff" } })] },
+      },
+    };
+    saveSceneLayout(doc);
+    const back = loadSceneLayout();
+    expect(back?.version).toBe(5);
+    expect(back?.scenes.focus.panes[0]).toMatchObject({ id: "f", style: { bg: "#ddeeff" } });
+    expect(back?.scenes.game.panes[0]).not.toHaveProperty("style");
+  });
+
+  it("deep-copies style so later mutation cannot corrupt the scenes", () => {
+    const v4 = { ...defaultSceneLayout(), version: 4 as unknown as 5 };
+    const v5 = migrateV4ToV5(v4);
+    v4.scenes.game.panes[0].x = 777;
+    expect(v5.scenes.game.panes[0].x).not.toBe(777);
   });
 });
 
