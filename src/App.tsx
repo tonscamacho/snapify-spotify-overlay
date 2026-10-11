@@ -28,7 +28,7 @@ import {
 } from "./components/icons";
 import { api, isSessionDead, parsePlayer, toThrottleError } from "./lib/spotify";
 import { ActionGate, PendingQueue, flushDelayMs, shiftQueueForNext } from "./lib/pendingQueue";
-import { reportOverlayMode, reportOverlayRegions, setOverlayDragCover, watchRegionElementSizes } from "./lib/overlay";
+import { currentOverlayEpoch, reportOverlayMode, reportOverlayRegions, setOverlayDragCover, watchRegionElementSizes } from "./lib/overlay";
 import { ensurePlayer, isSdkReady, sdkPause, sdkResume, setSdkVolume } from "./lib/player-sdk";
 import { initialBrowse } from "./lib/browse";
 import type { TransLang } from "./lib/translate";
@@ -1013,8 +1013,36 @@ export default function App() {
   // rects, so the game keeps focus and keeps moving on empty space.
   // Visibility (true hide/show) is a separate global action that hides the
   // window entirely.
+  // Hit regions follow the visible UI so empty stage pixels stay
+  // click-through even while interactive. Dirty-rect diffing lives in
+  // overlay.ts (unchanged rects skip the invoke); this scheduler adds the
+  // rate bound: at most one report per 120 ms no matter how fast layout,
+  // toasts, or observers churn, so a drag can never exceed ~8/s. The Rust
+  // applied-signature dedupe is only a backstop. The ResizeObserver catches
+  // element-size changes (toast growth, uiScale zoom reflow) that never
+  // touch layout state; window resize is covered the same way. Mode flips
+  // bypass this debounce via reportOverlayMode's synchronous flush.
+  const regionTimer = useRef(0);
+  const scheduleRegionReport = useCallback(() => {
+    if (regionTimer.current) window.clearTimeout(regionTimer.current);
+    regionTimer.current = window.setTimeout(() => {
+      regionTimer.current = 0;
+      void reportOverlayRegions();
+    }, 120);
+  }, []);
+
   useEffect(() => {
     const passive = loggedIn && !interactive && !editing && !settingsOpen;
+    // Sequenced flush: reportOverlayMode bumps the epoch and sends mode
+    // first, then regions immediately (no 120 ms gap). Drop any pending
+    // debounced churn report — it was scheduled against pre-flip rects and
+    // the synchronous flush supersedes it; later churn re-schedules fresh.
+    // Reading the epoch keeps the sequencing dependency explicit.
+    void currentOverlayEpoch();
+    if (regionTimer.current) {
+      window.clearTimeout(regionTimer.current);
+      regionTimer.current = 0;
+    }
     void reportOverlayMode(!passive);
     if (passive) {
       void getCurrentWindow().setIgnoreCursorEvents(true).catch(() => {});
@@ -1026,23 +1054,6 @@ export default function App() {
       // Private mode. Prefs last the session.
     }
   }, [loggedIn, interactive, settingsOpen, editing]);
-
-  // Hit regions follow the visible UI so empty stage pixels stay
-  // click-through even while interactive. Dirty-rect diffing lives in
-  // overlay.ts (unchanged rects skip the invoke); this scheduler adds the
-  // rate bound: at most one report per 120 ms no matter how fast layout,
-  // toasts, or observers churn, so a drag can never exceed ~8/s. The Rust
-  // applied-signature dedupe is only a backstop. The ResizeObserver catches
-  // element-size changes (toast growth, uiScale zoom reflow) that never
-  // touch layout state; window resize is covered the same way.
-  const regionTimer = useRef(0);
-  const scheduleRegionReport = useCallback(() => {
-    if (regionTimer.current) window.clearTimeout(regionTimer.current);
-    regionTimer.current = window.setTimeout(() => {
-      regionTimer.current = 0;
-      void reportOverlayRegions();
-    }, 120);
-  }, []);
 
   useEffect(() => {
     scheduleRegionReport();
@@ -1817,6 +1828,12 @@ export default function App() {
         persist(panes, presetRef.current);
         return panes;
       });
+      // Collapse swaps the pane to header-only (body display:none); the OS
+      // shape must tighten without waiting for the 120 ms layout debounce.
+      // Post-paint so the measured rect is the collapsed height, not stale.
+      requestAnimationFrame(() => {
+        void reportOverlayRegions();
+      });
     },
     [persist, pushUndoSnapshot],
   );
@@ -2282,6 +2299,38 @@ export default function App() {
       void reportOverlayRegions();
     }
   };
+
+  // Editing turned off mid-drag (Esc cascade, tray/hotkey double-toggle)
+  // strands the fullscreen drag-cover shape: the pointer is gone but the OS
+  // region still covers the viewport. Cancel the gesture and force one
+  // tight report so empty pixels go back to click-through at once, even
+  // though the mode flip already cleared the cover and flushed.
+  useEffect(() => {
+    if (!editing && dragRef.current) {
+      dragRef.current = null;
+      if (dragPending.current) dragPending.current = null;
+      setGuides({ v: [], h: [] });
+      setOverlayDragCover(false);
+      void reportOverlayRegions();
+    }
+  }, [editing]);
+
+  // Window blur mid-drag (Alt+Tab, focus steal) never fires pointerup, so
+  // the cover would strand the same way. Release and re-tighten here; the
+  // stage onPointerCancel path covers pointercancel, unmount covers teardown.
+  useEffect(() => {
+    const onBlur = () => {
+      if (dragRef.current) {
+        dragRef.current = null;
+        if (dragPending.current) dragPending.current = null;
+        setGuides({ v: [], h: [] });
+        setOverlayDragCover(false);
+        void reportOverlayRegions();
+      }
+    };
+    window.addEventListener("blur", onBlur);
+    return () => window.removeEventListener("blur", onBlur);
+  }, []);
 
   /** Keyboard resize for one resize handle. Arrows drive the handle's own
    *  edge(s) by KB_STEP with the same snap/clamp/persist path as a drag;

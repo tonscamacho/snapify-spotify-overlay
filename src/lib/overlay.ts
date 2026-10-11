@@ -12,11 +12,12 @@ interface OverlayRect {
 const SELECTORS = [
   "section.pane",
   ".dock",
-  // Edit-only notch: the collapsed dock pill plus its full-width top-edge
-  // hover strip. Both render only while editing with notch autohide on, so
-  // passive mode is unaffected (Rust ignores regions unless interactive).
+  // Edit-only notch: the collapsed dock pill. The transparent top-edge hover
+  // strip (.notch-strip, 120x12, pointer-events:none in App.css) is
+  // deliberately excluded: it is invisible yet OS-clickable, so reporting it
+  // strands a click-eating bar across mode flips. Hover reveal flows through
+  // the window mousemove listener (App.tsx) instead of the OS region.
   ".notch",
-  ".notch-strip",
   ".modal",
   ".gate-card",
   ".toasts .toast",
@@ -120,6 +121,23 @@ export function resetOverlayRegionDiff(): void {
  *  cover the full viewport so the OS shape cannot clip the gesture.
  *  Cleared on release; the release report re-tightens to per-pane rects. */
 let dragCover = false;
+
+// Monotonically increasing report epoch. Every mode flip bumps it before
+// the mode invoke, so a debounced regions report scheduled before the flip
+// can be recognised as stale (App.tsx clears the pending timer on flip and
+// relies on the synchronous flush below instead). Exported for the mode
+// effect and tests; the Rust side needs no change (frontend-only sequencing).
+let overlayEpoch = 0;
+
+/** Current report epoch (bumps on every mode flip). */
+export function currentOverlayEpoch(): number {
+  return overlayEpoch;
+}
+
+/** Test seam: read the fullscreen drag-cover flag. */
+export function isOverlayDragCover(): boolean {
+  return dragCover;
+}
 
 export function setOverlayDragCover(on: boolean): void {
   dragCover = on;
@@ -242,6 +260,18 @@ export function watchRegionElementSizes(onDirty: () => void): () => void {
 }
 
 export async function reportOverlayMode(interactive: boolean): Promise<void> {
+  // Sequenced mode+regions flush (frontend-only fix for the spill race):
+  // the old path invoked set_overlay_mode fire-and-forget while regions
+  // lagged up to 120 ms behind the debounce, so a fast toggle applied the
+  // mode against stale rects for a frame. Bumping the epoch first lets the
+  // pending debounce recognise itself as stale; clearing dragCover on the
+  // passive transition keeps a mid-drag fullscreen payload from stranding
+  // across the flip. Forgetting the frontend diff forces the regions
+  // re-invoke below even when rects are unchanged (same-rects
+  // interactive→passive→interactive would otherwise skip it and leave the
+  // window cleared while interactive).
+  overlayEpoch += 1;
+  if (!interactive) dragCover = false;
   // Order with regions reports: the Rust passive path clears via
   // SetWindowRgn(NULL) and the next regions report must re-apply even when
   // the rects are unchanged. Forgetting the frontend diff forces that
@@ -253,4 +283,6 @@ export async function reportOverlayMode(interactive: boolean): Promise<void> {
   } catch {
     // Same fallback as above.
   }
+  // Mode first, then regions immediately: no 120 ms gap for mode.
+  await reportOverlayRegions();
 }
