@@ -166,6 +166,10 @@ select:focus-visible,
   gap: 8px;
   padding: 10px 16px 2px;
   min-height: 26px;
+  /* No separate header bar: the pane surface shows through, so the top
+     edge can never paint a light full-width strip that reads as a native
+     caption above the PLAYER card. */
+  background: transparent;
 }
 
 .pane.editing .pane-handle {
@@ -1215,6 +1219,16 @@ select:focus-visible,
   height: 16px;
   background: var(--stroke);
   margin: 0 4px;
+}
+
+/* Edit-OFF paint backstop: the dock/notch unmount synchronously with the
+   editing flag (App.tsx editing&&loggedIn gate), and this rule flips in the
+   same style recalc as data-editing — before any region flush — so no frame
+   can paint a lingering top pill that reads as caption chrome. */
+.app:not([data-editing="true"]) .dock,
+.app:not([data-editing="true"]) .notch,
+.app:not([data-editing="true"]) .notch-strip {
+  display: none !important;
 }
 
 /* ---------- editor notch (collapsed dock) ---------- */
@@ -2596,9 +2610,12 @@ select:focus-visible,
 }
 
 /* Per-pane collapse toggle in the pane header. Always visible (not just
-   edit mode) so the mini player stays one press away mid-game. */
+   edit mode) so the mini player stays one press away mid-game. The toggle
+   sits with the title at the header's leading edge, never at the far-right
+   caption corner, so a lone chevron atop a light pane can't mimic the
+   native -/square/X cluster. */
 .collapse-btn {
-  margin-left: auto;
+  margin-left: 0;
   width: 22px;
   height: 22px;
   display: grid;
@@ -2621,10 +2638,6 @@ select:focus-visible,
 .app[data-theme="light"] .collapse-btn:hover {
   background: rgba(0, 0, 0, 0.05);
   color: #000;
-}
-
-.pane.editing .collapse-btn {
-  margin-left: 0;
 }
 
 /* Collapsed panes drop their content floor and hide the body; the stored

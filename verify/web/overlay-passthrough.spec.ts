@@ -26,15 +26,29 @@ test("interactive mode keeps empty stage click-through", async ({ page }) => {
   expect(panePe).toBe("auto");
 
   // Frontend must report hit regions so Rust can keep empty pixels transparent.
+  // Mode flips ride the atomic set_overlay_mode_with_regions invoke (single
+  // mode+regions apply, no stale interim); debounced churn still uses
+  // set_overlay_regions. Accept either path so the spec locks behavior, not
+  // the invoke name.
   await expect
-    .poll(async () => (await commandsNamed(page, "set_overlay_regions")).length, {
-      timeout: 10000,
-    })
+    .poll(
+      async () =>
+        (await commandsNamed(page, "set_overlay_regions")).length +
+        (await commandsNamed(page, "set_overlay_mode_with_regions")).length,
+      {
+        timeout: 10000,
+      },
+    )
     .toBeGreaterThan(0);
   await expect
-    .poll(async () => (await commandsNamed(page, "set_overlay_mode")).length, {
-      timeout: 10000,
-    })
+    .poll(
+      async () =>
+        (await commandsNamed(page, "set_overlay_mode")).length +
+        (await commandsNamed(page, "set_overlay_mode_with_regions")).length,
+      {
+        timeout: 10000,
+      },
+    )
     .toBeGreaterThan(0);
 });
 
@@ -160,10 +174,18 @@ test("dock + settings hide/show route through toggle_visibility", async ({ page 
 // pair: the snapify-boot mark lands at module load and the first-report
 // mark + console line land on the first successful region report.
 test("boot timing mark is present through first region report", async ({ page }) => {
+  // First report rides either path: boot mode flush uses the atomic
+  // set_overlay_mode_with_regions invoke (and logs the first-report mark
+  // there too), debounced churn uses set_overlay_regions.
   await expect
-    .poll(async () => (await commandsNamed(page, "set_overlay_regions")).length, {
-      timeout: 10000,
-    })
+    .poll(
+      async () =>
+        (await commandsNamed(page, "set_overlay_regions")).length +
+        (await commandsNamed(page, "set_overlay_mode_with_regions")).length,
+      {
+        timeout: 10000,
+      },
+    )
     .toBeGreaterThan(0);
   const marks = await page.evaluate(() => ({
     boot: performance.getEntriesByName("snapify-boot").length,

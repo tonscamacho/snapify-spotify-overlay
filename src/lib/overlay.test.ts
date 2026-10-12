@@ -77,17 +77,22 @@ beforeEach(() => {
 });
 
 describe("overlay mode+regions sequencing (window-controls spill fix)", () => {
-  it("mode flip forces an immediate regions invoke, mode first", async () => {
+  it("mode flip is a single atomic invoke with mode+regions together", async () => {
     const before = currentOverlayEpoch();
     await reportOverlayMode(true);
 
     expect(currentOverlayEpoch()).toBeGreaterThan(before);
-    expect(invokeMock).toHaveBeenCalledTimes(2);
-    expect(invokeMock.mock.calls[0][0]).toBe("set_overlay_mode");
+    // Root fix: no interim set_overlay_mode with stale regions. One invoke
+    // carries both so Rust stores+applies under one lock.
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock.mock.calls[0][0]).toBe("set_overlay_mode_with_regions");
     expect(invokeMock.mock.calls[0][1]).toMatchObject({ interactive: true });
-    // No 120 ms debounce gap: regions follow synchronously in the same flush.
-    expect(invokeMock.mock.calls[1][0]).toBe("set_overlay_regions");
-    expect(regionsOf(1)).toEqual([{ x: 10, y: 10, w: 200, h: 100, radius: 0 }]);
+    expect(regionsOf(0)).toEqual([{ x: 10, y: 10, w: 200, h: 100, radius: 0 }]);
+    // DPR + origin ride the atomic payload for the Rust signature.
+    expect(invokeMock.mock.calls[0][1]).toMatchObject({
+      devicePixelRatio: 1,
+      monitorOrigin: { x: 0, y: 0 },
+    });
   });
 
   it("passive mode flip clears a stranded dragCover and reports tight", async () => {
@@ -97,10 +102,20 @@ describe("overlay mode+regions sequencing (window-controls spill fix)", () => {
     await reportOverlayMode(false);
 
     expect(isOverlayDragCover()).toBe(false);
-    expect(invokeMock.mock.calls[0][0]).toBe("set_overlay_mode");
-    expect(invokeMock.mock.calls[1][0]).toBe("set_overlay_regions");
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock.mock.calls[0][0]).toBe("set_overlay_mode_with_regions");
+    expect(invokeMock.mock.calls[0][1]).toMatchObject({ interactive: false });
     // Tight pane rect, not the fullscreen drag-cover payload.
-    expect(regionsOf(1)).toEqual([{ x: 10, y: 10, w: 200, h: 100, radius: 0 }]);
+    expect(regionsOf(0)).toEqual([{ x: 10, y: 10, w: 200, h: 100, radius: 0 }]);
+  });
+
+  it("atomic flush suppresses the trailing debounced duplicate", async () => {
+    await reportOverlayMode(true);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    invokeMock.mockClear();
+    // Same rects right after the atomic flush diff-skips: no second OS apply.
+    await reportOverlayRegions();
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 
   it("dragCover release re-tightens to per-pane rects", async () => {

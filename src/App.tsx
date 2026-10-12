@@ -2646,6 +2646,11 @@ export default function App() {
       data-theme={theme}
       data-surface={surface}
       data-corners={corners}
+      // Mirrors the editing flag for the CSS paint backstop: the dock/notch
+      // gate below unmounts in the same commit, and the
+      // .app:not([data-editing="true"]) rule hides any retained node before
+      // the region flush, so edit-OFF never lingers a top pill for a frame.
+      data-editing={editing ? "true" : undefined}
       data-overlay-color={overlayColor === "" ? undefined : "custom"}
       style={overlayStyle}
       data-narrow={stageNarrow ? "true" : undefined}

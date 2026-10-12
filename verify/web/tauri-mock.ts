@@ -186,9 +186,10 @@ function buildInitScript(
     "      case 'library_remove': return null;\n" +
     "      case 'follow_put': return null;\n" +
     "      case 'follow_delete': return null;\n" +
-    "      case 'set_overlay_mode': return null;\n" +
-    "      case 'set_overlay_regions': return null;\n" +
-    "      case 'get_my_top': return emptyPage();\n" +
+     "      case 'set_overlay_mode': return null;\n" +
+     "      case 'set_overlay_regions': return null;\n" +
+     "      case 'set_overlay_mode_with_regions': return null;\n" +
+     "      case 'get_my_top': return emptyPage();\n" +
     "      case 'get_recently_played': return emptyPage();\n" +
     "      case 'get_playlist': return FIXTURES.playlistDetail;\n" +
     "      case 'get_playlist_items': return FIXTURES.playlistItems;\n" +

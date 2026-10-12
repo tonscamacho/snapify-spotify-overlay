@@ -260,29 +260,35 @@ export function watchRegionElementSizes(onDirty: () => void): () => void {
 }
 
 export async function reportOverlayMode(interactive: boolean): Promise<void> {
-  // Sequenced mode+regions flush (frontend-only fix for the spill race):
-  // the old path invoked set_overlay_mode fire-and-forget while regions
-  // lagged up to 120 ms behind the debounce, so a fast toggle applied the
-  // mode against stale rects for a frame. Bumping the epoch first lets the
-  // pending debounce recognise itself as stale; clearing dragCover on the
-  // passive transition keeps a mid-drag fullscreen payload from stranding
-  // across the flip. Forgetting the frontend diff forces the regions
-  // re-invoke below even when rects are unchanged (same-rects
-  // interactive→passive→interactive would otherwise skip it and leave the
-  // window cleared while interactive).
+  // Atomic mode+regions flush (root fix for the edit-OFF → interactive-ON
+  // native caption spill): the old two-invoke sequence sent set_overlay_mode
+  // first, and Rust's apply_region re-applied the stored pre-flip regions
+  // before the set_overlay_regions leg arrived, flashing the dock strip for
+  // a frame. A single set_overlay_mode_with_regions invoke stores mode+rects
+  // under one Rust lock and applies once, so no interim stale shape exists.
+  // Bumping the epoch first lets a pending debounce recognise itself as
+  // stale; clearing dragCover on the passive transition keeps a mid-drag
+  // fullscreen payload from stranding across the flip.
   overlayEpoch += 1;
   if (!interactive) dragCover = false;
-  // Order with regions reports: the Rust passive path clears via
-  // SetWindowRgn(NULL) and the next regions report must re-apply even when
-  // the rects are unchanged. Forgetting the frontend diff forces that
-  // re-invoke; otherwise same-rects interactive→passive→interactive would
-  // skip the invoke and leave the window cleared while interactive.
+  // Forgetting the frontend diff used to force the second regions invoke;
+  // now the fresh rects ride the atomic invoke itself, and the signature is
+  // set here so a trailing debounced duplicate skips (no double OS apply).
   lastSignature = null;
+  const rects = collectOverlayRegions();
+  const dpr = typeof window !== "undefined" ? window.devicePixelRatio : 1;
+  const ox = typeof window !== "undefined" ? Math.round(window.screenX) : 0;
+  const oy = typeof window !== "undefined" ? Math.round(window.screenY) : 0;
+  lastSignature = signatureFor(rects, dpr, ox, oy);
   try {
-    await invoke("set_overlay_mode", { interactive });
+    await invoke("set_overlay_mode_with_regions", {
+      interactive,
+      regions: rects,
+      devicePixelRatio: dpr,
+      monitorOrigin: { x: ox, y: oy },
+    });
+    logFirstRegionReport();
   } catch {
     // Same fallback as above.
   }
-  // Mode first, then regions immediately: no 120 ms gap for mode.
-  await reportOverlayRegions();
 }

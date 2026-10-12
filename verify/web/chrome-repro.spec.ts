@@ -168,3 +168,103 @@ test("chrome census on narrow stage", async ({ page }) => {
   await expectRadii(page, 14);
   await page.screenshot({ path: `docs/bug-reports/2.5.4/chrome-narrow.png` });
 });
+
+test("edit-OFF to interactive-ON leaves no light strip atop PLAYER", async ({ page }) => {
+  // The behind-window -/square/X is out of scope here (see the header
+  // note): this test pins the in-DOM half after the edit-OFF flip. With
+  // interact seeded on, Lock turns editing off while staying interactive.
+  await stubTauri(page, { layout: layoutFor(360), edit: true });
+  await page.goto("/");
+  const player = page.locator('section[data-pane="player"]');
+  await expect(player.getByText(TRACK_NAME).first()).toBeAttached();
+  // Edit mode paints the dock pill at top:12px.
+  await expect(page.locator(".dock")).toBeVisible();
+  await expect(page.locator(".app")).toHaveAttribute("data-editing", "true");
+
+  await page.getByRole("button", { name: "Toggle edit lock" }).click();
+
+  // The edit-mode dock unmounts synchronously: no lingering top pill paints
+  // for a frame, and the CSS data-editing backstop hides any retained node
+  // before the region flush.
+  await expect(page.locator(".app")).not.toHaveAttribute("data-editing", "true");
+  await expect(page.locator(".dock")).toHaveCount(0);
+  await expect(page.locator(".notch, .notch-strip")).toHaveCount(0);
+
+  // The backstop rule survives in the stylesheet even when no dock node does.
+  const backstop: string[] = await page.evaluate(() => {
+    const found: string[] = [];
+    for (const sheet of Array.from(document.styleSheets)) {
+      let rules: CSSRuleList | null = null;
+      try {
+        rules = (sheet as CSSStyleSheet).cssRules;
+      } catch {
+        continue;
+      }
+      for (const r of Array.from(rules)) {
+        if (r.cssText.includes('[data-editing="true"]')) found.push(r.cssText);
+      }
+    }
+    return found;
+  });
+  expect(backstop.some((c) => c.includes(".dock"))).toBe(true);
+
+  // PLAYER top edge: painted 14px clip, transparent/dark header, no
+  // near-white bar spanning the card, collapse grouped with the title.
+  const audit: any = await player.evaluate((el) => {
+    const pane = el as HTMLElement;
+    const pr = pane.getBoundingClientRect();
+    const ps = getComputedStyle(pane);
+    const head = pane.querySelector(".pane-handle") as HTMLElement | null;
+    const hs = head ? getComputedStyle(head) : null;
+    const btn = pane.querySelector(".collapse-btn") as HTMLElement | null;
+    const br = btn?.getBoundingClientRect();
+    const parse = (bg: string) => {
+      const m = bg.match(/rgba?\(([^)]+)\)/);
+      if (!m) return null;
+      const p = m[1].split(",").map((s) => Number(s.trim()));
+      return { r: p[0], g: p[1], b: p[2], a: p.length === 4 ? p[3] : 1 };
+    };
+    const whiteBars: string[] = [];
+    if (head) {
+      for (const n of Array.from(head.querySelectorAll("*"))) {
+        const h = n as HTMLElement;
+        const s = getComputedStyle(h);
+        if (s.display === "none" || s.visibility === "hidden") continue;
+        const c = parse(s.backgroundColor);
+        if (!c || c.a <= 0.5) continue;
+        if (Math.min(c.r, c.g, c.b) < 200) continue;
+        const r = h.getBoundingClientRect();
+        if (r.width > pr.width * 0.5) {
+          whiteBars.push(
+            `${h.tagName.toLowerCase()}.${(h.className?.toString?.() ?? "").slice(0, 40)}:${Math.round(r.width)}px`,
+          );
+        }
+      }
+    }
+    return {
+      radiusTL: ps.borderTopLeftRadius,
+      radiusTR: ps.borderTopRightRadius,
+      overflow: ps.overflow,
+      headerBg: hs?.backgroundColor ?? null,
+      whiteBars,
+      btnRightGap: br ? Math.round(pr.right - br.right) : null,
+    };
+  });
+  console.log("PLAYER@edit-off: " + JSON.stringify(audit));
+  expect(audit.radiusTL).toBe("14px");
+  expect(audit.radiusTR).toBe("14px");
+  expect(audit.overflow).toBe("hidden");
+  // Transparent (alpha 0) or dark: no light strip.
+  expect(audit.headerBg).not.toBeNull();
+  const m = (audit.headerBg as string).match(/rgba?\(([^)]+)\)/);
+  expect(m).not.toBeNull();
+  const parts = m![1].split(",").map((s: string) => Number(s.trim()));
+  const alpha = parts.length === 4 ? parts[3] : 1;
+  const peak = Math.max(parts[0], parts[1], parts[2]);
+  expect(alpha === 0 || peak <= 40).toBe(true);
+  expect(audit.whiteBars).toEqual([]);
+  // Collapse grouped with the title, well clear of the caption corner.
+  expect(audit.btnRightGap).not.toBeNull();
+  expect(audit.btnRightGap).toBeGreaterThan(40);
+  await page.screenshot({ path: `docs/bug-reports/2.5.4/chrome-edit-off-player.png` });
+});

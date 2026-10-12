@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { stubTauri, commandsNamed } from "./tauri-mock";
+import { stubTauri, invokedCommands } from "./tauri-mock";
 import { MINIMAL_LAYOUT, buildFixtures } from "./fixtures";
 import fs from "node:fs";
 
@@ -475,12 +475,18 @@ test("coach pill is topmost under its center and covered by reported regions", a
   // And the reported hit-regions cover the pill, so Rust makes it clickable.
   // The first regions push can race layout load with a stale rect (mount
   // reports once before panes settle); the debounced follow-up corrects it,
-  // so poll until the latest report covers.
+  // so poll until the latest report covers. Mode flips ride the atomic
+  // set_overlay_mode_with_regions invoke (single mode+regions apply, no
+  // stale interim); debounced churn still uses set_overlay_regions. Accept
+  // either path so the spec locks behavior, not the invoke name.
   await expect
     .poll(
       async () => {
-        const all = await commandsNamed(page, "set_overlay_regions");
-        const latest = all[all.length - 1] as unknown as {
+        const all = await invokedCommands(page);
+        const reports = all.filter(
+          (c) => c.cmd === "set_overlay_regions" || c.cmd === "set_overlay_mode_with_regions",
+        );
+        const latest = reports[reports.length - 1]?.args as unknown as {
           regions: Array<{ x: number; y: number; w: number; h: number }>;
         } | undefined;
         const regs = latest?.regions ?? [];

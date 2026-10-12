@@ -23,6 +23,12 @@ fn toggle_interactive(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         if !win.is_visible().unwrap_or(true) {
             let _ = win.show();
+            // Hidden-across-flip strand fix: apply_region early-returns while
+            // hidden, so a mode+regions flush stored while hidden never
+            // reached the OS. Re-apply on show so the fresh stored state
+            // (not the pre-hide region) is what becomes visible. Dedupes to
+            // a no-op when nothing changed while hidden.
+            crate::overlay::apply_region(app);
         }
         // Deliberately no set_focus: focusing steals the game on every toggle.
     }
@@ -36,6 +42,8 @@ fn toggle_visibility(app: &tauri::AppHandle) {
             let _ = win.hide();
         } else {
             let _ = win.show();
+            // Re-apply stranded hidden-flip state (see toggle_interactive).
+            crate::overlay::apply_region(app);
             // Deliberately no set_focus: showing must not steal the game.
         }
         let _ = app.emit("overlay-visibility-changed", !visible);
@@ -58,6 +66,8 @@ fn toggle_visibility_cmd(app: tauri::AppHandle) {
 fn show_window(app: tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
+        // Re-apply stranded hidden-flip state (see toggle_interactive).
+        crate::overlay::apply_region(&app);
         // Deliberately no set_focus: showing must not steal the game.
         let _ = app.emit("overlay-visibility-changed", true);
     }
@@ -74,6 +84,8 @@ fn set_login_window(app: tauri::AppHandle, logged_out: bool) {
         if logged_out {
             let _ = win.set_always_on_top(false);
             let _ = win.show();
+            // Re-apply stranded hidden-flip state (see toggle_interactive).
+            crate::overlay::apply_region(&app);
             let _ = win.set_focus();
         } else {
             let _ = win.set_always_on_top(true);
@@ -116,6 +128,8 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             "open-settings" => {
                 if let Some(win) = app.get_webview_window("main") {
                     let _ = win.show();
+                    // Re-apply stranded hidden-flip state (see toggle_interactive).
+                    crate::overlay::apply_region(app);
                     let _ = win.set_focus();
                 }
                 let _ = app.emit("tray-open-settings", ());
@@ -173,6 +187,8 @@ pub fn run() {
             // relaunch without a trace.
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
+                // Re-apply stranded hidden-flip state (see toggle_interactive).
+                crate::overlay::apply_region(app);
                 let _ = win.unminimize();
                 let _ = win.set_focus();
             }
@@ -335,6 +351,7 @@ pub fn run() {
             system::set_autostart,
             overlay::set_overlay_mode,
             overlay::set_overlay_regions,
+            overlay::set_overlay_mode_with_regions,
             toggle_visibility_cmd,
             show_window,
             set_login_window,

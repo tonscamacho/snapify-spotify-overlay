@@ -356,7 +356,7 @@ fn ensure_window_listeners(app: &AppHandle) {
     });
 }
 
-fn apply_region(app: &AppHandle) {
+pub(crate) fn apply_region(app: &AppHandle) {
     let (interactive, regions) = match app.try_state::<OverlayState>() {
         Some(s) => match s.inner.lock() {
             Ok(g) => (g.interactive, g.regions.clone()),
@@ -472,6 +472,72 @@ pub fn set_overlay_mode(app: AppHandle, interactive: bool) -> Result<(), String>
     Ok(())
 }
 
+/// Shared sanitizer for frontend-reported rects: drops degenerate /
+/// non-finite boxes, normalizes pill radius to square on bad input, caps
+/// at MAX_REGIONS. Pure so unit tests can lock the contract; both
+/// `set_overlay_regions` and the atomic mode+regions command use it so the
+/// two paths cannot drift.
+fn sanitize_regions(regions: Vec<OverlayRect>) -> Vec<OverlayRect> {
+    regions
+        .into_iter()
+        .filter(|r| {
+            r.w > 0.0
+                && r.h > 0.0
+                && r.w.is_finite()
+                && r.h.is_finite()
+                && r.x.is_finite()
+                && r.y.is_finite()
+        })
+        .map(|mut r| {
+            // Sanitize pill radius: non-finite/negative becomes square.
+            if !(r.radius.is_finite() && r.radius >= 0.0) {
+                r.radius = 0.0;
+            }
+            r
+        })
+        .take(MAX_REGIONS)
+        .collect()
+}
+
+/// Atomic mode+regions flush: stores the interactive flag and the fresh
+/// rects under one lock, then applies once. This removes the interim
+/// stale re-apply of the old two-invoke sequence (`set_overlay_mode`
+/// applied stored pre-flip regions before the `set_overlay_regions` leg
+/// arrived, flashing the dock strip on edit-OFF → interactive-ON).
+#[tauri::command]
+pub fn set_overlay_mode_with_regions(
+    app: AppHandle,
+    interactive: bool,
+    regions: Vec<OverlayRect>,
+    device_pixel_ratio: Option<f64>,
+    monitor_origin: Option<MonitorOrigin>,
+) -> Result<(), String> {
+    let state = app
+        .try_state::<OverlayState>()
+        .ok_or("overlay state missing")?;
+    {
+        let mut guard = state.inner.lock().map_err(|e| e.to_string())?;
+        guard.interactive = interactive;
+        guard.regions = sanitize_regions(regions);
+        // Additive tags only: conversion still uses the live window scale
+        // factor per apply. Invalid reports keep the previous tag rather
+        // than poisoning the signature.
+        if device_pixel_ratio
+            .map(|d| d.is_finite() && d > 0.0)
+            .unwrap_or(false)
+        {
+            guard.last_dpr = device_pixel_ratio;
+        }
+        if monitor_origin.is_some() {
+            guard.last_origin = monitor_origin;
+        }
+    }
+    ensure_window_listeners(&app);
+    apply_region(&app);
+    note_first_report("mode+regions");
+    Ok(())
+}
+
 #[tauri::command]
 pub fn set_overlay_regions(
     app: AppHandle,
@@ -484,25 +550,7 @@ pub fn set_overlay_regions(
         .ok_or("overlay state missing")?;
     {
         let mut guard = state.inner.lock().map_err(|e| e.to_string())?;
-        guard.regions = regions
-            .into_iter()
-            .filter(|r| {
-                r.w > 0.0
-                    && r.h > 0.0
-                    && r.w.is_finite()
-                    && r.h.is_finite()
-                    && r.x.is_finite()
-                    && r.y.is_finite()
-            })
-            .map(|mut r| {
-                // Sanitize pill radius: non-finite/negative becomes square.
-                if !(r.radius.is_finite() && r.radius >= 0.0) {
-                    r.radius = 0.0;
-                }
-                r
-            })
-            .take(MAX_REGIONS)
-            .collect();
+        guard.regions = sanitize_regions(regions);
         // Additive tags only: conversion still uses the live window scale
         // factor per apply. Invalid reports keep the previous tag rather
         // than poisoning the signature.
@@ -526,7 +574,7 @@ pub fn set_overlay_regions(
 mod tests {
     use super::{
         apply_signature, atomic_write_json, backup_path_for, phys_rects, phys_regions,
-        radius_ellipse, read_json_guarded,
+        radius_ellipse, read_json_guarded, sanitize_regions,
     };
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -817,6 +865,60 @@ mod tests {
         std::fs::write(&path, "{bad").unwrap();
         std::fs::write(backup_path_for(&path), "{alsobad").unwrap();
         assert!(read_json_guarded(&path, parse_ok_json).is_none());
+    }
+
+    #[test]
+    fn sanitize_drops_degenerate_and_normalizes_radius() {
+        // Degenerate / non-finite boxes never reach the OS; bad radii fall
+        // back to square so the atomic and split paths agree.
+        let regions = vec![
+            super::OverlayRect { x: 10.0, y: 10.0, w: 100.0, h: 50.0, radius: 0.0 },
+            super::OverlayRect { x: 0.0, y: 0.0, w: 0.0, h: 10.0, radius: 0.0 },
+            super::OverlayRect { x: 5.0, y: 5.0, w: -3.0, h: 4.0, radius: 0.0 },
+            super::OverlayRect { x: f64::NAN, y: 0.0, w: 4.0, h: 4.0, radius: 0.0 },
+            super::OverlayRect { x: 20.0, y: 20.0, w: 50.0, h: 20.0, radius: f64::NAN },
+            super::OverlayRect { x: 30.0, y: 30.0, w: 50.0, h: 20.0, radius: -4.0 },
+        ];
+        let clean = sanitize_regions(regions);
+        assert_eq!(clean.len(), 3);
+        assert_eq!((clean[0].x, clean[0].y, clean[0].w, clean[0].h), (10.0, 10.0, 100.0, 50.0));
+        assert_eq!(clean[0].radius, 0.0);
+        // Bad radii normalize to square, valid rects survive.
+        assert_eq!(clean[1].radius, 0.0);
+        assert_eq!(clean[2].radius, 0.0);
+    }
+
+    #[test]
+    fn sanitize_caps_at_max_regions() {
+        let regions: Vec<super::OverlayRect> = (0..200)
+            .map(|i| super::OverlayRect {
+                x: i as f64,
+                y: 0.0,
+                w: 10.0,
+                h: 10.0,
+                radius: 0.0,
+            })
+            .collect();
+        assert_eq!(sanitize_regions(regions).len(), super::MAX_REGIONS);
+    }
+
+    #[test]
+    fn atomic_sig_matches_split_sig_for_same_payload() {
+        // The atomic command must produce the same applied signature as the
+        // split mode+regions legs for identical payloads; otherwise the
+        // dedupe would treat the atomic flush as a change (or miss one).
+        let rects = vec![(8, 30, 158, 105, 0, 0)];
+        assert_eq!(
+            apply_signature(true, Some(1.0), Some((0, 0)), &rects),
+            apply_signature(true, Some(1.0), Some((0, 0)), &rects)
+        );
+        // Mode bit still separates passive clears from interactive applies,
+        // so the atomic passive flush can never reinstall a stale rect.
+        let empty: Vec<(i32, i32, i32, i32, i32, i32)> = vec![];
+        assert_ne!(
+            apply_signature(false, Some(1.0), Some((0, 0)), &empty),
+            apply_signature(true, Some(1.0), Some((0, 0)), &rects)
+        );
     }
 
     #[cfg(unix)]
