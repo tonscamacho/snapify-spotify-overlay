@@ -51,6 +51,16 @@ export interface VerifyFixtures {
     cached: boolean;
   };
   me: unknown;
+  /** Per-time_range top windows. The tauri mock branches get_my_top on the
+   *  timeRange arg: short_term -> topShort, medium_term -> topMedium,
+   *  long_term (or legacy null) -> topLong. Each window carries the artists
+   *  and tracks pages so kind selects within the window. */
+  topShort: unknown;
+  topMedium: unknown;
+  topLong: unknown;
+  /** Recently-played page: items are [{ track, played_at }] (not a bare
+   *  track list) so the mock returns the real Spotify shape. */
+  recentPlays: unknown;
   playlists: unknown;
   savedTracks: unknown;
   savedAlbums: unknown;
@@ -129,7 +139,11 @@ export function buildFixtures(overrides: Partial<VerifyFixtures> = {}): VerifyFi
       plain: null,
       cached: false,
     },
-    me: { id: "verify-user", display_name: "Verify User", images: [] },
+    me: { id: "verify-user", display_name: "Verify User", images: [{ url: COVER_DATA_URI }] },
+    topShort: topWindow("short", PROFILE_SHORT_ALBUM, PROFILE_SHORT_TRACKS, PROFILE_SHORT_ARTISTS, PROFILE_GENRES),
+    topMedium: topWindow("medium", PROFILE_MEDIUM_ALBUM, PROFILE_MEDIUM_TRACKS, PROFILE_MEDIUM_ARTISTS, PROFILE_GENRES),
+    topLong: topWindow("long", PROFILE_LONG_ALBUM, PROFILE_LONG_TRACKS, PROFILE_LONG_ARTISTS, PROFILE_GENRES),
+    recentPlays: buildRecentPlays(),
     playlists: {
       items: [
         {
@@ -225,9 +239,137 @@ export function buildFixtures(overrides: Partial<VerifyFixtures> = {}): VerifyFi
   return { ...base, ...overrides };
 }
 
+/** Profile pane windows (Batch 2c). Top artists carry genres + images,
+ *  top tracks carry duration_ms, recent plays carry played_at + duration_ms,
+ *  and me carries an avatar image. played_at stamps span the client-slice
+ *  windows (today / week / 2026) so range specs can assert filtering. */
+export const PROFILE_ME_NAME = "Verify User";
+export const PROFILE_ME_ID = "verify-user";
+
+function profileArtist(id: string, name: string, genres: string[]) {
+  return {
+    id,
+    name,
+    genres,
+    images: [{ url: COVER_DATA_URI }],
+    uri: `spotify:artist:${id}`,
+  };
+}
+
+function profileTrack(
+  id: string,
+  name: string,
+  artist: string,
+  durationMs: number,
+  album: { id: string; name: string },
+) {
+  return {
+    id,
+    name,
+    artists: [{ name: artist }],
+    album: {
+      id: album.id,
+      name: album.name,
+      images: [{ url: COVER_DATA_URI }],
+      uri: `spotify:album:${album.id}`,
+    },
+    duration_ms: durationMs,
+    uri: `spotify:track:${id}`,
+    explicit: false,
+  };
+}
+
+function topWindow(
+  prefix: string,
+  albumName: string,
+  trackNames: string[],
+  artistNames: string[],
+  genres: string[][],
+) {
+  const album = { id: `${prefix}-album`, name: albumName };
+  return {
+    artists: {
+      items: artistNames.map((name, i) =>
+        profileArtist(`${prefix}-artist-${i + 1}`, name, genres[i % genres.length]),
+      ),
+      total: artistNames.length,
+    },
+    tracks: {
+      items: trackNames.map((name, i) =>
+        profileTrack(
+          `${prefix}-track-${i + 1}`,
+          name,
+          artistNames[i % artistNames.length],
+          180000 + i * 15000,
+          album,
+        ),
+      ),
+      total: trackNames.length,
+    },
+  };
+}
+
+const PROFILE_GENRES = [
+  ["indie rock", "indie"],
+  ["rock"],
+  ["indie", "pop"],
+  ["pop", "dance pop"],
+  ["jazz"],
+];
+
+export const PROFILE_SHORT_TRACKS = ["Short Fuse One", "Short Fuse Two", "Short Fuse Three", "Short Fuse Four"];
+export const PROFILE_SHORT_ARTISTS = ["Short Band One", "Short Band Two", "Short Band Three", "Short Band Four"];
+export const PROFILE_MEDIUM_TRACKS = ["Medium Wave One", "Medium Wave Two", "Medium Wave Three", "Medium Wave Four"];
+export const PROFILE_MEDIUM_ARTISTS = ["Medium Band One", "Medium Band Two", "Medium Band Three", "Medium Band Four"];
+export const PROFILE_LONG_TRACKS = ["Lifetime Gem One", "Lifetime Gem Two", "Lifetime Gem Three", "Lifetime Gem Four"];
+export const PROFILE_LONG_ARTISTS = ["Lifetime Band One", "Lifetime Band Two", "Lifetime Band Three", "Lifetime Band Four"];
+
+export const PROFILE_SHORT_ALBUM = "Short Fuse LP";
+export const PROFILE_MEDIUM_ALBUM = "Medium Wave LP";
+export const PROFILE_LONG_ALBUM = "Lifetime Gems LP";
+
+function recentEntry(
+  id: string,
+  name: string,
+  artist: string,
+  playedAt: number,
+  durationMs: number,
+) {
+  return {
+    played_at: new Date(playedAt).toISOString(),
+    track: profileTrack(id, name, artist, durationMs, { id: `${id}-album`, name: `${name} Single` }),
+  };
+}
+
+/** Seven streams across the slice windows: today (1h ago), week (2d + 6d
+ *  ago), fourWeeks-only (20d), sixMonths-only (100d), 2026-only (Valentine's
+ *  2026), and lifetime-only (May 2024). Durations are real so stats tiles
+ *  derive minutes; names are unique per window for filter assertions. */
+export function buildRecentPlays(now: number = Date.now()) {
+  const items = [
+    recentEntry("rec-today", "Today Spin", "Short Band One", now - 3600000, 200000),
+    recentEntry("rec-week-a", "Week Spin A", "Short Band Two", now - 2 * 86400000, 180000),
+    recentEntry("rec-week-b", "Week Spin B", "Medium Band One", now - 6 * 86400000, 210000),
+    recentEntry("rec-month", "Month Spin", "Medium Band Two", now - 20 * 86400000, 240000),
+    recentEntry("rec-half", "Half-Year Spin", "Lifetime Band One", now - 100 * 86400000, 195000),
+    recentEntry("rec-valentine", "Valentine Spin", "Lifetime Band Two", Date.UTC(2026, 1, 14, 12), 220000),
+    recentEntry("rec-ancient", "Ancient Spin", "Lifetime Band Three", Date.UTC(2024, 4, 1, 12), 205000),
+  ];
+  return { items, total: items.length };
+}
+
+export const PROFILE_RECENT_NAMES = [
+  "Today Spin",
+  "Week Spin A",
+  "Week Spin B",
+  "Month Spin",
+  "Half-Year Spin",
+  "Valentine Spin",
+  "Ancient Spin",
+];
+
 /** Minimal preset layout used to seed localStorage for layout specs. */
-export const MINIMAL_LAYOUT = {
-  version: 3,
+export const MINIMAL_LAYOUT = {  version: 3,
   preset: "minimal",
   panes: [
     {

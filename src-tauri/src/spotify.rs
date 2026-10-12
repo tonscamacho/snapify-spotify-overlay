@@ -975,27 +975,55 @@ pub async fn get_followed_artists(
     call(&app, Method::GET, "/me/following", &q, None).await
 }
 
+/// Allowlist for `GET /me/top/{kind}?time_range=`. Unknown, empty, or
+/// missing values fall back to `medium_term` so a bad shelf filter can
+/// never produce an uncached or unkeyed upstream call.
+fn normalize_time_range(raw: Option<&str>) -> &'static str {
+    match raw.map(str::trim) {
+        Some("short_term") => "short_term",
+        Some("long_term") => "long_term",
+        _ => "medium_term",
+    }
+}
+
+/// Cursor for `GET /me/player/recently-played?before=`. Spotify takes epoch
+/// millis; anything that is not all ASCII digits (empty, negative, ISO
+/// dates, junk) maps to None so the param is omitted entirely.
+fn normalize_before(raw: Option<&str>) -> Option<&str> {
+    match raw.map(str::trim) {
+        Some(s) if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) => Some(s),
+        _ => None,
+    }
+}
+
 #[tauri::command]
 pub async fn get_my_top(
     app: AppHandle,
     kind: String,
     limit: i64,
     offset: i64,
+    time_range: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let kind = match kind.as_str() {
         "tracks" => "tracks",
         _ => "artists",
     };
-    paged(&app, Method::GET, &format!("/me/top/{kind}"), &[], limit, offset).await
+    let range = normalize_time_range(time_range.as_deref());
+    let extra = [("time_range", range)];
+    paged(&app, Method::GET, &format!("/me/top/{kind}"), &extra, limit, offset).await
 }
 
 #[tauri::command]
 pub async fn get_recently_played(
     app: AppHandle,
     limit: i64,
+    before: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let ls = limit.clamp(1, 50).to_string();
-    let q = [("limit", ls.as_str())];
+    let mut q = vec![("limit", ls.as_str())];
+    if let Some(cursor) = normalize_before(before.as_deref()) {
+        q.push(("before", cursor));
+    }
     call(&app, Method::GET, "/me/player/recently-played", &q, None).await
 }
 
@@ -1655,7 +1683,7 @@ pub async fn play_uris(
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_ttl, classify_result, decide, embed_cache_key, embed_double_403, embed_flag_from_env, embed_items_payload, embed_playlist_id_valid, embed_retry_gate, embed_wait_for, inflight_key, library_uris_arg, parse_embed_track_list, parse_retry_after, playlist_items_fallback, playlist_items_primary, playlist_items_should_retry, retry_after_secs, serve_embed_page, EmbedParseError, EMBED_CACHE_TTL, EMBED_MIN_INTERVAL, EMBED_TRACK_CAP};
+    use super::{cache_ttl, classify_result, decide, embed_cache_key, embed_double_403, embed_flag_from_env, embed_items_payload, embed_playlist_id_valid, embed_retry_gate, embed_wait_for, inflight_key, library_uris_arg, normalize_before, normalize_time_range, parse_embed_track_list, parse_retry_after, playlist_items_fallback, playlist_items_primary, playlist_items_should_retry, retry_after_secs, serve_embed_page, EmbedParseError, EMBED_CACHE_TTL, EMBED_MIN_INTERVAL, EMBED_TRACK_CAP};
     use reqwest::{Method, StatusCode};
 
     #[test]
@@ -1881,6 +1909,71 @@ mod tests {
         let a = inflight_key(&Method::GET, "/playlists/x/items", &[("limit", "50"), ("offset", "0")]);
         let b = inflight_key(&Method::GET, "/playlists/x/items", &[("limit", "50"), ("offset", "50")]);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn top_time_range_allowlist_defaults_medium_term() {
+        assert_eq!(normalize_time_range(None), "medium_term");
+        assert_eq!(normalize_time_range(Some("medium_term")), "medium_term");
+        assert_eq!(normalize_time_range(Some("short_term")), "short_term");
+        assert_eq!(normalize_time_range(Some("long_term")), "long_term");
+        // Allowlist miss, empty, and whitespace all fall back, never forward.
+        assert_eq!(normalize_time_range(Some("all_time")), "medium_term");
+        assert_eq!(normalize_time_range(Some("")), "medium_term");
+        assert_eq!(normalize_time_range(Some("  ")), "medium_term");
+        assert_eq!(normalize_time_range(Some("SHORT_TERM")), "medium_term");
+        assert_eq!(normalize_time_range(Some(" short_term ")), "short_term");
+    }
+
+    #[test]
+    fn recent_before_keeps_digits_only_millis() {
+        assert_eq!(normalize_before(None), None);
+        assert_eq!(normalize_before(Some("1700000000000")), Some("1700000000000"));
+        assert_eq!(normalize_before(Some(" 1700000000000 ")), Some("1700000000000"));
+        // Non-millis cursors are dropped so the param is omitted entirely.
+        assert_eq!(normalize_before(Some("")), None);
+        assert_eq!(normalize_before(Some("   ")), None);
+        assert_eq!(normalize_before(Some("-5")), None);
+        assert_eq!(normalize_before(Some("2024-01-01")), None);
+        assert_eq!(normalize_before(Some("12.5")), None);
+        assert_eq!(normalize_before(Some("abc")), None);
+        assert_eq!(normalize_before(Some("123abc")), None);
+    }
+
+    #[test]
+    fn top_and_recent_ranges_never_share_cache_or_inflight_keys() {
+        // Same path with a different time_range/before must key apart, or
+        // one shelf filter would poison the other for 60 s.
+        let short = inflight_key(
+            &Method::GET,
+            "/me/top/tracks",
+            &[("limit", "10"), ("offset", "0"), ("time_range", "short_term")],
+        );
+        let long = inflight_key(
+            &Method::GET,
+            "/me/top/tracks",
+            &[("limit", "10"), ("offset", "0"), ("time_range", "long_term")],
+        );
+        assert_ne!(short, long);
+        let with_cursor = inflight_key(
+            &Method::GET,
+            "/me/player/recently-played",
+            &[("limit", "10"), ("before", "1700000000000")],
+        );
+        let without_cursor = inflight_key(
+            &Method::GET,
+            "/me/player/recently-played",
+            &[("limit", "10")],
+        );
+        assert_ne!(with_cursor, without_cursor);
+        assert_eq!(
+            cache_ttl("/me/top/tracks"),
+            Some(std::time::Duration::from_secs(60))
+        );
+        assert_eq!(
+            cache_ttl("/me/player/recently-played"),
+            Some(std::time::Duration::from_secs(60))
+        );
     }
 
     // Friend/public embed fallback (GO-gate PR2-G): kill-switch, retry gate,

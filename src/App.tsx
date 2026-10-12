@@ -14,6 +14,8 @@ import VisualizerPane from "./components/VisualizerPane";
 const MemoVisualizerPane = memo(VisualizerPane);
 import BrowsePane from "./components/BrowsePane";
 const MemoBrowsePane = memo(BrowsePane);
+import ProfilePane from "./components/ProfilePane";
+const MemoProfilePane = memo(ProfilePane);
 import SettingsModal from "./components/SettingsModal";
 import {
   CursorIcon,
@@ -31,6 +33,7 @@ import { ActionGate, PendingQueue, flushDelayMs, shiftQueueForNext } from "./lib
 import { currentOverlayEpoch, reportOverlayMode, reportOverlayRegions, setOverlayDragCover, watchRegionElementSizes } from "./lib/overlay";
 import { ensurePlayer, isSdkReady, sdkPause, sdkResume, setSdkVolume } from "./lib/player-sdk";
 import { initialBrowse } from "./lib/browse";
+import { loadProfileRange, saveProfileRange } from "./lib/profile";
 import type { TransLang } from "./lib/translate";
 import {
   DEFAULT_KEYBINDS,
@@ -82,6 +85,7 @@ import type {
   PaneState,
   PaneType,
   PlayerSnapshot,
+  ProfileRange,
   QueueContext,
   QueueItem,
   SceneLayout,
@@ -115,7 +119,7 @@ const PRESET_ORDER = ["minimal", "full", "lyrics", "spotlight"];
 // failures that are not session-dead retry across ~11 s before giving up;
 // a revoked refresh (isSessionDead) still gates on the first failure.
 const BOOT_FRESH_TOKEN_BACKOFF_MS = [300, 700, 1500, 3000, 6000];
-const PANE_TYPES: PaneType[] = ["player", "lyrics", "queue", "visualizer", "browse"];
+const PANE_TYPES: PaneType[] = ["player", "lyrics", "queue", "visualizer", "browse", "profile"];
 type Handle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 const HANDLES: Handle[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 
@@ -125,6 +129,7 @@ const PANE_TITLES: Record<PaneType, string> = {
   queue: "Queue",
   visualizer: "Visualizer",
   browse: "Browse",
+  profile: "Profile",
 };
 
 const HANDLE_LABELS: Record<Handle, string> = {
@@ -318,6 +323,14 @@ export default function App() {
       return false;
     }
   });
+  // Profile stats range (snapify-profile-range key, owned by lib/profile):
+  // lifted to the shell so the pane stays presentational and the choice
+  // persists across restarts like the other display prefs above.
+  const [profileRange, setProfileRange] = useState<ProfileRange>(() => loadProfileRange());
+  const profileRangeCb = useCallback((r: ProfileRange) => {
+    setProfileRange(r);
+    saveProfileRange(r);
+  }, []);
   const [theme, setTheme] = useState<"dark" | "light" | "sparkles" | "pastel">(() => {
     try {
       const v = localStorage.getItem("snapify-theme");
@@ -2574,6 +2587,19 @@ export default function App() {
               onPlayUris={browsePlayUrisCb}
               onQueueAdd={browseQueueAddCb}
               onError={browseErrorCb}
+            />
+          )}
+          {pane.type === "profile" && (
+            <MemoProfilePane
+              range={profileRange}
+              onRange={profileRangeCb}
+              queuedCount={pendingCount}
+              degraded={degradedUi}
+              onPlayContext={browsePlayContextCb}
+              onPlayUris={browsePlayUrisCb}
+              onQueueAdd={browseQueueAddCb}
+              onError={browseErrorCb}
+              onRetryPlayer={retryPlayerCb}
             />
           )}
         </div>

@@ -9,6 +9,7 @@ import {
   defaultSceneLayoutFor,
   defaultScenes,
   effectiveArea,
+  getCompactPaneMin,
   getPaneMin,
   isCompactPane,
   LAYOUT_UNDO_DEPTH,
@@ -561,8 +562,7 @@ describe("setActiveSlot", () => {
   });
 });
 
-describe("togglePaneCollapsed", () => {
-  it("flips one pane and leaves siblings untouched", () => {
+describe("togglePaneCollapsed", () => {  it("flips one pane and leaves siblings untouched", () => {
     const l = [pane({ id: "a", x: 10 }), pane({ id: "b", x: 20 })];
     const out = togglePaneCollapsed(l, "a");
     expect(out[0]).toMatchObject({ collapsed: true, x: 10 });
@@ -666,5 +666,34 @@ describe("notch hover setting", () => {
     expect(loadNotchHover()).toBe(true);
     stubStorage({ "snapify-notch-hover": "0" });
     expect(loadNotchHover()).toBe(false);
+  });
+});
+
+describe("profile pane minimum (Batch 2c contract)", () => {
+  it("pins the profile content floor", () => {
+    // The tall profile pane (header + tiles + genres + grids + clocks +
+    // recents) needs room for its own chrome: 320x420, compacting to
+    // 220x140 on small stages.
+    expect(PANE_MIN.profile).toEqual({ w: 320, h: 420 });
+    expect(getPaneMin("profile")).toEqual({ w: 320, h: 420 });
+    expect(getCompactPaneMin("profile")).toEqual({ w: 220, h: 140 });
+  });
+
+  it("clamps an undersized profile pane to its content floor instead of collapsing", () => {
+    const out = clampPaneToArea(
+      pane({ type: "profile", x: 0, y: 0, w: 10, h: 10 }),
+      1920,
+      1040,
+    );
+    expect(out).toMatchObject({ w: 320, h: 420 });
+  });
+
+  it("keeps a tall profile pane inside the area without shrinking it", () => {
+    const out = clampPaneToArea(
+      pane({ type: "profile", x: 24, y: 24, w: 420, h: 900 }),
+      1280,
+      1024,
+    );
+    expect(out).toMatchObject({ x: 24, y: 24, w: 420, h: 900 });
   });
 });

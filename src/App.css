@@ -240,6 +240,7 @@ select:focus-visible,
 .pane[data-pane="queue"] { min-width: 260px; min-height: 180px; }
 .pane[data-pane="visualizer"] { min-width: 260px; min-height: 170px; }
 .pane[data-pane="browse"] { min-width: 300px; min-height: 340px; }
+.pane[data-pane="profile"] { min-width: 320px; min-height: 420px; }
 
 .pane[data-density="compact"] {
   --row-py: 5px;
@@ -1667,11 +1668,105 @@ select:focus-visible,
   margin-top: 6px;
 }
 
+/* ---------- profile pane ----------
+   Quiet stat tiles + range chips + two-column tops + listening clock.
+   Token-only surfaces (surface-2/stroke/txt/dim/faint/signal/skel);
+   motion is opacity/background-color at the theme duration, no keyframes. */
+
+.profile-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.profile-tile {
+  background: var(--surface-2);
+  border: 1px solid var(--stroke);
+  border-radius: var(--r-sm);
+  padding: 8px 10px;
+  min-width: 0;
+}
+
+.profile-tile .num {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--txt);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.profile-tile .lbl {
+  font-size: 11px;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+
+.profile-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 8px;
+}
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.profile-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  flex: none;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface-2);
+  color: var(--faint);
+}
+
+.profile-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.clock-ring {
+  display: block;
+  width: 100%;
+  height: clamp(90px, 30cqw, 180px);
+}
+
+.clock-ring .ring-track {
+  stroke: var(--skel);
+}
+
+.clock-ring .ring-val {
+  stroke: var(--signal);
+  transition: opacity var(--dur) var(--ease);
+}
+
+.clock-ring text {
+  fill: var(--dim);
+  font-size: 10px;
+}
+
 /* Sticky section headers sit on the solid surface. */
 .pane-subhead,
 .lyrics-meta,
 .viz-meta,
-.browse-tabs {
+.browse-tabs,
+.profile-subhead {
   position: sticky;
   top: calc(var(--pad-pane) * -1);
   z-index: 2;
@@ -1789,7 +1884,8 @@ select:focus-visible,
   .lyrics-meta .cached {
     display: none;
   }
-  .browse-thumb {
+  .browse-thumb,
+  .profile-thumb {
     width: 28px;
     height: 28px;
   }
@@ -1991,9 +2087,30 @@ select:focus-visible,
 
 /* Static starfield + faint milky-way band on the large surfaces.
    Painted over the token background; text contrast is untouched. */
-.app[data-theme="sparkles"] .pane,
 .app[data-theme="sparkles"] .dock,
 .app[data-theme="sparkles"] .modal {
+  background-image:
+    radial-gradient(1px 1px at 12% 22%, rgba(255, 255, 255, 0.85), transparent 60%),
+    radial-gradient(1px 1px at 32% 68%, rgba(255, 255, 255, 0.6), transparent 60%),
+    radial-gradient(1.5px 1.5px at 55% 18%, rgba(244, 233, 205, 0.9), transparent 62%),
+    radial-gradient(1px 1px at 72% 44%, rgba(255, 255, 255, 0.65), transparent 60%),
+    radial-gradient(1px 1px at 86% 74%, rgba(255, 255, 255, 0.75), transparent 60%),
+    radial-gradient(1px 1px at 44% 38%, rgba(255, 255, 255, 0.45), transparent 60%),
+    radial-gradient(1.5px 1.5px at 64% 84%, rgba(255, 255, 255, 0.55), transparent 62%),
+    linear-gradient(115deg, transparent 52%, rgba(190, 205, 255, 0.07) 66%, transparent 80%);
+}
+
+/* The pane starfield rides ::after instead of background-image. A
+   multi-layer background serializes background-clip once per layer,
+   which breaks the halo invariant (pane paint stays padding-box); the
+   overlay keeps the pane itself on one background layer with the same
+   paint, box, and hit behavior. Glass keeps ::before for its sheen. */
+.app[data-theme="sparkles"] .pane::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
   background-image:
     radial-gradient(1px 1px at 12% 22%, rgba(255, 255, 255, 0.85), transparent 60%),
     radial-gradient(1px 1px at 32% 68%, rgba(255, 255, 255, 0.6), transparent 60%),
@@ -2189,6 +2306,10 @@ select:focus-visible,
   background-color: #e9f1fb;
 }
 
+.app[data-theme="pastel"] .pane[data-pane="profile"] {
+  background-color: #fbeee2;
+}
+
 .app[data-theme="pastel"] .dock {
   background-color: #fdf0d5;
 }
@@ -2364,6 +2485,9 @@ select:focus-visible,
 .app[data-surface="glass"] .dock,
 .app[data-surface="glass"] .modal {
   background: var(--glass-regular);
+  /* The background shorthand resets background-clip to border-box;
+     re-pin the halo invariant so pane paint stays inside the radius. */
+  background-clip: padding-box;
   border-color: var(--lg-stroke);
   backdrop-filter: blur(var(--lg-blur-regular)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
   -webkit-backdrop-filter: blur(var(--lg-blur-regular)) saturate(var(--lg-saturate)) brightness(var(--lg-bright)) contrast(var(--lg-contrast));
@@ -2454,6 +2578,10 @@ select:focus-visible,
   background-color: rgba(233, 241, 251, 0.62);
 }
 
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="profile"] {
+  background-color: rgba(251, 238, 226, 0.62);
+}
+
 .app[data-theme="pastel"][data-surface="glass"] .dock {
   background-color: rgba(253, 240, 213, 0.62);
 }
@@ -2470,6 +2598,7 @@ select:focus-visible,
 .app[data-theme="pastel"][data-surface="glass"] .lyrics-meta,
 .app[data-theme="pastel"][data-surface="glass"] .viz-meta,
 .app[data-theme="pastel"][data-surface="glass"] .browse-tabs,
+.app[data-theme="pastel"][data-surface="glass"] .profile-subhead,
 .app[data-theme="pastel"][data-surface="glass"] .search-wrap {
   background-color: transparent;
 }
@@ -2491,13 +2620,18 @@ select:focus-visible,
   background-color: rgba(233, 241, 251, 0.92);
 }
 
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="profile"] .profile-subhead {
+  background-color: rgba(251, 238, 226, 0.92);
+}
+
 /* Frosted-bar blur so scrolled lines smear under the 0.92 tint instead
    of ghosting through the header text. */
 .app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="lyrics"] .lyrics-meta,
 .app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="queue"] .pane-subhead,
 .app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="visualizer"] .viz-meta,
 .app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="browse"] .browse-tabs,
-.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="browse"] .search-wrap {
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="browse"] .search-wrap,
+.app[data-theme="pastel"][data-surface="glass"] .pane[data-pane="profile"] .profile-subhead {
   backdrop-filter: blur(12px) saturate(150%);
   -webkit-backdrop-filter: blur(12px) saturate(150%);
 }
@@ -3010,6 +3144,11 @@ select:focus-visible,
 }
 
 .pane[data-pane="browse"][data-compact="true"] {
+  min-width: 220px;
+  min-height: 140px;
+}
+
+.pane[data-pane="profile"][data-compact="true"] {
   min-width: 220px;
   min-height: 140px;
 }

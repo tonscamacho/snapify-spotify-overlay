@@ -1,4 +1,4 @@
-export type PaneType = "player" | "lyrics" | "queue" | "visualizer" | "browse";
+export type PaneType = "player" | "lyrics" | "queue" | "visualizer" | "browse" | "profile";
 
 /** Row density preference. Compact saves vertical space in small
  *  panes, spacious airs out large ones. Orthogonal to pane size. */
@@ -244,4 +244,51 @@ export interface UserProfile {
   name: string;
   image: string | null;
   accountId: string;
+}
+
+/** Profile stats time range. `today`/`week`/`year2026` are client-side
+ *  slices of the `long_term` fetch (see `isClientSlice` in profile.ts);
+ *  `fourWeeks`/`sixMonths`/`lifetime` map to real Spotify ranges. */
+export type ProfileRange =
+  | "today"
+  | "week"
+  | "fourWeeks"
+  | "sixMonths"
+  | "year2026"
+  | "lifetime";
+
+/** Spotify `time_range` param for `GET /me/top/{kind}`. */
+export type ApiTimeRange = "short_term" | "medium_term" | "long_term";
+
+/** One recently-played stream, validated at the parse boundary. */
+export interface RecentPlay {
+  trackId: string;
+  trackName: string;
+  artists: string;
+  /** Epoch ms of `played_at`. */
+  playedAt: number;
+  image: string | null;
+  uri: string;
+  durationMs: number;
+}
+
+/** Aggregate listening stats derived from recent plays. */
+export interface ProfileStats {
+  plays: number;
+  /** Whole minutes of music, rounded. */
+  minutes: number;
+  uniqueTracks: number;
+  uniqueArtists: number;
+}
+
+/** One genre row, counted across the top artists. */
+export interface TopGenre {
+  genre: string;
+  count: number;
+}
+
+/** Play count for one local hour of day (0–23). */
+export interface ClockBucket {
+  hour: number;
+  plays: number;
 }

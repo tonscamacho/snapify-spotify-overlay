@@ -293,9 +293,10 @@ export const api = {
     invoke<unknown>("follow_put", { uris }),
   followDelete: (uris: string[]) =>
     invoke<unknown>("follow_delete", { uris }),
-  top: (kind: string, limit = 10, offset = 0) =>
-    invoke<unknown>("get_my_top", { kind, limit, offset }),
-  recent: (limit = 10) => invoke<unknown>("get_recently_played", { limit }),
+  top: (kind: string, limit = 10, offset = 0, timeRange?: string | null) =>
+    invoke<unknown>("get_my_top", { kind, limit, offset, timeRange: timeRange ?? null }),
+  recent: (limit = 10, before?: string | null) =>
+    invoke<unknown>("get_recently_played", { limit, before: before ?? null }),
   playlist: (playlist_id: string) => invoke<unknown>("get_playlist", { playlistId: playlist_id }),
   playlistItems: (playlist_id: string, limit = 50, offset = 0) =>
     invoke<unknown>("get_playlist_items", { playlistId: playlist_id, limit, offset }),

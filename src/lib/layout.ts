@@ -27,6 +27,7 @@ export const PANE_MIN: Record<PaneType, { w: number; h: number }> = {
   queue: { w: 260, h: 180 },
   visualizer: { w: 260, h: 170 },
   browse: { w: 300, h: 340 },
+  profile: { w: 320, h: 420 },
 };
 
 export function getPaneMin(type: PaneType): { w: number; h: number } {
@@ -43,6 +44,7 @@ export const COMPACT_PANE_MIN: Record<PaneType, { w: number; h: number }> = {
   queue: { w: 200, h: 132 },
   visualizer: { w: 200, h: 120 },
   browse: { w: 220, h: 140 },
+  profile: { w: 220, h: 140 },
 };
 
 export function getCompactPaneMin(type: PaneType): { w: number; h: number } {
@@ -301,7 +303,7 @@ function num(v: unknown, fallback: number): number {
 }
 
 function coercePane(raw: Partial<PaneState>, z: number): PaneState | null {
-  const types = ["player", "lyrics", "queue", "visualizer", "browse"];
+  const types = ["player", "lyrics", "queue", "visualizer", "browse", "profile"];
   if (!raw || typeof raw.id !== "string" || !types.includes(raw.type as string)) return null;
   const min = getPaneMin(raw.type as PaneType);
   return {

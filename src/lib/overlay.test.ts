@@ -133,8 +133,7 @@ describe("overlay mode+regions sequencing (window-controls spill fix)", () => {
     expect(regionsOf(0)).toEqual([{ x: 10, y: 10, w: 200, h: 100, radius: 0 }]);
   });
 
-  it("excludes the transparent notch-strip from OS hit-region selectors", async () => {
-    const { seen } = installDom();
+  it("excludes the transparent notch-strip from OS hit-region selectors", async () => {    const { seen } = installDom();
     invokeMock.mockClear();
     resetOverlayRegionDiff();
     await reportOverlayRegions();
@@ -146,5 +145,32 @@ describe("overlay mode+regions sequencing (window-controls spill fix)", () => {
     for (const keep of ["section.pane", ".dock", ".modal", ".toast", ".hint-chip"]) {
       expect(joined).toContain(keep);
     }
+  });
+});
+
+describe("tall pane single rect (profile contract)", () => {
+  it("reports one region for a tall profile-height pane, not a split", async () => {
+    // The profile pane runs tall (header + tiles + genres + grids + clocks +
+    // recents in one scrollport). The reporter must emit exactly one rect so
+    // the OS shape matches the painted box with no seams.
+    installDom({ paneRect: { left: 24, top: 24, width: 420, height: 900 } });
+    resetOverlayRegionDiff();
+    invokeMock.mockClear();
+    await reportOverlayRegions();
+
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock.mock.calls[0][0]).toBe("set_overlay_regions");
+    expect(regionsOf(0)).toEqual([{ x: 24, y: 24, w: 420, h: 900, radius: 0 }]);
+  });
+
+  it("keeps the single rect after a same-shape duplicate report", async () => {
+    installDom({ paneRect: { left: 24, top: 24, width: 420, height: 900 } });
+    resetOverlayRegionDiff();
+    invokeMock.mockClear();
+    await reportOverlayRegions();
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    // Unchanged rects diff-skip: no second OS apply.
+    await reportOverlayRegions();
+    expect(invokeMock).toHaveBeenCalledTimes(1);
   });
 });

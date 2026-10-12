@@ -189,8 +189,14 @@ function buildInitScript(
      "      case 'set_overlay_mode': return null;\n" +
      "      case 'set_overlay_regions': return null;\n" +
      "      case 'set_overlay_mode_with_regions': return null;\n" +
-     "      case 'get_my_top': return emptyPage();\n" +
-    "      case 'get_recently_played': return emptyPage();\n" +
+      "      case 'get_my_top': {\n" +
+      "        var tr = args.timeRange || args.time_range || null;\n" +
+      "        var win = tr === 'short_term' ? FIXTURES.topShort : tr === 'medium_term' ? FIXTURES.topMedium : FIXTURES.topLong;\n" +
+      "        if (!win) return emptyPage();\n" +
+      "        if (args.kind === 'artists') return (win && win.artists) || emptyPage();\n" +
+      "        return (win && win.tracks) || emptyPage();\n" +
+      "      }\n" +
+      "      case 'get_recently_played': return FIXTURES.recentPlays || emptyPage();\n" +
     "      case 'get_playlist': return FIXTURES.playlistDetail;\n" +
     "      case 'get_playlist_items': return FIXTURES.playlistItems;\n" +
     "      case 'add_playlist_items': return null;\n" +
