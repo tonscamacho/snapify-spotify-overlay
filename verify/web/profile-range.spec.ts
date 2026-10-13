@@ -1,9 +1,9 @@
-// Profile range switching (Batch 2c): the Timeframe select maps 4 weeks /
+// Profile range switching (Batch 2): the Timeframe menu maps 4 weeks /
 // 6 months / Lifetime to real Spotify time_range fetches (short_term /
 // medium_term / long_term) while Today / Week / 2026 re-fetch long_term and
-// slice on the client with an honesty note. Rapid switches settle on the
-// last pick (200 ms gen guard), throttles show a banner with Retry, and
-// empty tops render honest empty states.
+// slice the history store on the client with an honesty note. Rapid switches
+// settle on the last pick (200 ms gen guard), throttles show a banner with
+// Retry, and empty tops render honest empty states.
 import { test, expect, type Page } from "@playwright/test";
 import { stubTauri, commandsNamed, failNext } from "./tauri-mock";
 import {
@@ -32,7 +32,12 @@ async function bootProfile(page: Page, fixtures?: Record<string, unknown>) {
 }
 
 function timeframe(profile: ReturnType<Page["locator"]>) {
-  return profile.getByLabel("Timeframe");
+  return profile.locator(".range-btn");
+}
+
+async function selectRange(profile: ReturnType<Page["locator"]>, value: string) {
+  await profile.locator(".range-btn").click();
+  await profile.locator(`[role="option"][data-value="${value}"]`).click();
 }
 
 async function topTimeRanges(page: Page): Promise<string[]> {
@@ -42,16 +47,17 @@ async function topTimeRanges(page: Page): Promise<string[]> {
 
 test("4 weeks / 6 months / Lifetime request short / medium / long_term", async ({ page }) => {
   const profile = await bootProfile(page);
-  const select = timeframe(profile);
-  await expect(select).toHaveValue("fourWeeks");
+  const menu = timeframe(profile);
+  await expect(menu).toContainText("4 weeks");
 
-  const cases: Array<[string, string, string]> = [
-    ["fourWeeks", "short_term", PROFILE_SHORT_TRACKS[0]],
-    ["sixMonths", "medium_term", PROFILE_MEDIUM_TRACKS[0]],
-    ["lifetime", "long_term", PROFILE_LONG_TRACKS[0]],
+  const cases: Array<[string, string, string, string]> = [
+    ["fourWeeks", "4 weeks", "short_term", PROFILE_SHORT_TRACKS[0]],
+    ["sixMonths", "6 months", "medium_term", PROFILE_MEDIUM_TRACKS[0]],
+    ["lifetime", "Lifetime", "long_term", PROFILE_LONG_TRACKS[0]],
   ];
-  for (const [value, timeRange, track] of cases) {
-    await select.selectOption(value);
+  for (const [value, label, timeRange, track] of cases) {
+    await selectRange(profile, value);
+    await expect(menu).toContainText(label);
     // The 200 ms gen guard commits, then the three tops lists refetch.
     await expect
       .poll(async () => (await topTimeRanges(page)).join(","), { timeout: 10000 })
@@ -66,9 +72,8 @@ test("4 weeks / 6 months / Lifetime request short / medium / long_term", async (
 
 test("Today / Week / 2026 slice long_term on the client with an honesty note", async ({ page }) => {
   const profile = await bootProfile(page);
-  const select = timeframe(profile);
 
-  await select.selectOption("today");
+  await selectRange(profile, "today");
   await expect
     .poll(async () => (await topTimeRanges(page)).join(","), { timeout: 10000 })
     .toContain("long_term");
@@ -79,7 +84,7 @@ test("Today / Week / 2026 slice long_term on the client with an honesty note", a
   await expect(profile).toContainText("Today Spin");
   await expect(profile).not.toContainText("Ancient Spin");
 
-  await select.selectOption("week");
+  await selectRange(profile, "week");
   await expect(
     profile.getByText("Sliced from long-term tops plus recent streams. Not a Spotify range."),
   ).toBeVisible();
@@ -87,7 +92,7 @@ test("Today / Week / 2026 slice long_term on the client with an honesty note", a
   await expect(profile).toContainText("Week Spin B");
   await expect(profile).not.toContainText("Month Spin");
 
-  await select.selectOption("year2026");
+  await selectRange(profile, "year2026");
   await expect(
     profile.getByText("2026 slice of lifetime tops. Spotify has no year range."),
   ).toBeVisible();
@@ -95,18 +100,52 @@ test("Today / Week / 2026 slice long_term on the client with an honesty note", a
   await expect(profile).not.toContainText("Ancient Spin");
 
   // Direct ranges owe no disclaimer.
-  await select.selectOption("fourWeeks");
+  await selectRange(profile, "fourWeeks");
   await expect(profile.getByText("Not a Spotify range.")).toHaveCount(0);
   await expect(profile.getByText("Spotify has no year range.")).toHaveCount(0);
 });
 
+test("menu keyboard selects and closes", async ({ page }) => {
+  const profile = await bootProfile(page);
+  const btn = timeframe(profile);
+  const box = profile.locator(".range-listbox");
+  await expect(btn).toHaveAttribute("aria-haspopup", "listbox");
+  await expect(box).toHaveAttribute("role", "listbox");
+  expect(await profile.locator('[role="option"]').count()).toBe(6);
+
+  await btn.focus();
+  await page.keyboard.press("Enter");
+  await expect(box).toBeVisible();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(box).toBeHidden();
+
+  await btn.click();
+  await expect(box).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(box).toBeHidden();
+
+  await btn.click();
+  expect(await box.evaluate((el) => getComputedStyle(el).position)).toBe("absolute");
+  expect(await box.evaluate((el) => getComputedStyle(el).maxHeight)).toBe("240px");
+  await page.keyboard.press("Escape");
+});
+
+test("imported store names Extended history in the honesty note", async ({ page }) => {
+  const profile = await bootProfile(page, { historyHasImported: true });
+  await selectRange(profile, "today");
+  await expect(profile.getByText(/Includes imported Extended history\./)).toBeVisible();
+  await selectRange(profile, "fourWeeks");
+  await expect(profile.getByText(/Includes imported Extended history\./)).toBeVisible();
+});
+
 test("rapid range switches settle on the last range (gen guard)", async ({ page }) => {
   const profile = await bootProfile(page);
-  const select = timeframe(profile);
 
-  // No awaits between picks: the guard must commit only the last one.
-  await select.selectOption("fourWeeks");
-  await select.selectOption("lifetime");
+  // Two quick menu picks: the guard must commit only the last one.
+  await selectRange(profile, "fourWeeks");
+  await selectRange(profile, "lifetime");
   await expect
     .poll(async () => (await topTimeRanges(page)).pop(), { timeout: 10000 })
     .toBe("long_term");

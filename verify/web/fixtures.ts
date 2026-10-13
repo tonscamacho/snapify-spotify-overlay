@@ -76,6 +76,9 @@ export interface VerifyFixtures {
   showDetail: unknown;
   audiobookDetail: unknown;
   search: unknown;
+  /** History flag for get_history_stats. When true the mock reports an
+   *  imported store so the honesty note names Extended history. */
+  historyHasImported?: boolean;
 }
 
 function trackShape(id: string, name: string, artists: string) {

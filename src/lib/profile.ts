@@ -7,6 +7,8 @@ import type {
   RecentPlay,
   TopGenre,
 } from "./types";
+import type { HistoryPlay } from "./history";
+import { HISTORY_MIN_MS } from "./history";
 
 /** localStorage key for the selected profile range. */
 export const PROFILE_RANGE_KEY = "snapify-profile-range";
@@ -100,18 +102,21 @@ export function isClientSlice(r: ProfileRange): boolean {
 }
 
 /** Honesty note for client-sliced ranges; null when Spotify serves the
- *  range directly and no disclaimer is owed. */
-export function rangeHonestyNote(r: ProfileRange): string | null {
+ *  range directly and no disclaimer is owed. Pass `hasImported` when the
+ *  local history store holds Extended-history imports: the note then
+ *  names the import so counts never pose as pure Spotify data. */
+export function rangeHonestyNote(r: ProfileRange, opts?: { hasImported?: boolean }): string | null {
+  const imported = opts?.hasImported === true ? " Includes imported Extended history." : "";
   switch (r) {
     case "today":
     case "week":
-      return "Sliced from long-term tops plus recent streams. Not a Spotify range.";
+      return `Sliced from long-term tops plus recent streams. Not a Spotify range.${imported}`;
     case "year2026":
-      return "2026 slice of lifetime tops. Spotify has no year range.";
+      return `2026 slice of lifetime tops. Spotify has no year range.${imported}`;
     case "fourWeeks":
     case "sixMonths":
     case "lifetime":
-      return null;
+      return imported === "" ? null : imported.trim();
     default:
       return unreachableRange(r);
   }
@@ -238,22 +243,44 @@ export function parseTopArtists(raw: unknown): ProfileArtist[] {
   return out;
 }
 
+/** Listened ms behind a play: the import value when present, else
+ *  the track duration. NaN when neither parses. */
+function listenedMs(p: HistoryPlay): number {
+  if (typeof p.msPlayed === "number" && Number.isFinite(p.msPlayed)) return p.msPlayed;
+  if (typeof p.durationMs === "number" && Number.isFinite(p.durationMs)) return p.durationMs;
+  return NaN;
+}
+
+/** True when a play counts: at least 30s listened and never skipped.
+ *  Previews and forward-button skips never reach a stat, a genre, or
+ *  a clock bucket. */
+function isCountedPlay(p: HistoryPlay): boolean {
+  if (p.skipped === true) return false;
+  const ms = listenedMs(p);
+  return Number.isFinite(ms) && (ms as number) >= HISTORY_MIN_MS;
+}
+
 /** Aggregate stats over recent plays. Artist counts split the joined
- *  display string, so one `A, B` row credits both artists. Pure. */
-export function deriveStats(plays: RecentPlay[]): ProfileStats {
+ *  display string, so one `A, B` row credits both artists. Plays
+ *  under 30s and skipped tracks are not counted. Pure. */
+export function deriveStats(plays: HistoryPlay[]): ProfileStats {
   const tracks = new Set<string>();
   const artists = new Set<string>();
+  let kept = 0;
   let ms = 0;
   for (const p of plays) {
+    if (!isCountedPlay(p)) continue;
+    kept += 1;
     tracks.add(p.trackId);
     for (const part of p.artists.split(",")) {
       const name = part.trim();
       if (name !== "") artists.add(name);
     }
-    if (Number.isFinite(p.durationMs) && p.durationMs > 0) ms += p.durationMs;
+    const heard = listenedMs(p);
+    if (Number.isFinite(heard) && (heard as number) > 0) ms += heard as number;
   }
   return {
-    plays: plays.length,
+    plays: kept,
     minutes: Math.round(ms / 60000),
     uniqueTracks: tracks.size,
     uniqueArtists: artists.size,
@@ -279,10 +306,12 @@ export function deriveTopGenres(artists: ProfileArtist[]): TopGenre[] {
 }
 
 /** Bucket plays into 24 local-hour buckets, index = hour. Always
- *  returns all 24 buckets so the chart never shifts shape. Pure. */
-export function bucketListeningClocks(plays: RecentPlay[]): ClockBucket[] {
+ *  returns all 24 buckets so the chart never shifts shape. Short and
+ *  skipped plays are not counted. Pure. */
+export function bucketListeningClocks(plays: HistoryPlay[]): ClockBucket[] {
   const buckets: ClockBucket[] = Array.from({ length: 24 }, (_, hour) => ({ hour, plays: 0 }));
   for (const p of plays) {
+    if (!isCountedPlay(p)) continue;
     const h = new Date(p.playedAt).getHours();
     if (h >= 0 && h < 24) buckets[h].plays += 1;
   }
@@ -291,6 +320,31 @@ export function bucketListeningClocks(plays: RecentPlay[]): ClockBucket[] {
 
 const DAY_MS = 86400000;
 
+/** Start of a profile window in epoch ms. Single owner for the window
+ *  math: `sliceClientRange`, `sliceStoreRange` callers, and the
+ *  ProfilePane slice share this so the numbers cannot drift. Null
+ *  means lifetime. */
+export function rangeStartForRange(r: ProfileRange, now: number): number | null {
+  switch (r) {
+    case "today": {
+      const d = new Date(now);
+      return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    }
+    case "week":
+      return now - 7 * DAY_MS;
+    case "fourWeeks":
+      return now - 28 * DAY_MS;
+    case "sixMonths":
+      return now - 182 * DAY_MS;
+    case "year2026":
+      return new Date(2026, 0, 1).getTime();
+    case "lifetime":
+      return null;
+    default:
+      return unreachableRange(r);
+  }
+}
+
 /** Window a client-sliced range over timestamped recent plays. Tops
  *  carry no timestamps, so only streams filter: `today` keeps plays
  *  since local midnight, `week` the rolling 7 days, `fourWeeks` 28
@@ -298,38 +352,14 @@ const DAY_MS = 86400000;
  *  2026, `lifetime` everything. Bounds are inclusive; plays stamped
  *  after `now` are dropped as clock skew. Pure. */
 export function sliceClientRange(args: {
-  plays: RecentPlay[];
+  plays: HistoryPlay[];
   range: ProfileRange;
   now?: number;
-}): RecentPlay[] {
+}): HistoryPlay[] {
   const { plays, range } = args;
   const now =
     typeof args.now === "number" && Number.isFinite(args.now) ? args.now : Date.now();
-  let start: number | null;
-  switch (range) {
-    case "today": {
-      const d = new Date(now);
-      start = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-      break;
-    }
-    case "week":
-      start = now - 7 * DAY_MS;
-      break;
-    case "fourWeeks":
-      start = now - 28 * DAY_MS;
-      break;
-    case "sixMonths":
-      start = now - 182 * DAY_MS;
-      break;
-    case "year2026":
-      start = new Date(2026, 0, 1).getTime();
-      break;
-    case "lifetime":
-      start = null;
-      break;
-    default:
-      return unreachableRange(range);
-  }
+  const start = rangeStartForRange(range, now);
   if (start === null) return plays.slice();
   return plays.filter((p) => p.playedAt >= start && p.playedAt <= now);
 }

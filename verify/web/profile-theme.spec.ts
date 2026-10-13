@@ -1,6 +1,7 @@
-// Profile theme matrix (Batch 2c): the profile pane holds the overlay chrome
+// Profile theme matrix (Batch 2): the profile pane holds the overlay chrome
 // invariants across every theme x surface (transparent root, clipped pane
 // backgrounds, one scrollport) and stays compact-clean at its minimum size.
+// The range menu floats with a capped height and keeps the halo.
 import { test, expect, type Page } from "@playwright/test";
 import { stubTauri } from "./tauri-mock";
 import { PROFILE_ME_NAME } from "./fixtures";
@@ -49,14 +50,20 @@ test("profile holds chrome invariants across every theme x surface", async ({ pa
       expect(await profile.evaluate((el) => getComputedStyle(el).backgroundClip)).toBe(
         "padding-box",
       );
+      // Range menu keeps the halo too.
+      expect(
+        await profile.locator(".range-listbox").evaluate((el) => getComputedStyle(el).backgroundClip),
+      ).toBe("padding-box");
 
       // Single scroller: the pane body owns the scrollport; tiles, genre
-      // chips, clock dials, and tops lists add no nested one.
+      // chips, clock dials, and tops lists add no nested one. The floating
+      // range listbox is the one permitted nested scroller.
       const nested = await profile.evaluate((el) => {
         const out: string[] = [];
         for (const n of Array.from(el.querySelectorAll("*"))) {
           const h = n as HTMLElement;
           if (h.classList.contains("pane-body")) continue;
+          if (h.classList.contains("range-listbox")) continue;
           const oy = getComputedStyle(h).overflowY;
           if (oy === "auto" || oy === "scroll") {
             out.push(`${h.tagName}.${String(h.className ?? "")}`);
@@ -65,6 +72,12 @@ test("profile holds chrome invariants across every theme x surface", async ({ pa
         return out;
       });
       expect(nested).toEqual([]);
+
+      // Range menu contract holds in every theme.
+      await expect(profile.locator(".range-menu")).toBeVisible();
+      await expect(profile.locator("#profile-range-label")).toContainText("Timeframe");
+      await expect(profile.locator(".range-btn")).toContainText("4 weeks");
+      expect(await profile.locator('[role="option"]').count()).toBe(6);
 
       await page.screenshot({ path: `verify/web/test-results/profile-${theme}-${surface}.png` });
     }
@@ -89,5 +102,22 @@ test("profile at its minimum size flags compact and keeps the header", async ({ 
   await expect(profile).toHaveAttribute("data-compact", "true");
   await expect(profile.locator(".detail-head .detail-title")).toContainText(PROFILE_ME_NAME);
   await expect(profile.getByText("Stats", { exact: true })).toBeVisible();
+  // 320px readable: the menu and tiles never force horizontal scroll.
+  const overflow = await profile.evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(2);
+  await expect(profile.locator(".range-menu")).toBeVisible();
   await page.screenshot({ path: "verify/web/test-results/profile-compact.png" });
+});
+
+test("range menu collapse stays header-only", async ({ page }) => {
+  const profile = await bootProfileAt(page, "dark", "solid");
+  await profile.getByRole("button", { name: "Collapse Profile pane" }).click();
+  await expect(profile).toHaveAttribute("data-collapsed", "true");
+  expect(
+    await profile.locator(".pane-body").evaluate((el) => getComputedStyle(el).display),
+  ).toBe("none");
+  await profile.getByRole("button", { name: "Expand Profile pane" }).click();
+  await expect(profile).not.toHaveAttribute("data-collapsed", "true");
+  await expect(profile.locator(".range-menu")).toBeVisible();
+  await expect(profile.locator(".range-btn")).toBeVisible();
 });

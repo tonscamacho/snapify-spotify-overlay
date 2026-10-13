@@ -1,11 +1,11 @@
-// Profile pane (Batch 2c): section[data-pane="profile"] shows the signed-in
-// user header, the Timeframe select, stats tiles, the genre strip, the
+// Profile pane (Batch 2): section[data-pane="profile"] shows the signed-in
+// user header, the Timeframe range menu, stats tiles, the genre strip, the
 // listening clocks, and the tops + recents grids from the get_me +
 // get_my_top + get_recently_played fixtures. The mock branches get_my_top on
 // the timeRange arg (short_term -> 4W window, medium_term -> 6M,
 // long_term/null -> lifetime) and returns [{ track, played_at }] recents.
 import { test, expect, type Page } from "@playwright/test";
-import { stubTauri, invokedCommands, commandsNamed } from "./tauri-mock";
+import { stubTauri, invokedCommands, commandsNamed, mockHistoryFile } from "./tauri-mock";
 import {
   PROFILE_LONG_ARTISTS,
   PROFILE_ME_NAME,
@@ -38,6 +38,11 @@ async function paneBox(page: Page, pane: string) {
   });
 }
 
+async function selectRangeMenu(profile: ReturnType<Page["locator"]>, value: string) {
+  await profile.locator(".range-btn").click();
+  await profile.locator(`[role="option"][data-value="${value}"]`).click();
+}
+
 test("chip toggle hides and shows the profile pane", async ({ page }) => {
   await bootProfile(page);
   const chip = page.getByTitle("Toggle Profile pane");
@@ -58,10 +63,15 @@ test("header, timeframe, tiles, genres, clocks, and grids render", async ({ page
   // Header from get_me.
   await expect(profile.locator(".detail-head .detail-title")).toContainText(PROFILE_ME_NAME);
 
-  // Timeframe select defaults to the stored range (4 weeks fresh).
-  const timeframe = profile.getByLabel("Timeframe");
+  // Timeframe menu defaults to the stored range (4 weeks fresh).
+  await expect(profile.locator("#profile-range-label")).toContainText("Timeframe");
+  const timeframe = profile.locator(".range-btn");
   await expect(timeframe).toBeVisible();
-  await expect(timeframe).toHaveValue("fourWeeks");
+  await expect(timeframe).toContainText("4 weeks");
+  await expect(timeframe).toHaveAttribute("aria-haspopup", "listbox");
+  await expect(profile.locator(".range-menu")).toBeVisible();
+  await expect(profile.locator(".range-listbox")).toHaveAttribute("role", "listbox");
+  expect(await profile.locator('[role="option"]').count()).toBe(6);
 
   // Stats tiles: the default 4W slice keeps the 4 recent streams inside 28d
   // (Today + Week A/B + Month = 200+180+210+240s = 830000ms -> 14 minutes,
@@ -117,8 +127,100 @@ test("header, timeframe, tiles, genres, clocks, and grids render", async ({ page
   await expect
     .poll(async () => (await commandsNamed(page, "get_recently_played")).length, { timeout: 10000 })
     .toBeGreaterThanOrEqual(1);
+  // History flag loads once on mount; the poll sync appends the live track.
+  await expect
+    .poll(async () => (await commandsNamed(page, "get_history_stats")).length, { timeout: 10000 })
+    .toBeGreaterThanOrEqual(1);
   expect(PROFILE_LONG_ARTISTS.length).toBeGreaterThan(0);
   await page.screenshot({ path: "verify/web/test-results/profile-pane.png" });
+});
+
+test("range menu opens, selects, and respects keyboard", async ({ page }) => {
+  const profile = await bootProfile(page);
+  await expect(profile.locator("#profile-range-label")).toContainText("Timeframe");
+  const btn = profile.locator(".range-btn");
+  const box = profile.locator(".range-listbox");
+  await expect(btn).toHaveAttribute("aria-haspopup", "listbox");
+  await expect(box).toHaveAttribute("role", "listbox");
+  expect(await profile.locator('[role="option"]').count()).toBe(6);
+
+  // Mouse: open and pick Today.
+  await btn.click();
+  await expect(box).toBeVisible();
+  await profile.locator('[role="option"][data-value="today"]').click();
+  await expect(btn).toContainText("Today");
+  await expect(
+    profile.getByText("Sliced from long-term tops plus recent streams. Not a Spotify range."),
+  ).toBeVisible();
+
+  // Keyboard: focus, Enter opens, Arrows move, Enter selects, Esc closes.
+  await btn.focus();
+  await page.keyboard.press("Enter");
+  await expect(box).toBeVisible();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(box).toBeHidden();
+  // Esc closes an open menu.
+  await btn.click();
+  await expect(box).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(box).toBeHidden();
+
+  // Listbox floats with a capped height.
+  await btn.click();
+  expect(await box.evaluate((el) => getComputedStyle(el).position)).toBe("absolute");
+  expect(await box.evaluate((el) => getComputedStyle(el).maxHeight)).toBe("240px");
+  await page.keyboard.press("Escape");
+
+  expect(await profile.evaluate((el) => getComputedStyle(el).backgroundClip)).toBe("padding-box");
+});
+
+test("history import shows counts and names imports in the honesty note", async ({ page }) => {
+  const profile = await bootProfile(page);
+  await expect(profile.locator(".detail-head .detail-title")).toContainText(PROFILE_ME_NAME);
+
+  const rows = JSON.stringify([
+    {
+      ts: new Date(Date.now() - 3600000).toISOString(),
+      ms_played: 200000,
+      master_metadata_track_name: "Import Spin",
+      master_metadata_album_artist_name: "Import Band",
+      spotify_track_uri: "spotify:track:import-1",
+      reason_end: "trackdone",
+      skipped: false,
+    },
+    {
+      ts: new Date(Date.now() - 7200000).toISOString(),
+      ms_played: 10000,
+      master_metadata_track_name: "Short Skip",
+      master_metadata_album_artist_name: "Import Band",
+      spotify_track_uri: "spotify:track:import-short",
+      reason_end: "trackdone",
+      skipped: false,
+    },
+  ]);
+  await mockHistoryFile(page, "endsong_0.json", rows);
+  await profile.getByRole("button", { name: "Import history" }).click();
+  await expect(profile.getByText(/Imported 1 of 2/, { exact: false })).toBeVisible({ timeout: 10000 });
+  await expect(profile.getByText(/1 short/, { exact: false })).toBeVisible();
+  const imports = await commandsNamed(page, "import_history");
+  expect(imports.length).toBeGreaterThanOrEqual(1);
+
+  // The honesty note now names the import on a sliced range.
+  await selectRangeMenu(profile, "today");
+  await expect(profile.getByText(/Includes imported Extended history\./)).toBeVisible();
+});
+
+test("player poll syncs history with idempotent appends", async ({ page }) => {
+  await bootProfile(page);
+  await expect
+    .poll(async () => (await commandsNamed(page, "append_listen_cmd")).length, { timeout: 15000 })
+    .toBeGreaterThanOrEqual(1);
+  const calls = await commandsNamed(page, "append_listen_cmd");
+  const first = calls[0]?.["play"] as Record<string, unknown> | undefined;
+  expect(typeof first?.["uri"]).toBe("string");
+  expect(String(first?.["uri"])).toContain("spotify:track:");
+  expect(Number(first?.["playedAt"])).toBeGreaterThan(0);
 });
 
 test("toggle off/on restores the exact profile geometry", async ({ page }) => {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { api, toThrottleError } from "../lib/spotify";
 import { parseUserProfile } from "../lib/browse";
 import {
@@ -9,13 +10,23 @@ import {
   parseTopArtists,
   parseTopTracks,
   rangeHonestyNote,
-  sliceClientRange,
+  rangeStartForRange,
   toApiTimeRange,
   type ProfileArtist,
 } from "../lib/profile";
+import {
+  emptyStore,
+  mergeHistory,
+  parseExtendedHistory,
+  sliceStoreRange,
+  type HistoryPlay,
+  type HistoryStore,
+  type ImportCounts,
+} from "../lib/history";
 import type { ProfileRange, QueueItem, RecentPlay, UserProfile } from "../lib/types";
 import { formatMs } from "../lib/lrc";
 import { LikePlusIcon, PlayIcon } from "./icons";
+import ProfileRangeMenu from "./ProfileRangeMenu";
 
 interface Props {
   range: ProfileRange;
@@ -34,16 +45,6 @@ interface Props {
   onError: (m: string) => void;
   onRetryPlayer: () => void;
 }
-
-/** Timeframe options in UI order (mirrors PROFILE_RANGES in lib/profile). */
-const RANGE_OPTIONS: ReadonlyArray<{ value: ProfileRange; label: string }> = [
-  { value: "today", label: "Today" },
-  { value: "week", label: "Week" },
-  { value: "fourWeeks", label: "4 weeks" },
-  { value: "sixMonths", label: "6 months" },
-  { value: "year2026", label: "2026" },
-  { value: "lifetime", label: "Lifetime" },
-];
 
 /** Commit delay for range switches. Rapid picks settle on the last one:
  *  only the latest generation fires, so a burst costs one tops fetch. */
@@ -164,6 +165,14 @@ export default function ProfilePane(p: Props) {
   const [artists, setArtists] = useState<SectionState<ProfileArtist[]>>(() => idleSection([]));
   const [albums, setAlbums] = useState<SectionState<AlbumEntry[]>>(() => idleSection([]));
   const [recents, setRecents] = useState<SectionState<RecentPlay[]>>(() => idleSection([]));
+  // Local history store: imported Extended-history rows plus the live
+  // recents merge below. Seeded empty; get_history_stats flips hasImported
+  // once on mount, imports merge via mergeHistory. Never throws.
+  const [store, setStore] = useState<HistoryStore>(() => emptyStore());
+  const [hasImported, setHasImported] = useState(false);
+  const [importCounts, setImportCounts] = useState<ImportCounts | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
 
   // Generation guard: every tops round takes a number; only the latest
   // commits, so StrictMode remounts and rapid range bursts never paint
@@ -265,10 +274,10 @@ export default function ProfilePane(p: Props) {
     [reportSectionError],
   );
 
-  // Mount: identity + streams once. Tops ride the range effect below so
-  // the first paint and every switch share one debounced path. The live
-  // flag drops the StrictMode remount's first round; invokes already sent
-  // are idempotent reads.
+  // Mount: identity + streams + history flag once. Tops ride the range
+  // effect below so the first paint and every switch share one debounced
+  // path. The live flag drops the StrictMode remount's first round;
+  // invokes already sent are idempotent reads.
   useEffect(() => {
     let live = true;
     void (async () => {
@@ -298,6 +307,40 @@ export default function ProfilePane(p: Props) {
         const m = messageOf(e);
         setRecents((s) => ({ ...s, error: m, loading: false }));
         if (toThrottleError(m) === null) onError(m);
+      }
+    })();
+    // History flag once: names imports in the honesty note. Best-effort;
+    // a missing Rust side (web mocks returning null) keeps hasImported false.
+    // The full play list loads alongside so stats derive from the persisted
+    // store and a reload keeps imports.
+    void (async () => {
+      try {
+        const raw = await invoke<unknown>("get_history_stats", {
+          start: null,
+          now: Date.now(),
+        });
+        if (!live) return;
+        if (raw && typeof raw === "object") {
+          const flag = (raw as Record<string, unknown>)["hasImported"];
+          if (flag === true) setHasImported(true);
+          const imported = (raw as Record<string, unknown>)["importedRanges"];
+          if (Array.isArray(imported) && imported.length > 0) setHasImported(true);
+        }
+      } catch {
+        // History never breaks the pane.
+      }
+      try {
+        const stored = await invoke<unknown>("get_history_plays");
+        if (!live) return;
+        if (stored && typeof stored === "object") {
+          const next = mergeHistory(emptyStore(), stored);
+          if (next.plays.length > 0 || next.importedRanges.length > 0) {
+            setStore(next);
+          }
+          if (next.importedRanges.length > 0) setHasImported(true);
+        }
+      } catch {
+        // History never breaks the pane.
       }
     })();
     return () => {
@@ -346,10 +389,104 @@ export default function ProfilePane(p: Props) {
     [onRange, onRangeChange],
   );
 
-  const sliced = useMemo(
-    () => sliceClientRange({ plays: recents.items, range }),
-    [recents.items, range],
-  );
+  // Import Extended history: dialog pick -> Rust-side read ->
+  // import_history. The bytes never cross a frontend fs read, so the
+  // frontend fs scope stays tight at $APPLOCALDATA. Merges parsed plays
+  // locally for instant stats; counts + errors render
+  // in the throttle slot so no new banner class enters the pane.
+  const handleImport = useCallback(async () => {
+    setImporting(true);
+    setImportError(null);
+    try {
+      const dialog = await import("@tauri-apps/plugin-dialog");
+      const picked = await dialog.open({
+        multiple: false,
+        filters: [{ name: "Spotify history", extensions: ["json"] }],
+      });
+      if (!picked) return;
+      const path = typeof picked === "string" ? picked : Array.isArray(picked) ? picked[0] : null;
+      if (!path || typeof path !== "string" || path === "") return;
+      const text = await invoke<string>("read_history_file", { path });
+      let rows: unknown;
+      try {
+        rows = JSON.parse(text);
+      } catch {
+        setImportError("History file is not valid JSON.");
+        return;
+      }
+      const arr = Array.isArray(rows) ? rows : [];
+      const batch = path.split(/[\\/]/).pop() ?? "import";
+      const parsed = parseExtendedHistory(arr, Date.now());
+      try {
+        const counts = await invoke<ImportCounts>("import_history", { rows: arr, batch });
+        setImportCounts(counts);
+      } catch (e) {
+        setImportError(messageOf(e));
+        return;
+      }
+      if (parsed.plays.length > 0) {
+        setStore((prev) => mergeHistory(prev, parsed.plays));
+      }
+      // A non-empty import always names itself in the honesty note, even
+      // when the Rust stats round-trip is mocked to null in web tests.
+      if (parsed.plays.length > 0 || parsed.counts.kept > 0) setHasImported(true);
+      try {
+        const raw = await invoke<unknown>("get_history_stats", { start: null, now: Date.now() });
+        if (raw && typeof raw === "object" && (raw as Record<string, unknown>)["hasImported"] === true) {
+          setHasImported(true);
+        }
+      } catch {
+        // Flag already set from the local parse.
+      }
+      // When the file held no countable rows, still surface the tally so
+      // an empty import never looks like a silent no-op.
+      if (parsed.plays.length === 0) {
+        setImportCounts(parsed.counts);
+      }
+    } catch (e) {
+      setImportError(messageOf(e));
+    } finally {
+      setImporting(false);
+    }
+  }, []);
+
+  // Store slice for stats/clocks: Rust imports first, live recents merged
+  // in with uri@playedAt dedupe. Empty store keeps the exact recents-only
+  // numbers the pane shipped with.
+  const combinedPlays = useMemo<HistoryPlay[]>(() => {
+    const recentsHist: HistoryPlay[] = recents.items.map((r) => ({
+      trackId: r.trackId,
+      trackName: r.trackName,
+      artists: r.artists,
+      playedAt: r.playedAt,
+      image: r.image,
+      uri: r.uri,
+      durationMs: r.durationMs,
+      msPlayed: r.durationMs,
+      skipped: false,
+      source: "api" as const,
+    }));
+    const seen = new Set<string>();
+    for (const pl of store.plays) seen.add(`${pl.uri}@${pl.playedAt}`);
+    const extra: HistoryPlay[] = [];
+    for (const pl of recentsHist) {
+      const key = `${pl.uri}@${pl.playedAt}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        extra.push(pl);
+      }
+    }
+    return [...store.plays, ...extra];
+  }, [store.plays, recents.items]);
+
+  const sliced = useMemo(() => {
+    const now = Date.now();
+    const start = rangeStartForRange(range, now);
+    return sliceStoreRange(
+      { version: 1 as const, plays: combinedPlays, importedRanges: store.importedRanges },
+      { start, now },
+    );
+  }, [combinedPlays, range, store.importedRanges]);
   const stats = useMemo(() => deriveStats(sliced), [sliced]);
   const genres = useMemo(() => deriveTopGenres(artists.items), [artists.items]);
   const clocks = useMemo(() => bucketListeningClocks(sliced), [sliced]);
@@ -368,7 +505,7 @@ export default function ProfilePane(p: Props) {
     }
     return best;
   }, [clocks]);
-  const honesty = rangeHonestyNote(range);
+  const honesty = rangeHonestyNote(range, { hasImported });
   const topGenre = genres.length > 0 ? genres[0].genre : null;
 
   // Same copy contract as the shared pane banner (quota vs rate), kept
@@ -441,35 +578,31 @@ export default function ProfilePane(p: Props) {
         )
       )}
 
-      <div className="search-wrap">
-        <label htmlFor="profile-range">Timeframe</label>
-        <select
-          id="profile-range"
-          value={range}
-          onChange={(e) => {
-            const v = e.target.value;
-            if (
-              v === "today" ||
-              v === "week" ||
-              v === "fourWeeks" ||
-              v === "sixMonths" ||
-              v === "year2026" ||
-              v === "lifetime"
-            ) {
-              changeRange(v);
-            }
-          }}
-        >
-          {RANGE_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+      <div className="range-menu">
+        <label id="profile-range-label">Timeframe</label>
+        <ProfileRangeMenu value={range} onChange={changeRange} labelId="profile-range-label" />
       </div>
       {honesty && (
         <div className="dim" role="note">
           {honesty}
+        </div>
+      )}
+      <div className="search-wrap">
+        <button className="btn sm" onClick={() => void handleImport()} disabled={importing}>
+          {importing ? "Importing…" : "Import history"}
+        </button>
+        {importCounts && (
+          <span className="dim" role="status">
+            {`Imported ${importCounts.kept} of ${importCounts.total} (${importCounts.droppedShort} short, ${importCounts.droppedSkipped} skipped, ${importCounts.droppedNoUri} no-uri, ${importCounts.droppedDuplicate} dupes, ${importCounts.droppedInvalid} invalid).`}
+          </span>
+        )}
+      </div>
+      {importError && (
+        <div className="throttled-note" role="status">
+          <span>{importError}</span>
+          <button className="btn sm" onClick={() => setImportError(null)}>
+            Dismiss
+          </button>
         </div>
       )}
 
@@ -496,7 +629,7 @@ export default function ProfilePane(p: Props) {
           <div className="lbl">Top genre</div>
         </div>
         <div className="profile-tile">
-          <div className="num">{sliced.length > 0 ? formatPeakHour(peakHour) : "—"}</div>
+          <div className="num">{stats.plays > 0 ? formatPeakHour(peakHour) : "—"}</div>
           <div className="lbl">Peak hour</div>
         </div>
       </div>
@@ -522,7 +655,7 @@ export default function ProfilePane(p: Props) {
             { half: "PM", plays: pmPlays },
           ] as const
         ).map((d) => {
-          const frac = sliced.length > 0 ? d.plays / sliced.length : 0;
+          const frac = stats.plays > 0 ? d.plays / stats.plays : 0;
           const arc = (frac * 251.2).toFixed(1);
           return (
             <div

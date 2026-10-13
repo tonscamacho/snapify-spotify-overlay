@@ -1,4 +1,5 @@
 mod auth;
+mod history;
 mod keybinds;
 mod lyrics;
 mod overlay;
@@ -202,6 +203,8 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -359,6 +362,11 @@ pub fn run() {
             keybinds::keybind_startup_errors,
             keybinds::set_keybind,
             keybinds::reset_keybinds,
+            history::import_history,
+            history::get_history_stats,
+            history::get_history_plays,
+            history::read_history_file,
+            history::append_listen_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

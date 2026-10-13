@@ -100,6 +100,12 @@ function buildInitScript(
     "  function emptyPage() { return { items: [], total: 0 }; }\n" +
     "  var mockFaults = {};\n" +
     "  var mockAuthStatus = SEED_AUTH;\n" +
+    "  window.__MOCK_DIALOG_PATH__ = null;\n" +
+    "  window.__MOCK_FILE_TEXT__ = null;\n" +
+    "  var historySeen = {};\n" +
+    "  var historyImported = !!(FIXTURES.historyHasImported);\n" +
+    "  var historyPlays = [];\n" +
+    "  var historyRanges = historyImported ? ['mock-import'] : [];\n" +
     "  window.__MOCK_AUTH_STATUS__ = function (s) {\n" +
     "    mockAuthStatus = s;\n" +
     "  };\n" +
@@ -215,6 +221,57 @@ function buildInitScript(
     "      case 'get_audiobook_chapters': return emptyPage();\n" +
     "      case 'get_chapter': return FIXTURES.trackDetail;\n" +
     "      case 'search': return FIXTURES.search;\n" +
+    "      case 'get_history_stats': return { total: 0, totalMs: 0, minutes: 0, uniqueTracks: 0, uniqueArtists: 0, hasImported: !!historyImported, importedRanges: historyRanges.slice() };\n" +
+    "      case 'get_history_plays': return { version: 1, plays: historyPlays.slice(), importedRanges: historyRanges.slice() };\n" +
+    "      case 'read_history_file': {\n" +
+    "        if (typeof window.__MOCK_FILE_TEXT__ !== 'undefined' && window.__MOCK_FILE_TEXT__ !== null) return String(window.__MOCK_FILE_TEXT__);\n" +
+    "        throw new Error('mock file missing');\n" +
+    "      }\n" +
+    "      case 'import_history': {\n" +
+    "        var rows = args.rows || [];\n" +
+    "        var seenImp = {};\n" +
+    "        var kept = 0; var dShort = 0; var dSkip = 0; var dNoUri = 0; var dDup = 0; var dInv = 0;\n" +
+    "        for (var ri = 0; ri < rows.length; ri++) {\n" +
+    "          var r = rows[ri];\n" +
+    "          if (!r || typeof r !== 'object') { dInv += 1; continue; }\n" +
+    "          var tsRaw = r.ts || r.playedAt || r.played_at;\n" +
+    "          var ts = (typeof tsRaw === 'string' && /^\\d+$/.test(tsRaw.trim())) ? Number(tsRaw.trim()) : (typeof tsRaw === 'string' ? Date.parse(tsRaw) : (typeof tsRaw === 'number' ? tsRaw : NaN));\n" +
+    "          var ms = typeof r.ms_played === 'number' ? r.ms_played : (typeof r.msPlayed === 'number' ? r.msPlayed : (typeof r.durationMs === 'number' ? r.durationMs : null));\n" +
+    "          if (!isFinite(ts) || ts <= 0 || ms === null || ms < 0 || ts > Date.now()) { dInv += 1; continue; }\n" +
+    "          var uri = (r.spotify_track_uri || r.uri || '').trim();\n" +
+    "          if (!uri) { dNoUri += 1; continue; }\n" +
+    "          if (ms < 30000) { dShort += 1; continue; }\n" +
+    "          var re = (r.reason_end || r.reasonEnd || '').trim();\n" +
+    "          if (r.skipped === true || re === 'fwdbtn') { dSkip += 1; continue; }\n" +
+    "          var k = uri + '@' + ts;\n" +
+    "          if (seenImp[k]) { dDup += 1; continue; }\n" +
+    "          seenImp[k] = 1; kept += 1;\n" +
+    "          historyPlays.push({ trackId: uri.split(':').pop() || uri, trackName: r.master_metadata_track_name || r.trackName || 'Unknown', artists: r.master_metadata_album_artist_name || r.artists || '', playedAt: ts, image: null, uri: uri, durationMs: ms, msPlayed: ms, skipped: false, source: 'imported' });\n" +
+    "        }\n" +
+    "        if (kept > 0) { historyImported = true; if (historyRanges.indexOf('mock-import') === -1) historyRanges.push('mock-import'); }\n" +
+    "        return { total: rows.length, kept: kept, droppedShort: dShort, droppedSkipped: dSkip, droppedNoUri: dNoUri, droppedDuplicate: dDup, droppedInvalid: dInv };\n" +
+    "      }\n" +
+    "      case 'append_listen_cmd': {\n" +
+    "        var pl = args.play || {};\n" +
+    "        var puri = (pl.uri || '').trim();\n" +
+    "        var patRaw = pl.playedAt;\n" +
+    "        var pat = (typeof patRaw === 'string' && /^\\d+$/.test(String(patRaw).trim())) ? Number(String(patRaw).trim()) : Number(patRaw);\n" +
+    "        if (!puri) return { reason: 'no-uri' };\n" +
+    "        if (!isFinite(pat) || pat <= 0) return { reason: 'invalid' };\n" +
+    "        if (pat > Date.now()) return { reason: 'future' };\n" +
+    "        var pms = typeof pl.msPlayed === 'number' ? pl.msPlayed : (typeof pl.durationMs === 'number' ? pl.durationMs : 0);\n" +
+    "        if (pms < 30000) return { reason: 'short' };\n" +
+    "        if (pl.skipped === true) return { reason: 'skipped' };\n" +
+    "        var pk = puri + '@' + pat;\n" +
+    "        if (historySeen[pk]) return { reason: 'duplicate' };\n" +
+    "        historySeen[pk] = 1;\n" +
+    "        return { reason: 'appended' };\n" +
+    "      }\n" +
+    "      case 'plugin:dialog|open': return (typeof window.__MOCK_DIALOG_PATH__ !== 'undefined' && window.__MOCK_DIALOG_PATH__ !== null) ? window.__MOCK_DIALOG_PATH__ : null;\n" +
+    "      case 'plugin:fs|read_text_file': {\n" +
+    "        if (typeof window.__MOCK_FILE_TEXT__ !== 'undefined' && window.__MOCK_FILE_TEXT__ !== null) { var _t = String(window.__MOCK_FILE_TEXT__); try { return Array.from(new TextEncoder().encode(_t)); } catch (e) { return _t; } }\n" +
+    "        throw new Error('mock file missing');\n" +
+    "      }\n" +
     "      case 'request_log_counts':\n" +
     "        return { total: 0, ok: 0, rate_limited: 0, quota_exceeded: 0, unauthorized: 0, other: 0 };\n" +
     "      case 'request_log_recent': return [];\n" +
@@ -354,5 +411,20 @@ export async function delayNext(page: Page, cmd: string, ms: number, times = 1):
       w.__MOCK_DELAY_NEXT__?.(c as string, m as number, n as number);
     },
     [cmd, ms, times] as unknown as [string, number, number],
+  );
+}
+
+/** Seed the dialog pick + file text for history-import specs. */
+export async function mockHistoryFile(page: Page, path: string | null, text: string | null): Promise<void> {
+  await page.evaluate(
+    ([p, t]) => {
+      const w = window as unknown as {
+        __MOCK_DIALOG_PATH__?: string | null;
+        __MOCK_FILE_TEXT__?: string | null;
+      };
+      w.__MOCK_DIALOG_PATH__ = p as string | null;
+      w.__MOCK_FILE_TEXT__ = t as string | null;
+    },
+    [path, text] as unknown as [string | null, string | null],
   );
 }

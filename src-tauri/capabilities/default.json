@@ -20,6 +20,15 @@
     "process:default",
     "opener:default",
     "autostart:default",
-    "global-shortcut:default"
+    "global-shortcut:default",
+    "dialog:allow-open",
+    {
+      "identifier": "fs:allow-read-text-file",
+      "allow": [{ "path": "$APPLOCALDATA/**" }]
+    },
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [{ "path": "$APPLOCALDATA/**" }]
+    }
   ]
 }

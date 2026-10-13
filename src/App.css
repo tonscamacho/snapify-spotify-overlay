@@ -3533,3 +3533,73 @@ select:focus-visible,
     height: 22px;
   }
 }
+
+/* ---------- profile range menu (Batch 2, Arm A list-dense) ----------
+   Token-only surfaces; motion is opacity at the theme duration, no
+   keyframes. The list floats over the pane body; pane paint stays
+   inside the radius. */
+.range-menu {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.range-menu label {
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.range-btn {
+  min-width: 120px;
+  padding: 7px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--stroke);
+  background: var(--surface-2);
+  background-clip: padding-box;
+  color: var(--txt);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: opacity var(--dur) var(--ease);
+}
+
+.range-listbox {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--surface-2);
+  background-clip: padding-box;
+  border: 1px solid var(--stroke);
+  border-radius: var(--r-sm);
+  padding: 4px;
+  margin: 0;
+  list-style: none;
+}
+
+.range-listbox[hidden] {
+  display: none;
+}
+
+.range-listbox [role="option"] {
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--txt);
+  cursor: pointer;
+  transition: opacity var(--dur) var(--ease);
+}
+
+.range-listbox [role="option"].is-active {
+  background: var(--track);
+}
+
+.range-listbox [role="option"][aria-selected="true"] {
+  font-weight: 600;
+}

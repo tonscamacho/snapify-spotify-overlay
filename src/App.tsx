@@ -29,6 +29,7 @@ import {
   XIcon,
 } from "./components/icons";
 import { api, isSessionDead, parsePlayer, toThrottleError } from "./lib/spotify";
+import { HISTORY_MIN_MS, emptyStore, syncAppend } from "./lib/history";
 import { ActionGate, PendingQueue, flushDelayMs, shiftQueueForNext } from "./lib/pendingQueue";
 import { currentOverlayEpoch, reportOverlayMode, reportOverlayRegions, setOverlayDragCover, watchRegionElementSizes } from "./lib/overlay";
 import { ensurePlayer, isSdkReady, sdkPause, sdkResume, setSdkVolume } from "./lib/player-sdk";
@@ -398,6 +399,13 @@ export default function App() {
   const trackIdRef = useRef<string | null>(null);
   const snapRef = useRef<PlayerSnapshot>(EMPTY_SNAP);
   const uiScaleRef = useRef(1);
+  // Local history mirror for the poll sync hook. Pure syncAppend keeps it
+  // idempotent on uri+playedAt; only appended rows hit append_listen_cmd.
+  const historyStoreRef = useRef(emptyStore());
+  // Track-start anchor per uri: first-seen wall time plus the quantized
+  // start estimate. PlayedAt stays fixed for one play so poll jitter
+  // cannot mint duplicates; heard time gates the append.
+  const historyAnchorRef = useRef<{ uri: string; firstSeen: number; playedAt: number } | null>(null);
 
   useEffect(() => {
     snapRef.current = snap;
@@ -722,8 +730,56 @@ export default function App() {
     try {
       const raw = await invoke<unknown>("get_player");
       if (seq !== snapSeq.current) return true;
-      setSnap(parsePlayer(raw));
+      const parsed = parsePlayer(raw);
+      setSnap(parsed);
       noteRecovered();
+      // History sync hook (Batch 2): one poll-observed listen per play.
+      // The anchor fixes playedAt at first sight (quantized to the
+      // second) so per-poll fetchedAt/progress jitter cannot mint a new
+      // row every 5 s. Heard time (max of reported progress and wall
+      // elapsed since first sight) must reach ~30 s before anything is
+      // appended; msPlayed reports heard time, never the full duration
+      // up front. Best-effort only.
+      try {
+        const t = parsed.track;
+        if (!t || t.uri === "" || t.id === "") {
+          historyAnchorRef.current = null;
+        } else {
+          const nowMs = Date.now();
+          const fetchedAt = typeof parsed.fetchedAt === "number" ? parsed.fetchedAt : nowMs;
+          const progress = typeof parsed.progressMs === "number" ? parsed.progressMs : 0;
+          const anchor = historyAnchorRef.current;
+          let cur = anchor;
+          if (!cur || cur.uri !== t.uri) {
+            const startEst = fetchedAt - Math.max(0, progress);
+            const playedAt = Math.floor(startEst / 1000) * 1000;
+            cur = { uri: t.uri, firstSeen: nowMs, playedAt };
+            historyAnchorRef.current = cur;
+          }
+          const heard = Math.max(Math.max(0, progress), nowMs - cur.firstSeen);
+          if (heard >= HISTORY_MIN_MS) {
+            const listen = {
+              trackId: t.id,
+              trackName: t.name,
+              artists: t.artists,
+              playedAt: cur.playedAt,
+              image: t.image,
+              uri: t.uri,
+              durationMs: t.durationMs,
+              msPlayed: Math.round(heard),
+              skipped: false,
+              source: "api" as const,
+            };
+            const res = syncAppend(historyStoreRef.current, listen, nowMs);
+            historyStoreRef.current = res.store;
+            if (res.event.reason === "appended" && res.event.play) {
+              void invoke("append_listen_cmd", { play: res.event.play }).catch(() => {});
+            }
+          }
+        }
+      } catch {
+        // History never breaks the player poll.
+      }
       return true;
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
