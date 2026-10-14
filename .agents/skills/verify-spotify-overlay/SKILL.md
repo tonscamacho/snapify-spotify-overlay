@@ -65,12 +65,13 @@ powershell -ExecutionPolicy Bypass -File .agents/skills/verify-spotify-overlay/s
 powershell -ExecutionPolicy Bypass -File .agents/skills/verify-spotify-overlay/scripts/web-real.ps1
 ```
 
-`web.ps1` runs `npm run test` (vitest, 223 tests across 9 files under
-`src/lib/`: layout 65, player-sdk 13, devices 11, lrc 21, keybinds
-24, browse 52, spotify 22, pendingQueue 12, window-chrome 3 — same set
+`web.ps1` runs `npm run test` (vitest, 288 tests across 14 files under
+`src/`: layout 71, browse 52, pendingQueue 12, overlay 7, history 19,
+profile 26, keybinds 24, spotify 24, ProfileRangeMenu 3, ProfilePane
+smoke 2, lrc 21, devices 11, player-sdk 13, window-chrome 3 — same set
 as `npm run test:unit`) plus `npm run test:web`
 (Playwright + Chromium against `npm run dev` with the Tauri boundary
-stubbed, 20 spec files / 134 tests: 130 mocked across 19 files green,
+stubbed, 30 spec files / 196 tests: 192 mocked across 29 files green,
 4 real-API specs skip without a token). `web-real.ps1` runs the live
 shape checks and
 SKIPs cleanly without a token (4 real-API specs skip via

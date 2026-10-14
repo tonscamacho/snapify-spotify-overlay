@@ -16,9 +16,9 @@ import {
 } from "../lib/profile";
 import {
   emptyStore,
+  HISTORY_IMPORT_MAX_BYTES,
   mergeHistory,
   parseExtendedHistory,
-  sliceStoreRange,
   type HistoryPlay,
   type HistoryStore,
   type ImportCounts,
@@ -62,6 +62,14 @@ interface AlbumEntry {
  *  shows the top 10; albums mine the top 50 so the strip is not a copy
  *  of the songs list. */
 const ALBUM_WINDOW = 50;
+
+/** Recent-streams render page. The store can hold tens of thousands of
+ *  plays (capped at `HISTORY_STORE_CAP`), but every rendered row costs
+ *  ~6 DOM nodes plus two listeners; rendering the whole slice at 50k
+ *  rows measured +116MB and ~250k nodes. Stats and clocks still derive
+ *  from the full slice — only the list paginates, with an honest
+ *  Showing-count note so the cap never poses as the total. */
+const RECENT_PAGE_SIZE = 100;
 
 function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -173,6 +181,14 @@ export default function ProfilePane(p: Props) {
   const [importCounts, setImportCounts] = useState<ImportCounts | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  // Multi-file import notes: per-file read/parse/skip failures plus the
+  // file count. Rendered in the existing import slot beside the tally,
+  // so no new banner class enters the pane.
+  const [importNotes, setImportNotes] = useState<string[]>([]);
+  const [importFiles, setImportFiles] = useState<number | null>(null);
+  // Visible Recent-streams rows. Resets on range/store changes below so a
+  // narrower slice or a fresh import never strands a stale deep page.
+  const [recentLimit, setRecentLimit] = useState(RECENT_PAGE_SIZE);
 
   // Generation guard: every tops round takes a number; only the latest
   // commits, so StrictMode remounts and rapid range bursts never paint
@@ -389,36 +405,71 @@ export default function ProfilePane(p: Props) {
     [onRange, onRangeChange],
   );
 
-  // Import Extended history: dialog pick -> Rust-side read ->
-  // import_history. The bytes never cross a frontend fs read, so the
-  // frontend fs scope stays tight at $APPLOCALDATA. Merges parsed plays
-  // locally for instant stats; counts + errors render
-  // in the throttle slot so no new banner class enters the pane.
+  // Import Extended history: dialog multi-pick -> one Rust-side read
+  // per path -> a single import_history with the combined rows, so
+  // cross-file dedupe/tally is one transaction. The bytes never cross
+  // a frontend fs read, so the frontend fs scope stays tight at
+  // $APPLOCALDATA. Merges parsed plays locally for instant stats;
+  // counts + per-file notes render in the throttle slot so no new
+  // banner class enters the pane. Files over 25MB are skipped with a
+  // note; a bad file never aborts the rest.
   const handleImport = useCallback(async () => {
     setImporting(true);
     setImportError(null);
     try {
       const dialog = await import("@tauri-apps/plugin-dialog");
       const picked = await dialog.open({
-        multiple: false,
+        multiple: true,
         filters: [{ name: "Spotify history", extensions: ["json"] }],
       });
       if (!picked) return;
-      const path = typeof picked === "string" ? picked : Array.isArray(picked) ? picked[0] : null;
-      if (!path || typeof path !== "string" || path === "") return;
-      const text = await invoke<string>("read_history_file", { path });
-      let rows: unknown;
-      try {
-        rows = JSON.parse(text);
-      } catch {
-        setImportError("History file is not valid JSON.");
+      const paths = (Array.isArray(picked) ? picked : [picked]).filter(
+        (v): v is string => typeof v === "string" && v !== "",
+      );
+      if (paths.length === 0) return;
+      const notes: string[] = [];
+      const batches: string[] = [];
+      const combined: unknown[] = [];
+      for (const path of paths) {
+        const base = path.split(/[\\/]/).pop() ?? "import";
+        let text: string;
+        try {
+          text = await invoke<string>("read_history_file", { path });
+        } catch (e) {
+          notes.push(`${base}: ${messageOf(e)}`);
+          continue;
+        }
+        if (text.length > HISTORY_IMPORT_MAX_BYTES) {
+          notes.push(`${base}: skipped, file over 25MB`);
+          continue;
+        }
+        let rows: unknown;
+        try {
+          rows = JSON.parse(text);
+        } catch {
+          notes.push(`${base}: not valid JSON`);
+          continue;
+        }
+        const arr = Array.isArray(rows) ? rows : [];
+        if (arr.length === 0) {
+          notes.push(`${base}: no rows`);
+          continue;
+        }
+        batches.push(base);
+        combined.push(...arr);
+      }
+      setImportFiles(paths.length);
+      setImportNotes(notes);
+      if (combined.length === 0) {
+        if (notes.length === 0) setImportError("No history rows found.");
         return;
       }
-      const arr = Array.isArray(rows) ? rows : [];
-      const batch = path.split(/[\\/]/).pop() ?? "import";
-      const parsed = parseExtendedHistory(arr, Date.now());
+      const parsed = parseExtendedHistory(combined, Date.now());
       try {
-        const counts = await invoke<ImportCounts>("import_history", { rows: arr, batch });
+        const counts = await invoke<ImportCounts>("import_history", {
+          rows: combined,
+          batch: batches.join(", "),
+        });
         setImportCounts(counts);
       } catch (e) {
         setImportError(messageOf(e));
@@ -482,11 +533,23 @@ export default function ProfilePane(p: Props) {
   const sliced = useMemo(() => {
     const now = Date.now();
     const start = rangeStartForRange(range, now);
-    return sliceStoreRange(
-      { version: 1 as const, plays: combinedPlays, importedRanges: store.importedRanges },
-      { start, now },
+    // Filter the already-coerced combined list directly: routing through
+    // sliceStoreRange would re-coerce every row into fresh objects (one
+    // more full-size copy per derivation). Same window semantics —
+    // inclusive [start, now], future stamps dropped as clock skew.
+    return combinedPlays.filter(
+      (pl) => (start === null || pl.playedAt >= start) && pl.playedAt <= now,
     );
-  }, [combinedPlays, range, store.importedRanges]);
+  }, [combinedPlays, range]);
+  // A new window or a changed store resets the list pager; the effect
+  // keys on the slice length (not the array identity) so repolls that
+  // rebuild the array without adding rows keep the user's page.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setRecentLimit(RECENT_PAGE_SIZE), [range, sliced.length]);
+  const visibleRecents = useMemo(
+    () => sliced.slice(0, recentLimit),
+    [sliced, recentLimit],
+  );
   const stats = useMemo(() => deriveStats(sliced), [sliced]);
   const genres = useMemo(() => deriveTopGenres(artists.items), [artists.items]);
   const clocks = useMemo(() => bucketListeningClocks(sliced), [sliced]);
@@ -559,7 +622,7 @@ export default function ProfilePane(p: Props) {
 
       {me ? (
         <div className="detail-head">
-          {me.image && <img src={me.image} alt="" loading="lazy" />}
+          {me.image && <img src={me.image} alt="" loading="lazy" decoding="async" />}
           <div>
             <div className="detail-title">{me.name}</div>
             <div className="dim">{me.accountId}</div>
@@ -593,7 +656,12 @@ export default function ProfilePane(p: Props) {
         </button>
         {importCounts && (
           <span className="dim" role="status">
-            {`Imported ${importCounts.kept} of ${importCounts.total} (${importCounts.droppedShort} short, ${importCounts.droppedSkipped} skipped, ${importCounts.droppedNoUri} no-uri, ${importCounts.droppedDuplicate} dupes, ${importCounts.droppedInvalid} invalid).`}
+            {`Imported ${importCounts.kept} of ${importCounts.total}${importFiles !== null && importFiles > 1 ? ` across ${importFiles} files` : ""} (${importCounts.droppedShort} short, ${importCounts.droppedSkipped} skipped, ${importCounts.droppedNoUri} no-uri, ${importCounts.droppedDuplicate} dupes, ${importCounts.droppedInvalid} invalid).`}
+          </span>
+        )}
+        {importNotes.length > 0 && (
+          <span className="dim" role="status">
+            {importNotes.join("; ")}
           </span>
         )}
       </div>
@@ -737,7 +805,7 @@ export default function ProfilePane(p: Props) {
           {artists.items.map((a) => (
             <li className="q" key={`pa-${a.id}`} title={a.uri}>
               <span className="browse-thumb profile-thumb" aria-hidden="true">
-                {a.image ? <img src={a.image} alt="" loading="lazy" /> : null}
+                {a.image ? <img src={a.image} alt="" loading="lazy" decoding="async" /> : null}
               </span>
               <span className="q-name">
                 {a.name}
@@ -774,7 +842,7 @@ export default function ProfilePane(p: Props) {
           {albums.items.map((a, i) => (
             <li className="q" key={`pal-${a.name}-${i}`} title={a.uri}>
               <span className="browse-thumb profile-thumb" aria-hidden="true">
-                {a.image ? <img src={a.image} alt="" loading="lazy" /> : null}
+                {a.image ? <img src={a.image} alt="" loading="lazy" decoding="async" /> : null}
               </span>
               <span className="q-name">
                 {a.name}
@@ -807,37 +875,52 @@ export default function ProfilePane(p: Props) {
       <div className="pane-subhead profile-subhead">Recent streams</div>
       {renderThrottle(recents.error, () => void fetchRecents())}
       {sliced.length > 0 ? (
-        <ol className="queue">
-          {sliced.map((r) => (
-            <li className="q" key={`pr-${r.trackId}-${r.playedAt}`} title={r.uri}>
-              <span className="q-name">
-                {r.trackName}
-                {r.artists && <small>{r.artists}</small>}
+        <>
+          <ol className="queue">
+            {visibleRecents.map((r) => (
+              <li className="q" key={`pr-${r.trackId}-${r.playedAt}`} title={r.uri}>
+                <span className="q-name">
+                  {r.trackName}
+                  {r.artists && <small>{r.artists}</small>}
+                </span>
+                <span className="q-time">{formatStreamTime(r.playedAt)}</span>
+                {r.uri !== "" && (
+                  <>
+                    <button
+                      className="icon-btn sm row-act"
+                      onClick={() => onPlayUris([r.uri])}
+                      title={`Play ${r.trackName}`}
+                      aria-label={`Play ${r.trackName}`}
+                    >
+                      <PlayIcon size={13} />
+                    </button>
+                    <button
+                      className="icon-btn sm row-act"
+                      onClick={() => onQueueAdd(r.uri)}
+                      title={`Queue ${r.trackName}`}
+                      aria-label={`Queue ${r.trackName}`}
+                    >
+                      <LikePlusIcon size={13} />
+                    </button>
+                  </>
+                )}
+              </li>
+            ))}
+          </ol>
+          {sliced.length > visibleRecents.length && (
+            <div className="search-wrap">
+              <span className="dim" role="status">
+                {`Showing ${visibleRecents.length} of ${sliced.length} streams.`}
               </span>
-              <span className="q-time">{formatStreamTime(r.playedAt)}</span>
-              {r.uri !== "" && (
-                <>
-                  <button
-                    className="icon-btn sm row-act"
-                    onClick={() => onPlayUris([r.uri])}
-                    title={`Play ${r.trackName}`}
-                    aria-label={`Play ${r.trackName}`}
-                  >
-                    <PlayIcon size={13} />
-                  </button>
-                  <button
-                    className="icon-btn sm row-act"
-                    onClick={() => onQueueAdd(r.uri)}
-                    title={`Queue ${r.trackName}`}
-                    aria-label={`Queue ${r.trackName}`}
-                  >
-                    <LikePlusIcon size={13} />
-                  </button>
-                </>
-              )}
-            </li>
-          ))}
-        </ol>
+              <button
+                className="btn sm"
+                onClick={() => setRecentLimit((n) => n + RECENT_PAGE_SIZE)}
+              >
+                Show more
+              </button>
+            </div>
+          )}
+        </>
       ) : recents.loading ? (
         skeletons("Loading recent streams")
       ) : (

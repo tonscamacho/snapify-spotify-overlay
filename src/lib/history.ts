@@ -8,6 +8,21 @@ export const HISTORY_MIN_MS = 30000;
  *  back to an empty store. */
 export const HISTORY_STORE_VERSION = 1 as const;
 
+/** Largest single history file the importer reads. Files over this
+ *  are skipped with a per-file note so one dump never OOMs the app.
+ *  Mirrors `HISTORY_IMPORT_MAX_BYTES` in `src-tauri/src/history.rs`. */
+export const HISTORY_IMPORT_MAX_BYTES = 25 * 1024 * 1024;
+
+/** Largest play list any store ever holds. `mergeHistory` and
+ *  `syncAppend` trim to this newest first, so the oldest rows evict
+ *  first and a decade of heavy daily listening (~50 countable
+ *  plays/day ≈ 18k/year) still fits with headroom. Without a cap each
+ *  poll append cloned a longer array and the Profile pane rendered
+ *  every row into the DOM (measured +116MB at 50k rows). Mirrors
+ *  `HISTORY_STORE_CAP` in `src-tauri/src/history.rs`; the two must
+ *  agree. */
+export const HISTORY_STORE_CAP = 50_000;
+
 /** Where a play came from. `api` is a live Spotify poll, `imported`
  *  is a row from a user-exported Extended history file. */
 export type HistorySource = "api" | "imported";
@@ -286,16 +301,24 @@ function toRanges(v: unknown): string[] {
   return out;
 }
 
+/** Enforce `HISTORY_STORE_CAP` on a newest-first list: the tail
+ *  (oldest) drops. Callers sort before trimming so eviction is
+ *  recency-ordered. */
+export function trimStoreToCap(plays: HistoryPlay[]): HistoryPlay[] {
+  return plays.length > HISTORY_STORE_CAP ? plays.slice(0, HISTORY_STORE_CAP) : plays;
+}
+
 /** Merge two stores or play lists. Unknown sides become empty;
  *  nothing here throws. Base wins on key conflicts, so repeat
- *  imports are idempotent. Result sorts newest first. */
+ *  imports are idempotent. Result sorts newest first and never
+ *  exceeds `HISTORY_STORE_CAP` (oldest evicts). */
 export function mergeHistory(base: unknown, incoming: unknown): HistoryStore {
   const seen = new Map<string, HistoryPlay>();
   for (const p of [...toPlayList(base), ...toPlayList(incoming)]) {
     const key = playKey(p.uri, p.playedAt);
     if (!seen.has(key)) seen.set(key, p);
   }
-  const plays = [...seen.values()].sort(byNewestFirst);
+  const plays = trimStoreToCap([...seen.values()].sort(byNewestFirst));
   const importedRanges = [...toRanges(base), ...toRanges(incoming).filter((r) => !toRanges(base).includes(r))];
   return { version: HISTORY_STORE_VERSION, plays, importedRanges } satisfies HistoryStore;
 }
@@ -310,7 +333,9 @@ function effectiveMs(p: HistoryPlay): number {
 
 /** Append one poll-observed listen to a store. Pure: the input store
  *  is never mutated. Returns the store plus the reason, so the App
- *  poll hook can log without branching. Nothing here throws. */
+ *  poll hook can log without branching. The store never exceeds
+ *  `HISTORY_STORE_CAP`: a full store evicts its oldest row to admit
+ *  the new one. Nothing here throws. */
 export function syncAppend(store: unknown, listen: unknown, now?: number): SyncAppendResult {
   const at = resolveNow(now);
   const base = toPlayList(store);
@@ -355,7 +380,7 @@ export function syncAppend(store: unknown, listen: unknown, now?: number): SyncA
       event: { reason: "duplicate" satisfies SyncAppendReason, play: null } satisfies SyncAppendEvent,
     } satisfies SyncAppendResult;
   }
-  const plays = [...base, play].sort(byNewestFirst);
+  const plays = trimStoreToCap([...base, play].sort(byNewestFirst));
   return {
     store: { version: HISTORY_STORE_VERSION, plays, importedRanges: ranges } satisfies HistoryStore,
     event: { reason: "appended" satisfies SyncAppendReason, play } satisfies SyncAppendEvent,

@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
-import { stubTauri, commandsNamed } from "./tauri-mock";
+import { stubTauri } from "./tauri-mock";
+import { assertNotchCentered, assertPaneWithinStage, assertRegionTight } from "./geometry";
 import { MINIMAL_LAYOUT } from "./fixtures";
 
 // Notch autohide (snapify-notch-hover, default on): while editing, the full
@@ -28,6 +29,9 @@ test("edit mode with autohide on collapses the dock behind a top notch", async (
   await expect(page.locator(".notch")).toBeVisible();
   await expect(page.locator(".notch-strip")).toBeAttached();
   await expect(page.locator(".dock")).toHaveCount(0);
+  // Positioning invariants (shared helpers in ./geometry).
+  await assertNotchCentered(page);
+  await assertPaneWithinStage(page, "player");
   // Panes still render under the notch.
   await expect(page.locator('section[data-pane="player"]')).toBeVisible();
 });
@@ -50,50 +54,32 @@ test("hovering the notch reveals the full dock; leaving collapses it", async ({
   // The revealed dock joins the reported hit-regions (OS hit-holes follow).
   const dockRect = await dock.boundingBox();
   if (!dockRect) throw new Error("dock has no box");
-  await expect
-    .poll(
-      async () => {
-        const all = await commandsNamed(page, "set_overlay_regions");
-        const last = all[all.length - 1] as unknown as
-          | { regions: Array<{ x: number; y: number; w: number; h: number }> }
-          | undefined;
-        const regs = last?.regions ?? [];
-        return regs.some(
-          (rg) =>
-            Math.abs(rg.x - dockRect.x) <= 2 &&
-            Math.abs(rg.y - dockRect.y) <= 2 &&
-            Math.abs(rg.w - dockRect.width) <= 2 &&
-            Math.abs(rg.h - dockRect.height) <= 2,
-        );
-      },
-      { timeout: 10000 },
-    )
-    .toBe(true);
+  await assertRegionTight(
+    page,
+    {
+      x: Math.round(dockRect.x),
+      y: Math.round(dockRect.y),
+      w: Math.round(dockRect.width),
+      h: Math.round(dockRect.height),
+    },
+    { tolerance: 2 },
+  );
 
   // Dropping below the toolbar zone collapses back to the notch.
   await page.mouse.move(640, 600);
   await expect(page.locator(".notch")).toBeVisible();
   await expect(dock).toHaveCount(0);
   const nb2 = await notchBox(page);
-  await expect
-    .poll(
-      async () => {
-        const all = await commandsNamed(page, "set_overlay_regions");
-        const last = all[all.length - 1] as unknown as
-          | { regions: Array<{ x: number; y: number; w: number; h: number }> }
-          | undefined;
-        const regs = last?.regions ?? [];
-        return regs.some(
-          (rg) =>
-            Math.abs(rg.x - nb2.x) <= 2 &&
-            Math.abs(rg.y - nb2.y) <= 2 &&
-            Math.abs(rg.w - nb2.width) <= 2 &&
-            Math.abs(rg.h - nb2.height) <= 2,
-        );
-      },
-      { timeout: 10000 },
-    )
-    .toBe(true);
+  await assertRegionTight(
+    page,
+    {
+      x: Math.round(nb2.x),
+      y: Math.round(nb2.y),
+      w: Math.round(nb2.width),
+      h: Math.round(nb2.height),
+    },
+    { tolerance: 2 },
+  );
 });
 
 test("interactive-alone shows panes with no chrome; Esc still exits", async ({

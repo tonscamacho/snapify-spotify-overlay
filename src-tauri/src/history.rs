@@ -15,6 +15,21 @@ pub const HISTORY_MIN_MS: i64 = 30000;
 /// back to an empty store. Mirrors `HISTORY_STORE_VERSION`.
 pub const HISTORY_STORE_VERSION: u8 = 1;
 
+/// Largest single history file `read_history_file` returns. Files
+/// over this are refused so one dump never OOMs the app. Mirrors
+/// `HISTORY_IMPORT_MAX_BYTES` in `src/lib/history.ts`.
+pub const HISTORY_IMPORT_MAX_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Largest play list the store ever holds. Every growth path
+/// (`import_parse`, `merge_dedupe`, `append_listen`) trims to this after
+/// sorting newest first, so the oldest rows evict first and a decade of
+/// heavy daily listening (~50 countable plays/day ≈ 18k/year) still fits
+/// with headroom. Without a cap each poll append cloned a longer Vec and
+/// `get_history_plays` shipped the whole store to the Profile pane, which
+/// rendered every row into the DOM (measured +116MB at 50k rows). Mirrors
+/// `HISTORY_STORE_CAP` in `src/lib/history.ts`; the two must agree.
+pub const HISTORY_STORE_CAP: usize = 50_000;
+
 const HISTORY_FILE: &str = "history-store.json";
 
 fn unknown_name() -> String {
@@ -285,6 +300,14 @@ fn sort_plays(plays: &mut [HistoryPlay]) {
     });
 }
 
+/// Enforce `HISTORY_STORE_CAP` on a newest-first list: the tail (oldest)
+/// drops. Callers sort before trimming so eviction is recency-ordered.
+fn trim_to_cap(plays: &mut Vec<HistoryPlay>) {
+    if plays.len() > HISTORY_STORE_CAP {
+        plays.truncate(HISTORY_STORE_CAP);
+    }
+}
+
 /// Full import pipeline: classify, dedupe on `uri@playedAt`, sort.
 /// Pure; file IO lives in `import_history`.
 pub fn import_parse(rows: &[Value], now_ms: i64) -> (Vec<HistoryPlay>, ImportCounts) {
@@ -321,7 +344,8 @@ pub fn import_parse(rows: &[Value], now_ms: i64) -> (Vec<HistoryPlay>, ImportCou
 }
 
 /// Merge two play slices with `uri@playedAt` dedupe. Base wins on key
-/// conflicts, so repeat imports are idempotent. Pure.
+/// conflicts, so repeat imports are idempotent. Result is newest first
+/// and capped at `HISTORY_STORE_CAP` (oldest evicts). Pure.
 pub fn merge_dedupe(base: &[HistoryPlay], incoming: &[HistoryPlay]) -> Vec<HistoryPlay> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<HistoryPlay> = Vec::new();
@@ -335,6 +359,7 @@ pub fn merge_dedupe(base: &[HistoryPlay], incoming: &[HistoryPlay]) -> Vec<Histo
         }
     }
     sort_plays(&mut out);
+    trim_to_cap(&mut out);
     out
 }
 
@@ -388,7 +413,9 @@ fn validate_play(v: &Value) -> Option<HistoryPlay> {
 }
 
 /// Append one poll-observed listen. Returns the new list plus the
-/// reason; the caller only writes on `Appended`. Pure.
+/// reason; the caller only writes on `Appended`. The list stays newest
+/// first and never exceeds `HISTORY_STORE_CAP` (a full store evicts its
+/// oldest row to admit the new one). Pure.
 pub fn append_listen(
     plays: &[HistoryPlay],
     candidate: &HistoryPlay,
@@ -426,6 +453,7 @@ pub fn append_listen(
     let mut out = plays.to_vec();
     out.push(candidate.clone());
     sort_plays(&mut out);
+    trim_to_cap(&mut out);
     (out, AppendReason::Appended)
 }
 
@@ -576,14 +604,32 @@ pub fn get_history_plays(app: AppHandle) -> Result<Value, String> {
 
 /// Read a user-picked history file in Rust so the frontend needs no
 /// fs-read scope outside `$APPLOCALDATA`. The dialog pick stays in
-/// the frontend; only the bytes come through here.
+/// the frontend; only the bytes come through here. Files over
+/// `HISTORY_IMPORT_MAX_BYTES` are refused before reading so one dump
+/// never OOMs the app; the frontend surfaces the refusal as a
+/// per-file note and continues with the rest.
 #[tauri::command]
 pub fn read_history_file(path: String) -> Result<String, String> {
     let p = path.trim().to_string();
     if p.is_empty() {
         return Err("empty path".to_string());
     }
-    std::fs::read_to_string(&p).map_err(|e| e.to_string())
+    if let Ok(meta) = std::fs::metadata(&p) {
+        if meta.len() > HISTORY_IMPORT_MAX_BYTES {
+            return Err(format!(
+                "file over 25MB ({} bytes), skipped",
+                meta.len()
+            ));
+        }
+    }
+    let text = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
+    if text.len() as u64 > HISTORY_IMPORT_MAX_BYTES {
+        return Err(format!(
+            "file over 25MB ({} bytes), skipped",
+            text.len()
+        ));
+    }
+    Ok(text)
 }
 
 /// Allowlist for stored `source` values. Anything outside the two
@@ -613,8 +659,9 @@ fn union_ranges(base: &[String], extra: &[String]) -> Vec<String> {
 mod tests {
     use super::{
         append_listen, import_parse, load_store_from, merge_dedupe, normalize_source,
-        parse_iso_millis, parse_ts_millis, union_ranges, AppendReason, HistoryPlay,
-        HistoryStore, HISTORY_MIN_MS, HISTORY_STORE_VERSION,
+        parse_iso_millis, parse_ts_millis, trim_to_cap, union_ranges, AppendReason, HistoryPlay,
+        HistoryStore, HISTORY_IMPORT_MAX_BYTES, HISTORY_MIN_MS, HISTORY_STORE_CAP,
+        HISTORY_STORE_VERSION,
     };
     use crate::overlay::{atomic_write_json, read_json_guarded};
     use serde_json::{json, Value};
@@ -667,10 +714,30 @@ mod tests {
         }
     }
 
+    fn seq_play(i: usize, base_ms: i64) -> HistoryPlay {
+        let uri = format!("spotify:track:seq-{i:06}");
+        HistoryPlay {
+            track_id: format!("seq-{i:06}"),
+            track_name: format!("Song {i}"),
+            artists: "Band".to_string(),
+            played_at: base_ms + (i as i64) * 1000,
+            image: None,
+            uri,
+            duration_ms: 200000,
+            ms_played: 200000,
+            skipped: false,
+            source: "imported".to_string(),
+        }
+    }
+
     #[test]
     fn floor_and_version_are_pinned() {
         assert_eq!(HISTORY_MIN_MS, 30000);
         assert_eq!(HISTORY_STORE_VERSION, 1);
+        assert_eq!(HISTORY_IMPORT_MAX_BYTES, 25 * 1024 * 1024);
+        // The store cap bounds poll appends, merges, and the payload
+        // `get_history_plays` ships to the Profile pane.
+        assert_eq!(HISTORY_STORE_CAP, 50_000);
     }
 
     #[test]
@@ -724,6 +791,34 @@ mod tests {
     }
 
     #[test]
+    fn multi_file_rows_dedupe_in_one_parse() {
+        // Three picked files concatenated into one import_history call:
+        // the shared row repeats across files and counts once.
+        let shared = endsong("spotify:track:shared", 200000);
+        let mut file_a = vec![shared.clone()];
+        file_a.push(endsong("spotify:track:only-a", 200000));
+        let mut file_b = vec![shared.clone()];
+        file_b.push(endsong("spotify:track:only-b", 200000));
+        let mut rows: Vec<Value> = Vec::new();
+        rows.extend(file_a);
+        rows.extend(file_b);
+        let (plays, counts) = import_parse(&rows, NOW);
+        assert_eq!(counts.total, 4);
+        assert_eq!(counts.kept, 3);
+        assert_eq!(counts.dropped_duplicate, 1);
+        let mut uris: Vec<&str> = plays.iter().map(|p| p.uri.as_str()).collect();
+        uris.sort_unstable();
+        assert_eq!(
+            uris,
+            vec![
+                "spotify:track:only-a",
+                "spotify:track:only-b",
+                "spotify:track:shared"
+            ]
+        );
+    }
+
+    #[test]
     fn merge_is_idempotent_and_sorted() {
         let once = merge_dedupe(&[play("spotify:track:a", T1)], &[play("spotify:track:b", T2)]);
         assert_eq!(once.len(), 2);
@@ -733,6 +828,26 @@ mod tests {
             &[play("spotify:track:a", T1), play("spotify:track:b", T2)],
         );
         assert_eq!(twice, once);
+    }
+
+    #[test]
+    fn merge_trims_to_cap_newest_first() {
+        let base: Vec<HistoryPlay> = (0..HISTORY_STORE_CAP + 500).map(|i| seq_play(i, T1)).collect();
+        let out = merge_dedupe(&base, &[]);
+        assert_eq!(out.len(), HISTORY_STORE_CAP);
+        // Newest survives at the head, oldest evicted off the tail.
+        assert_eq!(out[0].played_at, T1 + (HISTORY_STORE_CAP as i64 + 499) * 1000);
+        assert_eq!(
+            out[out.len() - 1].played_at,
+            T1 + 500 * 1000
+        );
+    }
+
+    #[test]
+    fn trim_to_cap_leaves_small_lists_alone() {
+        let mut small = vec![play("spotify:track:a", T1)];
+        trim_to_cap(&mut small);
+        assert_eq!(small.len(), 1);
     }
 
     #[test]
@@ -761,6 +876,23 @@ mod tests {
         assert_eq!(reason, AppendReason::Appended);
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].uri, "spotify:track:new");
+    }
+
+    #[test]
+    fn append_on_full_store_evicts_oldest_to_admit_new() {
+        // Base stamps stay below NOW so the fresh row is genuinely newest.
+        let base: Vec<HistoryPlay> = (0..HISTORY_STORE_CAP)
+            .map(|i| seq_play(i, NOW - (HISTORY_STORE_CAP as i64) * 1000))
+            .collect();
+        let mut fresh = seq_play(HISTORY_STORE_CAP + 1, NOW - (HISTORY_STORE_CAP as i64) * 1000);
+        fresh.uri = "spotify:track:newest".to_string();
+        fresh.track_id = "newest".to_string();
+        fresh.played_at = NOW;
+        let (out, reason) = append_listen(&base, &fresh, NOW);
+        assert_eq!(reason, AppendReason::Appended);
+        assert_eq!(out.len(), HISTORY_STORE_CAP);
+        assert_eq!(out[0].uri, "spotify:track:newest");
+        assert!(!out.iter().any(|p| p.uri == "spotify:track:seq-000000"));
     }
 
     #[test]

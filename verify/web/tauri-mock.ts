@@ -101,7 +101,10 @@ function buildInitScript(
     "  var mockFaults = {};\n" +
     "  var mockAuthStatus = SEED_AUTH;\n" +
     "  window.__MOCK_DIALOG_PATH__ = null;\n" +
+    "  window.__MOCK_DIALOG_PATHS__ = null;\n" +
     "  window.__MOCK_FILE_TEXT__ = null;\n" +
+    "  window.__MOCK_FILE_TEXTS__ = null;\n" +
+    "  window.__MOCK_FILE_ERRORS__ = null;\n" +
     "  var historySeen = {};\n" +
     "  var historyImported = !!(FIXTURES.historyHasImported);\n" +
     "  var historyPlays = [];\n" +
@@ -223,7 +226,11 @@ function buildInitScript(
     "      case 'search': return FIXTURES.search;\n" +
     "      case 'get_history_stats': return { total: 0, totalMs: 0, minutes: 0, uniqueTracks: 0, uniqueArtists: 0, hasImported: !!historyImported, importedRanges: historyRanges.slice() };\n" +
     "      case 'get_history_plays': return { version: 1, plays: historyPlays.slice(), importedRanges: historyRanges.slice() };\n" +
-    "      case 'read_history_file': {\n" +
+      "      case 'read_history_file': {\n" +
+    "        var perErr = window.__MOCK_FILE_ERRORS__;\n" +
+    "        if (perErr && args.path && perErr[args.path]) throw new Error(perErr[args.path]);\n" +
+    "        var perText = window.__MOCK_FILE_TEXTS__;\n" +
+    "        if (perText && args.path && typeof perText[args.path] !== 'undefined' && perText[args.path] !== null) return String(perText[args.path]);\n" +
     "        if (typeof window.__MOCK_FILE_TEXT__ !== 'undefined' && window.__MOCK_FILE_TEXT__ !== null) return String(window.__MOCK_FILE_TEXT__);\n" +
     "        throw new Error('mock file missing');\n" +
     "      }\n" +
@@ -267,7 +274,10 @@ function buildInitScript(
     "        historySeen[pk] = 1;\n" +
     "        return { reason: 'appended' };\n" +
     "      }\n" +
-    "      case 'plugin:dialog|open': return (typeof window.__MOCK_DIALOG_PATH__ !== 'undefined' && window.__MOCK_DIALOG_PATH__ !== null) ? window.__MOCK_DIALOG_PATH__ : null;\n" +
+      "      case 'plugin:dialog|open': {\n" +
+    "        if (window.__MOCK_DIALOG_PATHS__ !== null && typeof window.__MOCK_DIALOG_PATHS__ !== 'undefined') return window.__MOCK_DIALOG_PATHS__;\n" +
+    "        return (typeof window.__MOCK_DIALOG_PATH__ !== 'undefined' && window.__MOCK_DIALOG_PATH__ !== null) ? window.__MOCK_DIALOG_PATH__ : null;\n" +
+    "      }\n" +
     "      case 'plugin:fs|read_text_file': {\n" +
     "        if (typeof window.__MOCK_FILE_TEXT__ !== 'undefined' && window.__MOCK_FILE_TEXT__ !== null) { var _t = String(window.__MOCK_FILE_TEXT__); try { return Array.from(new TextEncoder().encode(_t)); } catch (e) { return _t; } }\n" +
     "        throw new Error('mock file missing');\n" +
@@ -420,11 +430,45 @@ export async function mockHistoryFile(page: Page, path: string | null, text: str
     ([p, t]) => {
       const w = window as unknown as {
         __MOCK_DIALOG_PATH__?: string | null;
+        __MOCK_DIALOG_PATHS__?: string[] | null;
         __MOCK_FILE_TEXT__?: string | null;
+        __MOCK_FILE_TEXTS__?: Record<string, string> | null;
+        __MOCK_FILE_ERRORS__?: Record<string, string> | null;
       };
       w.__MOCK_DIALOG_PATH__ = p as string | null;
+      w.__MOCK_DIALOG_PATHS__ = null;
       w.__MOCK_FILE_TEXT__ = t as string | null;
+      w.__MOCK_FILE_TEXTS__ = null;
+      w.__MOCK_FILE_ERRORS__ = null;
     },
     [path, text] as unknown as [string | null, string | null],
+  );
+}
+
+/** Seed a multi-file dialog pick. `texts` maps path -> file text;
+ *  `errors` maps path -> read error (import continues with a note).
+ *  Pass `paths: null` to simulate dialog cancel. */
+export async function mockHistoryFiles(
+  page: Page,
+  paths: string[] | null,
+  texts: Record<string, string> = {},
+  errors: Record<string, string> = {},
+): Promise<void> {
+  await page.evaluate(
+    ([p, t, e]) => {
+      const w = window as unknown as {
+        __MOCK_DIALOG_PATH__?: string | null;
+        __MOCK_DIALOG_PATHS__?: string[] | null;
+        __MOCK_FILE_TEXT__?: string | null;
+        __MOCK_FILE_TEXTS__?: Record<string, string> | null;
+        __MOCK_FILE_ERRORS__?: Record<string, string> | null;
+      };
+      w.__MOCK_DIALOG_PATHS__ = p as string[] | null;
+      w.__MOCK_DIALOG_PATH__ = null;
+      w.__MOCK_FILE_TEXTS__ = t as Record<string, string>;
+      w.__MOCK_FILE_ERRORS__ = e as Record<string, string>;
+      w.__MOCK_FILE_TEXT__ = null;
+    },
+    [paths, texts, errors] as unknown as [string[] | null, Record<string, string>, Record<string, string>],
   );
 }

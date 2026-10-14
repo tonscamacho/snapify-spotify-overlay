@@ -280,7 +280,16 @@ export default function App() {
   const [settingsClosing, setSettingsClosing] = useState(false);
   const settingsTimer = useRef(0);
   const [guides, setGuides] = useState<{ v: number[]; h: number[] }>({ v: [], h: [] });
-  const [uiScale, setUiScale] = useState(1);
+  const [uiScale, setUiScale] = useState(() => {
+    try {
+      const raw = localStorage.getItem("snapify-ui-scale");
+      if (raw === null || raw.trim() === "") return 1;
+      const v = Number(raw);
+      return Number.isFinite(v) ? Math.min(1.3, Math.max(0.85, v)) : 1;
+    } catch {
+      return 1;
+    }
+  });
   // Live viewport (CSS px) for the JS stage tiers. Container queries size
   // panes by width, but height tiers and the uiScale-aware narrow/short
   // cutoffs need the window size at render time; the resize listener below
@@ -398,7 +407,7 @@ export default function App() {
 
   const trackIdRef = useRef<string | null>(null);
   const snapRef = useRef<PlayerSnapshot>(EMPTY_SNAP);
-  const uiScaleRef = useRef(1);
+  const uiScaleRef = useRef(uiScale);
   // Local history mirror for the poll sync hook. Pure syncAppend keeps it
   // idempotent on uri+playedAt; only appended rows hit append_listen_cmd.
   const historyStoreRef = useRef(emptyStore());
@@ -425,6 +434,19 @@ export default function App() {
   useEffect(() => {
     uiScaleRef.current = uiScale;
   }, [uiScale]);
+
+  // UI scale persists like the other display prefs (density/surface): the
+  // zoom wrapper repaints on state, and the uiScale effect below re-clamps
+  // geometry into the shrunken effective stage.
+  const handleUiScale = useCallback((v: number) => {
+    const next = Number.isFinite(v) ? Math.min(1.3, Math.max(0.85, v)) : 1;
+    setUiScale(next);
+    try {
+      localStorage.setItem("snapify-ui-scale", String(next));
+    } catch {
+      // Private mode. Choice lasts the session.
+    }
+  }, []);
 
   useEffect(() => () => {
     if (settingsTimer.current) window.clearTimeout(settingsTimer.current);
@@ -1156,6 +1178,27 @@ export default function App() {
       persist(next, presetRef.current);
     }, 250);
   }, [persist, pushUndoSnapshot]);
+
+  // uiScale twin of the resize clamp. Raising uiScale shrinks the effective
+  // stage (CSS px / k) while layout state stays in logical px, so a pane
+  // legal at k=1 strands off-screen at k=1.25 with no resize to trigger the
+  // clamp above. Same debounced path (one undo step, identity inside); the
+  // region flush rides ahead of it so the zoom reflow never waits out the
+  // 250 ms settle plus the 120 ms report debounce. Mount is skipped: the
+  // boot clamp already ran with the persisted k.
+  const uiScaleClampFirst = useRef(true);
+  useEffect(() => {
+    if (uiScaleClampFirst.current) {
+      uiScaleClampFirst.current = false;
+      return;
+    }
+    if (regionTimer.current) {
+      window.clearTimeout(regionTimer.current);
+      regionTimer.current = 0;
+    }
+    void reportOverlayRegions();
+    queueResizeClamp();
+  }, [uiScale, queueResizeClamp]);
 
   useEffect(() => {
     const onResize = () => {
@@ -2977,7 +3020,7 @@ export default function App() {
         onToggleStreamDim={toggleStreamDim}
         notchHover={notchHover}
         onToggleNotchHover={toggleNotchHover}
-        onUiScale={setUiScale}
+        onUiScale={handleUiScale}
         onLyricScale={(v) => {
           const next = Math.min(1.3, Math.max(0.85, v));
           setLyricScale(next);

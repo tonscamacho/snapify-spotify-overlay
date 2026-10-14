@@ -5,6 +5,7 @@ as a user, how to drive it during verification, and gotchas.
 
 - [login](login.md) — Spotify PKCE connect, session restore, logout.
 - [player](player.md) — now playing, transport, seek, volume, devices, episodes, throttle parking.
+- [profile](profile.md) — header, Timeframe range menu, stats/genre/clocks, tops + recents, history import, collapse, theme matrix.
 - [queue](queue.md) — upcoming rows, virtualized list, Enter-to-play, context, capped/queued states.
 - [browse](browse.md) — search recents + paging, playlist/artist/episode detail, truthful walls.
 - [lyrics](lyrics.md) — synced highlight, click-to-seek, offset, words, translation, romaji, cache.

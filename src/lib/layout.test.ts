@@ -196,6 +196,22 @@ describe("clampLayoutToArea", () => {
     expect(out.panes[0]).toMatchObject({ x: 16, y: 16, w: 784, h: 584 });
   });
 
+  it("keeps a 420-wide profile pane inside a 1920 stage at 125% uiScale", () => {
+    // Repro: x=1440 w=420 is legal at k=1 (right 1860) but the 1.25 zoom
+    // wrapper paints x=1800 w=525 (right 2325, 405px clipped). Clamping in
+    // logical px against the 1536-wide effective stage keeps the painted
+    // right edge at the viewport edge.
+    const l = layout([
+      { ...pane({ x: 1440, y: 24, w: 420, h: 560 }), id: "profile", type: "profile" },
+    ]);
+    const out = clampLayoutToArea(l, 1920, 1080, 1.25);
+    expect(out.panes[0]).toMatchObject({ x: 1116, y: 24, w: 420, h: 560 });
+    for (const p of out.panes) {
+      expect(p.x + p.w).toBeLessThanOrEqual(1920 / 1.25);
+      expect((p.x + p.w) * 1.25).toBeLessThanOrEqual(1920);
+    }
+  });
+
   it("does not mutate the input layout", () => {
     const l = layout([
       pane({ id: "a", x: 2000, y: 1500, w: 2000, h: 1500 }),
