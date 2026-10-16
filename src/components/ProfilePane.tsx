@@ -6,6 +6,7 @@ import {
   bucketListeningClocks,
   deriveStats,
   deriveTopGenres,
+  deriveTopGenresRanked,
   parseRecentPlays,
   parseTopArtists,
   parseTopTracks,
@@ -17,15 +18,17 @@ import {
 import {
   emptyStore,
   HISTORY_IMPORT_MAX_BYTES,
+  HISTORY_PAGE_SIZE,
   mergeHistory,
   parseExtendedHistory,
   type HistoryPlay,
   type HistoryStore,
   type ImportCounts,
 } from "../lib/history";
-import type { ProfileRange, QueueItem, RecentPlay, UserProfile } from "../lib/types";
+import type { ClockBucket, ProfileRange, QueueItem, RecentPlay, TopGenre, UserProfile } from "../lib/types";
 import { formatMs } from "../lib/lrc";
 import { LikePlusIcon, PlayIcon } from "./icons";
+import ListeningClocks from "./ListeningClocks";
 import ProfileRangeMenu from "./ProfileRangeMenu";
 
 interface Props {
@@ -63,13 +66,117 @@ interface AlbumEntry {
  *  of the songs list. */
 const ALBUM_WINDOW = 50;
 
-/** Recent-streams render page. The store can hold tens of thousands of
- *  plays (capped at `HISTORY_STORE_CAP`), but every rendered row costs
- *  ~6 DOM nodes plus two listeners; rendering the whole slice at 50k
- *  rows measured +116MB and ~250k nodes. Stats and clocks still derive
- *  from the full slice — only the list paginates, with an honest
- *  Showing-count note so the cap never poses as the total. */
-const RECENT_PAGE_SIZE = 100;
+/** Lifetime threshold where the pane switches from the exact local
+ *  slice (full store + recents in memory, precise for tests/small
+ *  libraries) to Rust per-range aggregates + 100-row cursor pages.
+ *  Small stores stay on the legacy path so existing specs keep their
+ *  exact numbers; 191k/350k lifetimes ride aggregates and never hold
+ *  the full array (heap bounded, render ≤~1k nodes). */
+const AGGREGATE_THRESHOLD = 1000;
+
+/** Per-range aggregates from Rust (`get_history_stats` extended):
+ *  counts/minutes/hours/tracks/artists/albums + 24 clocks + peak +
+ *  top-50 stream-weighted artist ranks. Single Rust derivation site. */
+interface HistoryAggregates {
+  total: number;
+  totalMs: number;
+  minutes: number;
+  hours: number;
+  uniqueTracks: number;
+  uniqueArtists: number;
+  uniqueAlbums: number;
+  hasImported: boolean;
+  clocks: ClockBucket[];
+  peakHour: number;
+  artistRanks: { artist: string; streams: number; minutes: number }[];
+}
+
+function coerceAggregates(raw: unknown): HistoryAggregates | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const clocksRaw = Array.isArray(r["clocks"]) ? (r["clocks"] as unknown[]) : [];
+  const clocks: ClockBucket[] = Array.from({ length: 24 }, (_, hour) => {
+    const found = clocksRaw.find(
+      (b): b is Record<string, unknown> =>
+        !!b && typeof b === "object" && (b as Record<string, unknown>)["hour"] === hour,
+    );
+    return {
+      hour,
+      plays: found ? num(found["plays"]) : 0,
+      minutes: found ? num(found["minutes"]) : 0,
+    };
+  });
+  const ranksRaw = Array.isArray(r["artistRanks"]) ? (r["artistRanks"] as unknown[]) : [];
+  const artistRanks = ranksRaw
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+    .map((x) => ({
+      artist: typeof x["artist"] === "string" ? (x["artist"] as string) : "",
+      streams: num(x["streams"]),
+      minutes: num(x["minutes"]),
+    }))
+    .filter((x) => x.artist !== "");
+  return {
+    total: num(r["total"]),
+    totalMs: num(r["totalMs"]),
+    minutes: num(r["minutes"]),
+    hours: num(r["hours"]),
+    uniqueTracks: num(r["uniqueTracks"]),
+    uniqueArtists: num(r["uniqueArtists"]),
+    uniqueAlbums: num(r["uniqueAlbums"]),
+    hasImported: r["hasImported"] === true,
+    clocks,
+    peakHour: Math.min(23, Math.max(0, Math.floor(num(r["peakHour"])))),
+    artistRanks,
+  };
+}
+
+/** Stream-weighted genres from Rust artist ranks + fetched top artists.
+ *  Mirrors `deriveStreamGenres` but reads precomputed ranks (no full
+ *  slice needed), so 350k lifetimes still surface what was heard. */
+function genresFromRanks(
+  ranks: { artist: string; streams: number }[],
+  artists: ProfileArtist[],
+): TopGenre[] {
+  const lookup = new Map<string, string[]>();
+  for (const a of artists) {
+    const key = a.name.trim().toLowerCase();
+    if (key === "") continue;
+    const prev = lookup.get(key);
+    if (prev) {
+      for (const g of a.genres) {
+        if (typeof g === "string" && g.trim() !== "" && !prev.includes(g)) prev.push(g);
+      }
+    } else {
+      lookup.set(key, [...a.genres]);
+    }
+  }
+  const counts = new Map<string, number>();
+  for (const rank of ranks) {
+    const genres = lookup.get(rank.artist.trim().toLowerCase());
+    if (!genres) continue;
+    for (const g of genres) {
+      const genre = g.trim().toLowerCase();
+      if (genre === "") continue;
+      counts.set(genre, (counts.get(genre) ?? 0) + rank.streams);
+    }
+  }
+  return [...counts.entries()]
+    .map(([genre, count]): TopGenre => ({ genre, count }))
+    .sort((x, y) => y.count - x.count || (x.genre < y.genre ? -1 : x.genre > y.genre ? 1 : 0))
+    .slice(0, 5);
+}
+
+/** Recent-streams render page. The store holds lifetime truth uncapped
+ *  (normalized Rust tracks + compact plays; 350k rows stay bounded),
+ *  but every rendered row costs ~6 DOM nodes plus two listeners;
+ *  rendering the whole slice at 50k rows measured +116MB and ~250k
+ *  nodes. Stats/clocks/genres derive from Rust per-range aggregates
+ *  over the full store (fallback: local `deriveStats` over the slice);
+ *  the list holds only the current 100-row page (`pageHistoryPlays` /
+ *  `get_history_page`), with an honest Showing-count note. Render nodes
+ *  stay ≤~1k. Mirrors `HISTORY_PAGE_SIZE` in lib/history. */
+export const RECENT_PAGE_SIZE = 100;
 
 function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -152,8 +259,6 @@ function idleSection<T>(items: T): SectionState<T> {
  * verbatim honesty note; direct ranges owe no disclaimer.
  */
 export default function ProfilePane(p: Props) {
-  // Destructure the stable shell callbacks up front so every fetch helper
-  // below depends on primitives, never on the per-render props object.
   const {
     range,
     onRange,
@@ -175,8 +280,15 @@ export default function ProfilePane(p: Props) {
   const [recents, setRecents] = useState<SectionState<RecentPlay[]>>(() => idleSection([]));
   // Local history store: imported Extended-history rows plus the live
   // recents merge below. Seeded empty; get_history_stats flips hasImported
-  // once on mount, imports merge via mergeHistory. Never throws.
+  // once on mount, imports merge via mergeHistory. Small libraries stay
+  // on this exact path; lifetimes over AGGREGATE_THRESHOLD switch to
+  // Rust aggregates + cursor pages (never the full array). Never throws.
   const [store, setStore] = useState<HistoryStore>(() => emptyStore());
+  const [aggregates, setAggregates] = useState<HistoryAggregates | null>(null);
+  const [useAggregates, setUseAggregates] = useState(false);
+  const [pageItems, setPageItems] = useState<HistoryPlay[]>([]);
+  const [pageCursor, setPageCursor] = useState<string | null>(null);
+  const [pageTotal, setPageTotal] = useState(0);
   const [hasImported, setHasImported] = useState(false);
   const [importCounts, setImportCounts] = useState<ImportCounts | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
@@ -325,18 +437,28 @@ export default function ProfilePane(p: Props) {
         if (toThrottleError(m) === null) onError(m);
       }
     })();
-    // History flag once: names imports in the honesty note. Best-effort;
-    // a missing Rust side (web mocks returning null) keeps hasImported false.
-    // The full play list loads alongside so stats derive from the persisted
-    // store and a reload keeps imports.
+    // History once: aggregates name imports and decide the data path.
+    // Small libraries load the full play list and derive exactly (legacy
+    // path, keeps specs exact); lifetimes over the threshold hold only
+    // aggregates + the first 100-row page (heap bounded, render ≤~1k).
+    // Best-effort; a missing Rust side keeps hasImported false.
     void (async () => {
+      let agg: HistoryAggregates | null = null;
       try {
         const raw = await invoke<unknown>("get_history_stats", {
           start: null,
           now: Date.now(),
         });
         if (!live) return;
-        if (raw && typeof raw === "object") {
+        agg = coerceAggregates(raw);
+        if (agg) {
+          setAggregates(agg);
+          if (agg.hasImported) setHasImported(true);
+          if (raw && typeof raw === "object") {
+            const imported = (raw as Record<string, unknown>)["importedRanges"];
+            if (Array.isArray(imported) && imported.length > 0) setHasImported(true);
+          }
+        } else if (raw && typeof raw === "object") {
           const flag = (raw as Record<string, unknown>)["hasImported"];
           if (flag === true) setHasImported(true);
           const imported = (raw as Record<string, unknown>)["importedRanges"];
@@ -344,6 +466,31 @@ export default function ProfilePane(p: Props) {
         }
       } catch {
         // History never breaks the pane.
+      }
+      const lifetimeTotal = agg?.total ?? 0;
+      if (lifetimeTotal > AGGREGATE_THRESHOLD) {
+        // Large lifetime: aggregates + first page only, never the full array.
+        if (!live) return;
+        setUseAggregates(true);
+        try {
+          const page = await invoke<unknown>("get_history_page", {
+            start: null,
+            now: Date.now(),
+            cursor: null,
+            limit: HISTORY_PAGE_SIZE,
+          });
+          if (!live) return;
+          if (page && typeof page === "object") {
+            const rec = page as Record<string, unknown>;
+            const items = Array.isArray(rec["items"]) ? (rec["items"] as HistoryPlay[]) : [];
+            setPageItems(items);
+            setPageCursor(typeof rec["nextCursor"] === "string" ? (rec["nextCursor"] as string) : null);
+            setPageTotal(typeof rec["total"] === "number" ? (rec["total"] as number) : items.length);
+          }
+        } catch {
+          // Paging never breaks the pane.
+        }
+        return;
       }
       try {
         const stored = await invoke<unknown>("get_history_plays");
@@ -362,8 +509,54 @@ export default function ProfilePane(p: Props) {
     return () => {
       live = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Large-lifetime range effect: refetch per-range aggregates + first
+  // page on every range switch (debounced with the tops fetch below).
+  // Small libraries stay on the exact local slice and skip these calls.
+  useEffect(() => {
+    if (!useAggregates) return;
+    let live = true;
+    const t = window.setTimeout(() => {
+      void (async () => {
+        const now = Date.now();
+        const start = rangeStartForRange(range, now);
+        try {
+          const raw = await invoke<unknown>("get_history_stats", { start, now });
+          if (!live) return;
+          const agg = coerceAggregates(raw);
+          if (agg) {
+            setAggregates(agg);
+            if (agg.hasImported) setHasImported(true);
+          }
+        } catch {
+          // Aggregates never break the pane.
+        }
+        try {
+          const page = await invoke<unknown>("get_history_page", {
+            start,
+            now,
+            cursor: null,
+            limit: HISTORY_PAGE_SIZE,
+          });
+          if (!live) return;
+          if (page && typeof page === "object") {
+            const rec = page as Record<string, unknown>;
+            const items = Array.isArray(rec["items"]) ? (rec["items"] as HistoryPlay[]) : [];
+            setPageItems(items);
+            setPageCursor(typeof rec["nextCursor"] === "string" ? (rec["nextCursor"] as string) : null);
+            setPageTotal(typeof rec["total"] === "number" ? (rec["total"] as number) : items.length);
+          }
+        } catch {
+          // Paging never breaks the pane.
+        }
+      })();
+    }, RANGE_COMMIT_MS);
+    return () => {
+      live = false;
+      window.clearTimeout(t);
+    };
+  }, [range, useAggregates]);
 
   // Range effect: debounce the commit, then refetch the three tops
   // windows concurrently. Each window keeps its own error state so one
@@ -483,8 +676,38 @@ export default function ProfilePane(p: Props) {
       if (parsed.plays.length > 0 || parsed.counts.kept > 0) setHasImported(true);
       try {
         const raw = await invoke<unknown>("get_history_stats", { start: null, now: Date.now() });
-        if (raw && typeof raw === "object" && (raw as Record<string, unknown>)["hasImported"] === true) {
-          setHasImported(true);
+        if (raw && typeof raw === "object") {
+          const agg = coerceAggregates(raw);
+          if (agg) {
+            setAggregates(agg);
+            if (agg.hasImported) setHasImported(true);
+            // Cross the threshold mid-session (e.g. the 191k import):
+            // switch to aggregates + first page and stop holding the array.
+            if (agg.total > AGGREGATE_THRESHOLD) {
+              setUseAggregates(true);
+              const now = Date.now();
+              const start = rangeStartForRange(rangeRef.current, now);
+              try {
+                const page = await invoke<unknown>("get_history_page", {
+                  start,
+                  now,
+                  cursor: null,
+                  limit: HISTORY_PAGE_SIZE,
+                });
+                if (page && typeof page === "object") {
+                  const rec = page as Record<string, unknown>;
+                  const items = Array.isArray(rec["items"]) ? (rec["items"] as HistoryPlay[]) : [];
+                  setPageItems(items);
+                  setPageCursor(typeof rec["nextCursor"] === "string" ? (rec["nextCursor"] as string) : null);
+                  setPageTotal(typeof rec["total"] === "number" ? (rec["total"] as number) : items.length);
+                }
+              } catch {
+                // Paging never breaks the import.
+              }
+            }
+          } else if ((raw as Record<string, unknown>)["hasImported"] === true) {
+            setHasImported(true);
+          }
         }
       } catch {
         // Flag already set from the local parse.
@@ -544,30 +767,77 @@ export default function ProfilePane(p: Props) {
   // A new window or a changed store resets the list pager; the effect
   // keys on the slice length (not the array identity) so repolls that
   // rebuild the array without adding rows keep the user's page.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => setRecentLimit(RECENT_PAGE_SIZE), [range, sliced.length]);
   const visibleRecents = useMemo(
     () => sliced.slice(0, recentLimit),
     [sliced, recentLimit],
   );
-  const stats = useMemo(() => deriveStats(sliced), [sliced]);
-  const genres = useMemo(() => deriveTopGenres(artists.items), [artists.items]);
-  const clocks = useMemo(() => bucketListeningClocks(sliced), [sliced]);
-  const amPlays = useMemo(
-    () => clocks.slice(0, 12).reduce((n, b) => n + b.plays, 0),
-    [clocks],
-  );
-  const pmPlays = useMemo(
-    () => clocks.slice(12).reduce((n, b) => n + b.plays, 0),
-    [clocks],
-  );
+  // Stats/clocks/genres: exact local slice for small libraries; Rust
+  // per-range aggregates (same 30s/skipped-long/dedupe rules) for
+  // lifetimes over the threshold — no full array in memory.
+  const stats = useMemo(() => {
+    if (useAggregates && aggregates) {
+      return {
+        plays: aggregates.total,
+        minutes: aggregates.minutes,
+        hours: aggregates.hours,
+        uniqueTracks: aggregates.uniqueTracks,
+        uniqueArtists: aggregates.uniqueArtists,
+        uniqueAlbums: aggregates.uniqueAlbums,
+      };
+    }
+    return deriveStats(sliced);
+  }, [useAggregates, aggregates, sliced]);
+  // Most-streamed genres: the slice ranks artists by counted streams and
+  // joins genres from the fetched top artists, so an import (or a thin
+  // tops window) still surfaces what was actually heard. Without a match
+  // this falls back to the plain top-artists count; the strip stays empty
+  // only when no genre data exists anywhere. Large lifetimes join the
+  // precomputed Rust ranks instead of scanning the slice.
+  const genres = useMemo(() => {
+    if (useAggregates && aggregates) {
+      const weighted = genresFromRanks(aggregates.artistRanks, artists.items);
+      if (weighted.length > 0) return weighted;
+      return deriveTopGenres(artists.items);
+    }
+    return deriveTopGenresRanked({ plays: sliced, artists: artists.items });
+  }, [useAggregates, aggregates, sliced, artists.items]);
+  const clocks = useMemo(() => {
+    if (useAggregates && aggregates) return aggregates.clocks;
+    return bucketListeningClocks(sliced);
+  }, [useAggregates, aggregates, sliced]);
   const peakHour = useMemo(() => {
+    if (useAggregates && aggregates) return aggregates.peakHour;
     let best = 0;
     for (let h = 1; h < 24; h += 1) {
       if (clocks[h].plays > clocks[best].plays) best = h;
     }
     return best;
-  }, [clocks]);
+  }, [useAggregates, aggregates, clocks]);
+
+  // Next-page loader for large lifetimes: cursor paging appends the next
+  // 100 rows without ever holding the full store (render stays ≤~1k).
+  const loadMorePage = useCallback(async () => {
+    if (!pageCursor) return;
+    const now = Date.now();
+    const start = rangeStartForRange(rangeRef.current, now);
+    try {
+      const page = await invoke<unknown>("get_history_page", {
+        start,
+        now,
+        cursor: pageCursor,
+        limit: HISTORY_PAGE_SIZE,
+      });
+      if (page && typeof page === "object") {
+        const rec = page as Record<string, unknown>;
+        const items = Array.isArray(rec["items"]) ? (rec["items"] as HistoryPlay[]) : [];
+        if (items.length > 0) setPageItems((prev) => [...prev, ...items]);
+        setPageCursor(typeof rec["nextCursor"] === "string" ? (rec["nextCursor"] as string) : null);
+      }
+    } catch {
+      // Paging never breaks the list.
+    }
+  }, [pageCursor]);
   const honesty = rangeHonestyNote(range, { hasImported });
   const topGenre = genres.length > 0 ? genres[0].genre : null;
 
@@ -685,12 +955,20 @@ export default function ProfilePane(p: Props) {
           <div className="lbl">Minutes</div>
         </div>
         <div className="profile-tile">
+          <div className="num">{stats.hours}</div>
+          <div className="lbl">Hours</div>
+        </div>
+        <div className="profile-tile">
           <div className="num">{stats.uniqueTracks}</div>
           <div className="lbl">Tracks</div>
         </div>
         <div className="profile-tile">
           <div className="num">{stats.uniqueArtists}</div>
           <div className="lbl">Artists</div>
+        </div>
+        <div className="profile-tile">
+          <div className="num">{stats.uniqueAlbums}</div>
+          <div className="lbl">Albums</div>
         </div>
         <div className="profile-tile">
           <div className="num">{topGenre ?? "—"}</div>
@@ -716,45 +994,7 @@ export default function ProfilePane(p: Props) {
       )}
 
       <div className="pane-subhead profile-subhead">Listening clocks</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        {(
-          [
-            { half: "AM", plays: amPlays },
-            { half: "PM", plays: pmPlays },
-          ] as const
-        ).map((d) => {
-          const frac = stats.plays > 0 ? d.plays / stats.plays : 0;
-          const arc = (frac * 251.2).toFixed(1);
-          return (
-            <div
-              key={d.half}
-              role="img"
-              aria-label={`${d.half} listening clock: ${d.plays} streams`}
-            >
-              <svg className="clock-ring" viewBox="0 0 100 100" aria-hidden="true">
-                <circle className="ring-track" cx="50" cy="50" r="40" fill="none" strokeWidth="8" />
-                <circle
-                  className="ring-val"
-                  cx="50"
-                  cy="50"
-                  r="40"
-                  fill="none"
-                  strokeWidth="8"
-                  strokeLinecap="round"
-                  strokeDasharray={`${arc} 251.2`}
-                  transform="rotate(-90 50 50)"
-                />
-                <text x="50" y="46" textAnchor="middle">
-                  {d.half}
-                </text>
-                <text x="50" y="60" textAnchor="middle">
-                  {d.plays}
-                </text>
-              </svg>
-            </div>
-          );
-        })}
-      </div>
+      <ListeningClocks buckets={clocks} />
 
       <div className="pane-subhead profile-subhead">Top songs</div>
       {renderThrottle(songs.error, retrySongs)}
@@ -874,7 +1114,62 @@ export default function ProfilePane(p: Props) {
 
       <div className="pane-subhead profile-subhead">Recent streams</div>
       {renderThrottle(recents.error, () => void fetchRecents())}
-      {sliced.length > 0 ? (
+      {useAggregates ? (
+        pageItems.length > 0 ? (
+          <>
+            <ol className="queue">
+              {pageItems.map((r) => (
+                <li className="q" key={`pr-${r.trackId}-${r.playedAt}`} title={r.uri}>
+                  <span className="q-name">
+                    {r.trackName}
+                    {r.artists && <small>{r.artists}</small>}
+                  </span>
+                  <span className="q-time">{formatStreamTime(r.playedAt)}</span>
+                  {r.uri !== "" && (
+                    <>
+                      <button
+                        className="icon-btn sm row-act"
+                        onClick={() => onPlayUris([r.uri])}
+                        title={`Play ${r.trackName}`}
+                        aria-label={`Play ${r.trackName}`}
+                      >
+                        <PlayIcon size={13} />
+                      </button>
+                      <button
+                        className="icon-btn sm row-act"
+                        onClick={() => onQueueAdd(r.uri)}
+                        title={`Queue ${r.trackName}`}
+                        aria-label={`Queue ${r.trackName}`}
+                      >
+                        <LikePlusIcon size={13} />
+                      </button>
+                    </>
+                  )}
+                </li>
+              ))}
+            </ol>
+            {pageCursor !== null && (
+              <div className="search-wrap">
+                <span className="dim" role="status">
+                  {`Showing ${pageItems.length} of ${pageTotal} streams.`}
+                </span>
+                <button className="btn sm" onClick={() => void loadMorePage()}>
+                  Show more
+                </button>
+              </div>
+            )}
+          </>
+        ) : recents.loading ? (
+          skeletons("Loading recent streams")
+        ) : (
+          !recents.error && (
+            <div className="empty">
+              <div className="empty-title">No recent streams</div>
+              <div className="empty-sub">Plays in this range show up here.</div>
+            </div>
+          )
+        )
+      ) : sliced.length > 0 ? (
         <>
           <ol className="queue">
             {visibleRecents.map((r) => (

@@ -13,15 +13,14 @@ export const HISTORY_STORE_VERSION = 1 as const;
  *  Mirrors `HISTORY_IMPORT_MAX_BYTES` in `src-tauri/src/history.rs`. */
 export const HISTORY_IMPORT_MAX_BYTES = 25 * 1024 * 1024;
 
-/** Largest play list any store ever holds. `mergeHistory` and
- *  `syncAppend` trim to this newest first, so the oldest rows evict
- *  first and a decade of heavy daily listening (~50 countable
- *  plays/day ≈ 18k/year) still fits with headroom. Without a cap each
- *  poll append cloned a longer array and the Profile pane rendered
- *  every row into the DOM (measured +116MB at 50k rows). Mirrors
- *  `HISTORY_STORE_CAP` in `src-tauri/src/history.rs`; the two must
- *  agree. */
 export const HISTORY_STORE_CAP = 50_000;
+
+/** Paged-list window. The Profile pane renders at most one page and
+ *  fetches the next via `pageHistoryPlays` (TS) or `get_history_page`
+ *  (Rust); the full store never enters the DOM. Mirrors
+ *  `RECENT_PAGE_SIZE` in `ProfilePane.tsx` and `HISTORY_PAGE_LIMIT` in
+ *  Rust. */
+export const HISTORY_PAGE_SIZE = 100;
 
 /** Where a play came from. `api` is a live Spotify poll, `imported`
  *  is a row from a user-exported Extended history file. */
@@ -33,8 +32,14 @@ export type HistorySource = "api" | "imported";
 export interface HistoryPlay extends RecentPlay {
   /** Original `ms_played`. Falls back to `durationMs` when absent. */
   msPlayed?: number;
-  /** True when the export marks the row skipped. Kept rows use false. */
+  /** True when the export marks the row skipped. Skipped-long rows
+   *  (`ms>=HISTORY_MIN_MS`) are kept and counted (stats.fm parity);
+   *  only skipped-short rows drop via the short bucket. */
   skipped?: boolean;
+  /** Album display string, from `master_metadata_album_album_name`.
+   *  Powers the Different-albums tile; absent on old rows and live
+   *  recents (which carry no album in the store). */
+  albumName?: string;
   /** Origin of the row. Defaults to `api`. */
   source?: HistorySource;
 }
@@ -146,6 +151,23 @@ function playKey(uri: string, playedAt: number): string {
   return `${uri}@${playedAt}`;
 }
 
+/** True for countable track URIs. Podcast/show/episode/audiobook rows
+ *  (`spotify:episode:…`, `spotify:show:…`, …) and empty strings never
+ *  count; they tally as `droppedNoUri` so the import message stays
+ *  honest (`kept + dropped* == total`). */
+export function isTrackUri(uri: string): boolean {
+  return uri.startsWith("spotify:track:");
+}
+
+/** Build an O(1) dedupe index over a play list. The App poll hook keeps
+ *  one alongside `historyStoreRef` so per-poll appends probe the set
+ *  instead of scanning the full array (see `syncAppendWithIndex`). */
+export function buildHistoryIndex(plays: HistoryPlay[]): Set<string> {
+  const out = new Set<string>();
+  for (const p of plays) out.add(playKey(p.uri, p.playedAt));
+  return out;
+}
+
 /** Newest first, uri ascending on ties so the order is deterministic. */
 function byNewestFirst(a: HistoryPlay, b: HistoryPlay): number {
   if (b.playedAt !== a.playedAt) return b.playedAt - a.playedAt;
@@ -200,16 +222,22 @@ function rowToPlay(row: ExtendedRow): HistoryPlay {
     uri: row.uri,
     durationMs: row.msPlayed,
     msPlayed: row.msPlayed,
-    skipped: false,
+    // Kept skipped-long rows stay flagged so the honesty tally can name
+    // them, but every derivation counts them (ms>=floor is the only gate).
+    skipped: row.skipped,
+    albumName: row.albumName,
     source: "imported" satisfies HistorySource,
   };
 }
 
 /** Parse an Extended-history file. Unknown input yields empty plays
  *  with zero counts; nothing here throws. Rules, in order: invalid
- *  rows out, empty uris out, plays under 30s out, skipped and
- *  forward-button rows out, repeats of `uri@playedAt` out. Survivors
- *  sort newest first. Future stamps count as invalid. */
+ *  rows out, empty/non-track uris out (podcasts tally as no-uri),
+ *  plays under 30s out (covers skipped-short), repeats of
+ *  `uri@playedAt` out. Skipped-long and forward-button-long rows are
+ *  KEPT — stats.fm counts every listen ≥30s on the import path, and
+ *  the 40,561-row `droppedSkipped` bucket in the wild is exactly those
+ *  rows. Survivors sort newest first. Future stamps count as invalid. */
 export function parseExtendedHistory(raw: unknown, now?: number): ParsedExtendedHistory {
   const at = resolveNow(now);
   const rows = Array.isArray(raw) ? raw : [];
@@ -223,18 +251,17 @@ export function parseExtendedHistory(raw: unknown, now?: number): ParsedExtended
       counts.droppedInvalid += 1;
       continue;
     }
-    // parseExtendedRow already rejects empty uris as null, but the
-    // bucket must still distinguish them for the honesty tally.
-    if (row.uri === "") {
+    // Empty uris plus podcast/episode/show rows never count; the tally
+    // names them together so `kept + dropped* == total` still holds.
+    if (row.uri === "" || !isTrackUri(row.uri)) {
       counts.droppedNoUri += 1;
       continue;
     }
+    // The only ms gate. Skipped-short lands here (already covered), so
+    // the `droppedSkipped` bucket stays 0 for new imports but is kept
+    // in the message for backward compat.
     if (row.msPlayed < HISTORY_MIN_MS) {
       counts.droppedShort += 1;
-      continue;
-    }
-    if (row.skipped) {
-      counts.droppedSkipped += 1;
       continue;
     }
     const key = playKey(row.uri, row.playedAt);
@@ -267,6 +294,7 @@ function coercePlay(v: unknown): HistoryPlay | null {
   const durationMs = asFiniteNumber(v["durationMs"]) ?? 0;
   const msPlayed = asFiniteNumber(v["msPlayed"]) ?? durationMs;
   const skipped = v["skipped"] === true;
+  const albumName = asTrimmedString(v["albumName"] ?? v["album"]);
   const source = v["source"] === "imported" ? ("imported" satisfies HistorySource) : ("api" satisfies HistorySource);
   return {
     trackId: asTrimmedString(v["trackId"]) || idFromUri(uri),
@@ -278,6 +306,7 @@ function coercePlay(v: unknown): HistoryPlay | null {
     durationMs,
     msPlayed,
     skipped,
+    albumName: albumName === "" ? undefined : albumName,
     source,
   };
 }
@@ -301,24 +330,27 @@ function toRanges(v: unknown): string[] {
   return out;
 }
 
-/** Enforce `HISTORY_STORE_CAP` on a newest-first list: the tail
- *  (oldest) drops. Callers sort before trimming so eviction is
- *  recency-ordered. */
+/** Legacy trim hook, now identity. Lifetime truth is preserved in the
+ *  full store; heap/DOM stay bounded because the frontend holds only
+ *  the current `HISTORY_PAGE_SIZE` page plus Rust aggregates (see
+ *  `pageHistoryPlays` / `get_history_page`). Kept so old callers keep
+ *  compiling. */
 export function trimStoreToCap(plays: HistoryPlay[]): HistoryPlay[] {
-  return plays.length > HISTORY_STORE_CAP ? plays.slice(0, HISTORY_STORE_CAP) : plays;
+  return plays;
 }
 
 /** Merge two stores or play lists. Unknown sides become empty;
  *  nothing here throws. Base wins on key conflicts, so repeat
- *  imports are idempotent. Result sorts newest first and never
- *  exceeds `HISTORY_STORE_CAP` (oldest evicts). */
+ *  imports are idempotent. Result sorts newest first and is NEVER
+ *  trimmed: the 50k cap destroyed lifetime truth (50,049 displayed vs
+ *  191,047 kept); paging bounds the UI instead. */
 export function mergeHistory(base: unknown, incoming: unknown): HistoryStore {
   const seen = new Map<string, HistoryPlay>();
   for (const p of [...toPlayList(base), ...toPlayList(incoming)]) {
     const key = playKey(p.uri, p.playedAt);
     if (!seen.has(key)) seen.set(key, p);
   }
-  const plays = trimStoreToCap([...seen.values()].sort(byNewestFirst));
+  const plays = [...seen.values()].sort(byNewestFirst);
   const importedRanges = [...toRanges(base), ...toRanges(incoming).filter((r) => !toRanges(base).includes(r))];
   return { version: HISTORY_STORE_VERSION, plays, importedRanges } satisfies HistoryStore;
 }
@@ -333,9 +365,12 @@ function effectiveMs(p: HistoryPlay): number {
 
 /** Append one poll-observed listen to a store. Pure: the input store
  *  is never mutated. Returns the store plus the reason, so the App
- *  poll hook can log without branching. The store never exceeds
- *  `HISTORY_STORE_CAP`: a full store evicts its oldest row to admit
- *  the new one. Nothing here throws. */
+ *  poll hook can log without branching. Never trims: lifetime truth is
+ *  preserved and the UI pages (`HISTORY_PAGE_SIZE`). Skipped-long rows
+ *  append (stats.fm parity — only `ms<HISTORY_MIN_MS` refuses); the
+ *  `skipped` reason survives in the type for old callers but no longer
+ *  fires for countable rows. Podcast/non-track URIs refuse as `no-uri`.
+ *  Nothing here throws. */
 export function syncAppend(store: unknown, listen: unknown, now?: number): SyncAppendResult {
   const at = resolveNow(now);
   const base = toPlayList(store);
@@ -345,7 +380,8 @@ export function syncAppend(store: unknown, listen: unknown, now?: number): SyncA
     event: { reason: "invalid" satisfies SyncAppendReason, play: null } satisfies SyncAppendEvent,
   } satisfies SyncAppendResult;
   if (!isRecord(listen)) return invalid;
-  if (asTrimmedString(listen["uri"]) === "") {
+  const uri = asTrimmedString(listen["uri"]);
+  if (uri === "" || !isTrackUri(uri)) {
     return {
       store: invalid.store,
       event: { reason: "no-uri" satisfies SyncAppendReason, play: null } satisfies SyncAppendEvent,
@@ -367,20 +403,79 @@ export function syncAppend(store: unknown, listen: unknown, now?: number): SyncA
       event: { reason: "short" satisfies SyncAppendReason, play: null } satisfies SyncAppendEvent,
     } satisfies SyncAppendResult;
   }
-  if (play.skipped === true) {
-    return {
-      store: invalid.store,
-      event: { reason: "skipped" satisfies SyncAppendReason, play: null } satisfies SyncAppendEvent,
-    } satisfies SyncAppendResult;
-  }
   const key = playKey(play.uri, play.playedAt);
-  if (base.some((p) => playKey(p.uri, p.playedAt) === key)) {
+  const index = buildHistoryIndex(base);
+  if (index.has(key)) {
     return {
       store: invalid.store,
       event: { reason: "duplicate" satisfies SyncAppendReason, play: null } satisfies SyncAppendEvent,
     } satisfies SyncAppendResult;
   }
-  const plays = trimStoreToCap([...base, play].sort(byNewestFirst));
+  const sorted = base.sort(byNewestFirst);
+  const plays =
+    sorted.length === 0 || play.playedAt >= sorted[0].playedAt
+      ? [play, ...sorted]
+      : [...sorted, play].sort(byNewestFirst);
+  return {
+    store: { version: HISTORY_STORE_VERSION, plays, importedRanges: ranges } satisfies HistoryStore,
+    event: { reason: "appended" satisfies SyncAppendReason, play } satisfies SyncAppendEvent,
+  } satisfies SyncAppendResult;
+}
+
+/** Append with a caller-held dedupe index for true O(1)-ish polls. The
+ *  App keeps `index = buildHistoryIndex(store.plays)` in a ref and
+ *  passes it here, so per-poll work is one set probe plus a head
+ *  prepend — no full clone+scan+sort. The index is updated in place on
+ *  append so the next poll reuses it. Pure apart from the index set
+ *  mutation (documented). */
+export function syncAppendWithIndex(
+  store: HistoryStore,
+  listen: HistoryPlay,
+  index: Set<string>,
+  now?: number,
+): SyncAppendResult {
+  const at = resolveNow(now);
+  const base = toPlayList(store);
+  const ranges = toRanges(store);
+  const invalid = {
+    store: { version: HISTORY_STORE_VERSION, plays: base.sort(byNewestFirst), importedRanges: ranges } satisfies HistoryStore,
+    event: { reason: "invalid" satisfies SyncAppendReason, play: null } satisfies SyncAppendEvent,
+  } satisfies SyncAppendResult;
+  const play = coercePlay(listen);
+  if (play === null) return invalid;
+  if (play.uri === "" || !isTrackUri(play.uri)) {
+    return {
+      store: invalid.store,
+      event: { reason: "no-uri" satisfies SyncAppendReason, play: null } satisfies SyncAppendEvent,
+    } satisfies SyncAppendResult;
+  }
+  if (play.playedAt > at) {
+    return {
+      store: invalid.store,
+      event: { reason: "future" satisfies SyncAppendReason, play: null } satisfies SyncAppendEvent,
+    } satisfies SyncAppendResult;
+  }
+  const ms = effectiveMs(play);
+  if (!Number.isFinite(ms)) return invalid;
+  if (ms < HISTORY_MIN_MS) {
+    return {
+      store: invalid.store,
+      event: { reason: "short" satisfies SyncAppendReason, play: null } satisfies SyncAppendEvent,
+    } satisfies SyncAppendResult;
+  }
+  const key = playKey(play.uri, play.playedAt);
+  if (index.has(key)) {
+    return {
+      store: invalid.store,
+      event: { reason: "duplicate" satisfies SyncAppendReason, play: null } satisfies SyncAppendEvent,
+    } satisfies SyncAppendResult;
+  }
+  const sorted = base.sort(byNewestFirst);
+  const plays =
+    sorted.length === 0 || play.playedAt >= sorted[0].playedAt
+      ? [play, ...sorted]
+      : [...sorted, play].sort(byNewestFirst);
+  index.add(key);
   return {
     store: { version: HISTORY_STORE_VERSION, plays, importedRanges: ranges } satisfies HistoryStore,
     event: { reason: "appended" satisfies SyncAppendReason, play } satisfies SyncAppendEvent,
@@ -399,4 +494,33 @@ export function sliceStoreRange(store: unknown, args: unknown): HistoryPlay[] {
   return toPlayList(store).filter(
     (p) => (start === null || p.playedAt >= start) && p.playedAt <= at,
   );
+}
+
+/** One paged window over a newest-first play list. `cursor` is the
+ *  `uri@playedAt` key of the last item of the previous page (null for
+ *  the first page); `limit` caps rows (default `HISTORY_PAGE_SIZE`).
+ *  Returns the page plus the next cursor (null when exhausted) and the
+ *  window total, so the pane can render `Showing X of N` without
+ *  holding the full array. Pure. */
+export function pageHistoryPlays(
+  plays: HistoryPlay[],
+  opts: { cursor?: string | null; limit?: number } = {},
+): { items: HistoryPlay[]; nextCursor: string | null; total: number } {
+  const total = plays.length;
+  const limit =
+    typeof opts.limit === "number" && Number.isFinite(opts.limit)
+      ? Math.max(1, Math.min(500, Math.floor(opts.limit)))
+      : HISTORY_PAGE_SIZE;
+  const cursor = opts.cursor ?? null;
+  let start = 0;
+  if (cursor !== null) {
+    const ix = plays.findIndex((p) => playKey(p.uri, p.playedAt) === cursor);
+    start = ix === -1 ? 0 : ix + 1;
+  }
+  const items = plays.slice(start, start + limit);
+  const nextCursor =
+    start + limit < total && items.length > 0
+      ? playKey(items[items.length - 1].uri, items[items.length - 1].playedAt)
+      : null;
+  return { items, nextCursor, total };
 }

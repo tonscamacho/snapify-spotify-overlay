@@ -29,6 +29,12 @@ export const DEFAULT_PROFILE_RANGE: ProfileRange = "fourWeeks";
 /** Cap for the derived genre strip. */
 export const TOP_GENRE_CAP = 5;
 
+/** How many of the most-streamed artists the stream-weighted genre
+ *  join reads. The join is a name lookup against the fetched top
+ *  artists, so a wider window only raises the odds of a match; the
+ *  per-render cost stays one pass over the slice plus map lookups. */
+export const STREAM_GENRE_TOP_ARTISTS = 50;
+
 /** Coerce an unknown stored value to a valid range. Anything outside
  *  the six known strings falls back to the default so callers never
  *  branch on an invalid range. */
@@ -251,21 +257,29 @@ function listenedMs(p: HistoryPlay): number {
   return NaN;
 }
 
-/** True when a play counts: at least 30s listened and never skipped.
- *  Previews and forward-button skips never reach a stat, a genre, or
- *  a clock bucket. */
+/** True when a play counts: at least 30s listened. Skipped-long and
+ *  forward-button-long rows COUNT (stats.fm import parity — the only
+ *  gate is the 30s floor, which already covers skipped-short); only
+ *  previews (`ms<30000`), empty/non-track URIs (podcasts), and
+ *  unparseable ms never reach a stat, a genre, or a clock bucket.
+ *  Single derivation site for the TS layer; Rust `is_counted` mirrors
+ *  this exactly (same floor, same track-uri gate, same dedupe). */
 function isCountedPlay(p: HistoryPlay): boolean {
-  if (p.skipped === true) return false;
+  if (p.uri === "" || !p.uri.startsWith("spotify:track:")) return false;
   const ms = listenedMs(p);
   return Number.isFinite(ms) && (ms as number) >= HISTORY_MIN_MS;
 }
 
 /** Aggregate stats over recent plays. Artist counts split the joined
- *  display string, so one `A, B` row credits both artists. Plays
- *  under 30s and skipped tracks are not counted. Pure. */
+ *  display string, so one `A, B` row credits both artists. Albums count
+ *  distinct `albumName` values (imported rows only). Only the 30s floor
+ *  plus the track-uri gate filter; skipped-long rows count. Pure.
+ *  Single derivation site: Rust `history_aggregates` mirrors these
+ *  exact rules over the full normalized store. */
 export function deriveStats(plays: HistoryPlay[]): ProfileStats {
   const tracks = new Set<string>();
   const artists = new Set<string>();
+  const albums = new Set<string>();
   let kept = 0;
   let ms = 0;
   for (const p of plays) {
@@ -276,20 +290,27 @@ export function deriveStats(plays: HistoryPlay[]): ProfileStats {
       const name = part.trim();
       if (name !== "") artists.add(name);
     }
+    const album = typeof p.albumName === "string" ? p.albumName.trim() : "";
+    if (album !== "") albums.add(album.toLowerCase());
     const heard = listenedMs(p);
     if (Number.isFinite(heard) && (heard as number) > 0) ms += heard as number;
   }
+  const minutes = Math.round(ms / 60000);
   return {
     plays: kept,
-    minutes: Math.round(ms / 60000),
+    minutes,
+    hours: Math.round(minutes / 60),
     uniqueTracks: tracks.size,
     uniqueArtists: artists.size,
+    uniqueAlbums: albums.size,
   };
 }
 
 /** Count genres across the top artists, sorted by count desc with an
  *  alphabetical tie-break, capped at `TOP_GENRE_CAP`. Names fold to
- *  lowercase so `Rock` and `rock` count together. Pure. */
+ *  lowercase so `Rock` and `rock` count together. Pure. This is the
+ *  API-only fallback: every fetched artist counts once, regardless of
+ *  how much the user actually streamed them. */
 export function deriveTopGenres(artists: ProfileArtist[]): TopGenre[] {
   const counts = new Map<string, number>();
   for (const a of artists) {
@@ -305,15 +326,139 @@ export function deriveTopGenres(artists: ProfileArtist[]): TopGenre[] {
     .slice(0, TOP_GENRE_CAP);
 }
 
+/** One artist's stream weight inside a history slice. `artist` keeps
+ *  the first-seen display spelling; matching folds to lowercase. */
+export interface ArtistStreamRank {
+  artist: string;
+  streams: number;
+  minutes: number;
+}
+
+/** Rank the slice's artists by counted streams, desc, with a
+ *  case-insensitive alphabetical tie-break, capped at `topN`. Joint
+ *  `A, B` rows credit both artists, mirroring `deriveStats`. Short
+ *  and skipped plays never rank. Pure. */
+export function rankArtistsByStreams(
+  plays: HistoryPlay[],
+  topN: number = STREAM_GENRE_TOP_ARTISTS,
+): ArtistStreamRank[] {
+  const cap =
+    typeof topN === "number" && Number.isFinite(topN)
+      ? Math.max(0, Math.floor(topN))
+      : STREAM_GENRE_TOP_ARTISTS;
+  const byArtist = new Map<string, { display: string; streams: number; ms: number }>();
+  for (const p of plays) {
+    if (!isCountedPlay(p)) continue;
+    const heard = listenedMs(p);
+    const ms = Number.isFinite(heard) && (heard as number) > 0 ? (heard as number) : 0;
+    for (const part of p.artists.split(",")) {
+      const name = part.trim();
+      if (name === "") continue;
+      const key = name.toLowerCase();
+      const cur = byArtist.get(key);
+      if (cur) {
+        cur.streams += 1;
+        cur.ms += ms;
+      } else {
+        byArtist.set(key, { display: name, streams: 1, ms });
+      }
+    }
+  }
+  return [...byArtist.values()]
+    .map(
+      (v): ArtistStreamRank => ({
+        artist: v.display,
+        streams: v.streams,
+        minutes: Math.round(v.ms / 60000),
+      }),
+    )
+    .sort((a, b) => {
+      if (b.streams !== a.streams) return b.streams - a.streams;
+      const al = a.artist.toLowerCase();
+      const bl = b.artist.toLowerCase();
+      return al < bl ? -1 : al > bl ? 1 : 0;
+    })
+    .slice(0, cap);
+}
+
+/** Stream-weighted genres: the slice's most-streamed artists (see
+ *  `rankArtistsByStreams`) join their genres from the fetched top
+ *  artists by name, and each genre weighs the streams of the artists
+ *  carrying it. Sorted by weight desc with an alphabetical
+ *  tie-break, capped at `TOP_GENRE_CAP`. Returns [] when no ranked
+ *  artist matches fetched genre data — the caller falls back to
+ *  `deriveTopGenres`. Pure. */
+export function deriveStreamGenres(args: {
+  plays: HistoryPlay[];
+  artists: ProfileArtist[];
+  topN?: number;
+}): TopGenre[] {
+  const { plays, artists } = args;
+  const lookup = new Map<string, string[]>();
+  for (const a of artists) {
+    const key = a.name.trim().toLowerCase();
+    if (key === "") continue;
+    const prev = lookup.get(key);
+    if (prev) {
+      for (const g of a.genres) {
+        if (typeof g === "string" && g.trim() !== "" && !prev.includes(g)) prev.push(g);
+      }
+    } else {
+      lookup.set(key, [...a.genres]);
+    }
+  }
+  const counts = new Map<string, number>();
+  for (const rank of rankArtistsByStreams(plays, args.topN ?? STREAM_GENRE_TOP_ARTISTS)) {
+    const genres = lookup.get(rank.artist.trim().toLowerCase());
+    if (!genres) continue;
+    for (const g of genres) {
+      const genre = g.trim().toLowerCase();
+      if (genre === "") continue;
+      counts.set(genre, (counts.get(genre) ?? 0) + rank.streams);
+    }
+  }
+  return [...counts.entries()]
+    .map(([genre, count]): TopGenre => ({ genre, count }))
+    .sort((x, y) => y.count - x.count || (x.genre < y.genre ? -1 : x.genre > y.genre ? 1 : 0))
+    .slice(0, TOP_GENRE_CAP);
+}
+
+/** Most-streamed genres with an API-only fallback. Imported history
+ *  ranks the artists, so the strip follows actual listening; without
+ *  an import the slice holds live recents only and the weights still
+ *  apply. When nothing matches — tops failed, every top artist is
+ *  genreless, or the slice is empty — this returns the plain
+ *  `deriveTopGenres` count, and [] only when that is empty too. Pure. */
+export function deriveTopGenresRanked(args: {
+  plays: HistoryPlay[];
+  artists: ProfileArtist[];
+  topN?: number;
+}): TopGenre[] {
+  const weighted = deriveStreamGenres(args);
+  return weighted.length > 0 ? weighted : deriveTopGenres(args.artists);
+}
+
 /** Bucket plays into 24 local-hour buckets, index = hour. Always
- *  returns all 24 buckets so the chart never shifts shape. Short and
- *  skipped plays are not counted. Pure. */
+ *  returns all 24 buckets so the chart never shifts shape. `minutes`
+ *  rounds each hour's listened ms, matching the `deriveStats` rounding
+ *  per bucket. Short and skipped plays are not counted. Pure. */
 export function bucketListeningClocks(plays: HistoryPlay[]): ClockBucket[] {
-  const buckets: ClockBucket[] = Array.from({ length: 24 }, (_, hour) => ({ hour, plays: 0 }));
+  const buckets: ClockBucket[] = Array.from({ length: 24 }, (_, hour) => ({
+    hour,
+    plays: 0,
+    minutes: 0,
+  }));
+  const msPerHour: number[] = new Array<number>(24).fill(0);
   for (const p of plays) {
     if (!isCountedPlay(p)) continue;
     const h = new Date(p.playedAt).getHours();
-    if (h >= 0 && h < 24) buckets[h].plays += 1;
+    if (h < 0 || h >= 24) continue;
+    buckets[h].plays += 1;
+    const heard = listenedMs(p);
+    if (Number.isFinite(heard) && (heard as number) > 0) msPerHour[h] += heard as number;
+  }
+  for (let h = 0; h < 24; h += 1) {
+    buckets[h].minutes = Math.round(msPerHour[h] / 60000);
   }
   return buckets;
 }

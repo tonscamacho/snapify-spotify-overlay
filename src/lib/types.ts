@@ -272,13 +272,19 @@ export interface RecentPlay {
   durationMs: number;
 }
 
-/** Aggregate listening stats derived from recent plays. */
+/** Aggregate listening stats derived from recent plays. `hours` is the
+ *  stats.fm-parity whole-hours tile (`round(minutes/60)`); `uniqueAlbums`
+ *  counts distinct album names (imported rows carry `albumName`, live
+ *  recents carry none and contribute 0). */
 export interface ProfileStats {
   plays: number;
   /** Whole minutes of music, rounded. */
   minutes: number;
+  /** Whole hours of music, rounded (`round(minutes/60)`). */
+  hours: number;
   uniqueTracks: number;
   uniqueArtists: number;
+  uniqueAlbums: number;
 }
 
 /** One genre row, counted across the top artists. */
@@ -287,8 +293,10 @@ export interface TopGenre {
   count: number;
 }
 
-/** Play count for one local hour of day (0–23). */
+/** Play count plus listened minutes for one local hour of day (0–23). */
 export interface ClockBucket {
   hour: number;
   plays: number;
+  /** Whole minutes listened in this hour, rounded. */
+  minutes: number;
 }

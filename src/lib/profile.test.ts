@@ -3,7 +3,9 @@ import {
   bucketListeningClocks,
   DEFAULT_PROFILE_RANGE,
   deriveStats,
+  deriveStreamGenres,
   deriveTopGenres,
+  deriveTopGenresRanked,
   isClientSlice,
   loadProfileRange,
   parseProfileRange,
@@ -13,12 +15,15 @@ import {
   PROFILE_RANGE_KEY,
   PROFILE_RANGES,
   rangeHonestyNote,
+  rankArtistsByStreams,
   saveProfileRange,
   sliceClientRange,
+  STREAM_GENRE_TOP_ARTISTS,
   toApiTimeRange,
   TOP_GENRE_CAP,
 } from "./profile";
 import type { ProfileRange, RecentPlay } from "./types";
+import type { HistoryPlay } from "./history";
 
 /** Node has no localStorage: a Map-backed fake for the storage tests. */
 function stubStorage(seed: Record<string, string> = {}): Map<string, string> {
@@ -35,7 +40,7 @@ function stubStorage(seed: Record<string, string> = {}): Map<string, string> {
   return store;
 }
 
-function play(id: string, playedAt: number, over: Partial<RecentPlay> = {}): RecentPlay {
+function play(id: string, playedAt: number, over: Partial<HistoryPlay> = {}): HistoryPlay {
   return {
     trackId: id,
     trackName: `Song ${id}`,
@@ -46,6 +51,10 @@ function play(id: string, playedAt: number, over: Partial<RecentPlay> = {}): Rec
     durationMs: 200000,
     ...over,
   };
+}
+
+function artist(id: string, name: string, genres: string[]) {
+  return { id, name, genres, image: null, uri: "" };
 }
 
 describe("parseProfileRange", () => {
@@ -271,21 +280,41 @@ describe("parseTopArtists", () => {
 });
 
 describe("deriveStats", () => {
-  it("aggregates plays, minutes, and uniques with dupes counted once", () => {
+  it("aggregates plays, minutes, hours, tracks, artists, albums", () => {
     const stats = deriveStats([
-      play("t1", 1000, { artists: "A, B", durationMs: 200000 }),
-      play("t1", 2000, { artists: "A", durationMs: 180000 }),
-      play("t2", 3000, { artists: "C", durationMs: 60000 }),
+      play("t1", 1000, { artists: "A, B", durationMs: 200000, albumName: "LP One" }),
+      play("t1", 2000, { artists: "A", durationMs: 180000, albumName: "lp one" }),
+      play("t2", 3000, { artists: "C", durationMs: 60000, albumName: "LP Two" }),
     ]);
-    expect(stats).toEqual({ plays: 3, minutes: 7, uniqueTracks: 2, uniqueArtists: 3 });
+    expect(stats).toEqual({ plays: 3, minutes: 7, hours: 0, uniqueTracks: 2, uniqueArtists: 3, uniqueAlbums: 2 });
+  });
+
+  it("counts skipped-long rows and drops only short/podcast rows", () => {
+    const stats = deriveStats([
+      play("t1", 1000, { durationMs: 200000, skipped: true }),
+      play("t2", 2000, { durationMs: 5000, skipped: true }),
+      play("t3", 3000, { durationMs: 200000, uri: "spotify:episode:pod" }),
+    ]);
+    expect(stats.plays).toBe(1);
+    expect(stats.minutes).toBe(3);
+  });
+
+  it("rolls minutes into whole hours (stats.fm parity)", () => {
+    const plays = Array.from({ length: 20 }, (_, i) => play(`h${i}`, 1000 + i, { durationMs: 3600000, albumName: `Album ${i % 3}` }));
+    const stats = deriveStats(plays);
+    expect(stats.minutes).toBe(1200);
+    expect(stats.hours).toBe(20);
+    expect(stats.uniqueAlbums).toBe(3);
   });
 
   it("returns zeros for no plays", () => {
     expect(deriveStats([])).toEqual({
       plays: 0,
       minutes: 0,
+      hours: 0,
       uniqueTracks: 0,
       uniqueArtists: 0,
+      uniqueAlbums: 0,
     });
   });
 });
@@ -324,6 +353,132 @@ describe("deriveTopGenres", () => {
   });
 });
 
+describe("rankArtistsByStreams", () => {
+  it("ranks by counted streams desc with an alphabetical tie-break", () => {
+    const ranks = rankArtistsByStreams([
+      play("t1", 1000, { artists: "Beta" }),
+      play("t2", 2000, { artists: "Alpha" }),
+      play("t3", 3000, { artists: "Beta" }),
+      play("t4", 4000, { artists: "alpha, Beta" }),
+    ]);
+    expect(ranks).toEqual([
+      { artist: "Beta", streams: 3, minutes: 10 },
+      { artist: "Alpha", streams: 2, minutes: 7 },
+    ]);
+  });
+
+  it("splits joint rows, skips blank names, counts skipped-long, ignores short", () => {
+    const ranks = rankArtistsByStreams([
+      play("t1", 1000, { artists: "A, B" }),
+      play("t2", 2000, { artists: " , " }),
+      play("t3", 3000, { artists: "A", msPlayed: 5000 }),
+      play("t4", 4000, { artists: "B", skipped: true, msPlayed: 200000, durationMs: 200000 }),
+    ]);
+    expect(ranks.map((r) => r.artist)).toEqual(["B", "A"]);
+    expect(ranks.find((r) => r.artist === "A")).toMatchObject({ streams: 1 });
+    expect(ranks.find((r) => r.artist === "B")).toMatchObject({ streams: 2 });
+  });
+
+  it("caps at topN and returns [] for no countable plays", () => {
+    expect(STREAM_GENRE_TOP_ARTISTS).toBeGreaterThan(0);
+    const plays = Array.from({ length: 8 }, (_, i) =>
+      play(`t${i}`, 1000 + i, { artists: `Band ${String(i).padStart(2, "0")}` }),
+    );
+    expect(rankArtistsByStreams(plays, 3)).toHaveLength(3);
+    expect(rankArtistsByStreams(plays, 3).map((r) => r.artist)).toEqual([
+      "Band 00",
+      "Band 01",
+      "Band 02",
+    ]);
+    expect(rankArtistsByStreams([])).toEqual([]);
+  });
+});
+
+describe("deriveStreamGenres", () => {
+  const fetched = [
+    artist("a1", "Heavy Rotation", ["rock", "indie"]),
+    artist("a2", "Rare Spin", ["jazz"]),
+    artist("a3", "Genreless", []),
+  ];
+
+  it("weighs genres by the carrier's streams, not one vote each", () => {
+    const plays = [
+      play("t1", 1000, { artists: "Heavy Rotation" }),
+      play("t2", 2000, { artists: "Heavy Rotation" }),
+      play("t3", 3000, { artists: "Heavy Rotation" }),
+      play("t4", 4000, { artists: "Rare Spin" }),
+    ];
+    expect(deriveStreamGenres({ plays, artists: fetched })).toEqual([
+      { genre: "indie", count: 3 },
+      { genre: "rock", count: 3 },
+      { genre: "jazz", count: 1 },
+    ]);
+  });
+
+  it("matches artist names case-insensitively and skips unmatched history", () => {
+    const plays = [
+      play("t1", 1000, { artists: "heavy rotation" }),
+      play("t2", 2000, { artists: "Unknown Import Band" }),
+    ];
+    const top = deriveStreamGenres({ plays, artists: fetched });
+    expect(top.map((g) => g.genre)).toEqual(["indie", "rock"]);
+    expect(top.map((g) => g.genre)).not.toContain("jazz");
+  });
+
+  it("returns [] when no ranked artist carries genre data", () => {
+    expect(
+      deriveStreamGenres({
+        plays: [play("t1", 1000, { artists: "Unknown Import Band" })],
+        artists: fetched,
+      }),
+    ).toEqual([]);
+    expect(deriveStreamGenres({ plays: [], artists: fetched })).toEqual([]);
+    expect(
+      deriveStreamGenres({ plays: [play("t1", 1000, { artists: "Heavy Rotation" })], artists: [] }),
+    ).toEqual([]);
+  });
+});
+
+describe("deriveTopGenresRanked", () => {
+  const fetched = [
+    artist("a1", "Heavy Rotation", ["rock"]),
+    artist("a2", "Rare Spin", ["jazz"]),
+  ];
+
+  it("prefers stream weights over the equal-count fallback", () => {
+    const plays = [
+      play("t1", 1000, { artists: "Heavy Rotation" }),
+      play("t2", 2000, { artists: "Heavy Rotation" }),
+      play("t3", 3000, { artists: "Rare Spin" }),
+    ];
+    expect(deriveTopGenresRanked({ plays, artists: fetched })).toEqual([
+      { genre: "rock", count: 2 },
+      { genre: "jazz", count: 1 },
+    ]);
+  });
+
+  it("falls back to the API-only count when history matches nothing", () => {
+    const plays = [play("t1", 1000, { artists: "Unknown Import Band" })];
+    expect(deriveTopGenresRanked({ plays, artists: fetched })).toEqual([
+      { genre: "jazz", count: 1 },
+      { genre: "rock", count: 1 },
+    ]);
+    expect(deriveTopGenresRanked({ plays: [], artists: fetched })).toEqual(
+      deriveTopGenres(fetched),
+    );
+  });
+
+  it("stays empty only when there is truly no genre data", () => {
+    expect(deriveTopGenresRanked({ plays: [], artists: [] })).toEqual([]);
+    expect(
+      deriveTopGenresRanked({
+        plays: [play("t1", 1000, { artists: "Nobody" })],
+        artists: [artist("a9", "Genreless", [])],
+      }),
+    ).toEqual([]);
+  });
+});
+
 describe("bucketListeningClocks", () => {
   it("buckets plays by local hour and always returns 24 buckets", () => {
     const buckets = bucketListeningClocks([
@@ -333,16 +488,38 @@ describe("bucketListeningClocks", () => {
     ]);
     expect(buckets).toHaveLength(24);
     expect(buckets.map((b) => b.hour)).toEqual(Array.from({ length: 24 }, (_, h) => h));
-    expect(buckets[14]).toEqual({ hour: 14, plays: 2 });
-    expect(buckets[9]).toEqual({ hour: 9, plays: 1 });
-    expect(buckets[0]).toEqual({ hour: 0, plays: 0 });
+    expect(buckets[14]).toEqual({ hour: 14, plays: 2, minutes: 7 });
+    expect(buckets[9]).toEqual({ hour: 9, plays: 1, minutes: 3 });
+    expect(buckets[0]).toEqual({ hour: 0, plays: 0, minutes: 0 });
     expect(buckets.reduce((n, b) => n + b.plays, 0)).toBe(3);
+  });
+
+  it("sums listened minutes per hour from msPlayed with the stats rounding", () => {
+    const at = new Date(2026, 9, 5, 19, 5).getTime();
+    const buckets = bucketListeningClocks([
+      play("a", at, { msPlayed: 60000 }),
+      play("b", at + 1000, { msPlayed: 90000 }),
+      play("c", at + 2000, { durationMs: 120000 }),
+    ]);
+    expect(buckets[19]).toEqual({ hour: 19, plays: 3, minutes: 5 });
+    expect(buckets[19].minutes).toBe(5);
+    expect(buckets.reduce((n, b) => n + b.minutes, 0)).toBe(5);
+  });
+
+  it("excludes only short rows; skipped-long counts in both streams and minutes", () => {
+    const at = new Date(2026, 9, 5, 19, 5).getTime();
+    const buckets = bucketListeningClocks([
+      play("short", at, { msPlayed: 10000 }),
+      play("skip", at + 1000, { msPlayed: 200000, skipped: true }),
+      play("kept", at + 2000, { msPlayed: 200000 }),
+    ]);
+    expect(buckets[19]).toEqual({ hour: 19, plays: 2, minutes: 7 });
   });
 
   it("returns all-zero buckets for no plays", () => {
     const buckets = bucketListeningClocks([]);
     expect(buckets).toHaveLength(24);
-    expect(buckets.every((b) => b.plays === 0)).toBe(true);
+    expect(buckets.every((b) => b.plays === 0 && b.minutes === 0)).toBe(true);
   });
 });
 

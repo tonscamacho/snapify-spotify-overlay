@@ -3,7 +3,7 @@
 // backgrounds, one scrollport) and stays compact-clean at its minimum size.
 // The range menu floats with a capped height and keeps the halo.
 import { test, expect, type Page } from "@playwright/test";
-import { stubTauri } from "./tauri-mock";
+import { stubTauri, seedStorage } from "./tauri-mock";
 import { PROFILE_ME_NAME } from "./fixtures";
 
 const THEMES = ["dark", "light", "sparkles", "pastel"] as const;
@@ -19,15 +19,7 @@ const PROFILE_LAYOUT = {
 
 async function bootProfileAt(page: Page, theme: string, surface: string) {
   await stubTauri(page, { layout: PROFILE_LAYOUT, edit: true });
-  await page.addInitScript(
-    ({ theme, surface }) => {
-      try {
-        localStorage.setItem("snapify-theme", theme);
-        localStorage.setItem("snapify-surface", surface);
-      } catch { /* private mode: prefs last the session */ }
-    },
-    { theme, surface },
-  );
+  await seedStorage(page, { "snapify-theme": theme, "snapify-surface": surface });
   await page.goto("/");
   await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
   await expect(page.locator(".app")).toHaveAttribute("data-surface", surface);

@@ -46,19 +46,14 @@ function buildInitScript(
   return (
     "(" +
     "function(FIXTURES, SEED_LAYOUT, SEED_INTERACT, SEED_EDIT, SEED_NOTCH, SEED_AUTH) {\n" +
-    "  try {\n" +
-    "    localStorage.setItem('snapify-interact', SEED_INTERACT ? '1' : '0');\n" +
-    "    localStorage.setItem('snapify-edit', SEED_EDIT ? '1' : '0');\n" +
-    "    localStorage.setItem('snapify-notch-hover', SEED_NOTCH ? '1' : '0');\n" +
-    "    if (SEED_LAYOUT) localStorage.setItem('snapify-layout-v3', JSON.stringify(SEED_LAYOUT));\n" +
-    "  } catch (e) {}\n" +
-    "  window.__INVOKED__ = [];\n" +
-    "  try {\n" +
-    "    var sdkTag = document.createElement('script');\n" +
-    "    sdkTag.setAttribute('data-spotify-sdk', '1');\n" +
-    "    (document.head || document.documentElement).appendChild(sdkTag);\n" +
-    "  } catch (e) {}\n" +
-    "  function FakePlayer(opts) { this._opts = opts || {}; this._ev = {}; window.__SDK_INIT_VOLUME__ = (opts || {}).volume; }\n" +
+    "  function safeSetItem(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }\n" +
+    "  // Private mode: prefs last the session.\n" +
+    "  safeSetItem('snapify-interact', SEED_INTERACT ? '1' : '0');\n" +
+    "  safeSetItem('snapify-edit', SEED_EDIT ? '1' : '0');\n" +
+    "  safeSetItem('snapify-notch-hover', SEED_NOTCH ? '1' : '0');\n" +
+    "  if (SEED_LAYOUT) safeSetItem('snapify-layout-v3', JSON.stringify(SEED_LAYOUT));\n" +
+  "  window.__INVOKED__ = [];\n" +
+  "  function FakePlayer(opts) { this._opts = opts || {}; this._ev = {}; window.__SDK_INIT_VOLUME__ = (opts || {}).volume; }\n" +
     "  FakePlayer.prototype.addListener = function (name, cb) {\n" +
     "    if (!this._ev[name]) this._ev[name] = [];\n" +
     "    this._ev[name].push(cb);\n" +
@@ -224,8 +219,57 @@ function buildInitScript(
     "      case 'get_audiobook_chapters': return emptyPage();\n" +
     "      case 'get_chapter': return FIXTURES.trackDetail;\n" +
     "      case 'search': return FIXTURES.search;\n" +
-    "      case 'get_history_stats': return { total: 0, totalMs: 0, minutes: 0, uniqueTracks: 0, uniqueArtists: 0, hasImported: !!historyImported, importedRanges: historyRanges.slice() };\n" +
-    "      case 'get_history_plays': return { version: 1, plays: historyPlays.slice(), importedRanges: historyRanges.slice() };\n" +
+    "      case 'get_history_stats': {\n" +
+    "        var nowMs = (args && typeof args.now === 'number' && args.now > 0) ? args.now : Date.now();\n" +
+    "        var startMs = (args && typeof args.start === 'number') ? args.start : null;\n" +
+    "        var tot = 0, totMs = 0; var tr = {}, ar = {}, al = {};\n" +
+    "        var mph = []; for (var hi = 0; hi < 24; hi++) mph.push({ hour: hi, plays: 0, minutes: 0 });\n" +
+    "        var msH = []; for (var hj = 0; hj < 24; hj++) msH.push(0);\n" +
+    "        var byArt = {};\n" +
+    "        for (var pi = 0; pi < historyPlays.length; pi++) {\n" +
+    "          var hp = historyPlays[pi];\n" +
+    "          if (hp.playedAt > nowMs) continue;\n" +
+    "          if (startMs !== null && hp.playedAt < startMs) continue;\n" +
+    "          var hms = (typeof hp.msPlayed === 'number') ? hp.msPlayed : hp.durationMs;\n" +
+    "          if (!(hms >= 30000)) continue;\n" +
+    "          if (!hp.uri || hp.uri.indexOf('spotify:track:') !== 0) continue;\n" +
+    "          tot += 1; totMs += hms;\n" +
+    "          tr[hp.trackId] = 1;\n" +
+    "          var parts = String(hp.artists || '').split(',');\n" +
+    "          for (var ai = 0; ai < parts.length; ai++) { var an = parts[ai].trim(); if (an) { ar[an] = 1; var ak = an.toLowerCase(); if (!byArt[ak]) byArt[ak] = { artist: an, streams: 0, ms: 0 }; byArt[ak].streams += 1; byArt[ak].ms += hms; } }\n" +
+    "          var alb = (hp.albumName || hp.album || '').trim(); if (alb) al[alb.toLowerCase()] = 1;\n" +
+    "          var hh = new Date(hp.playedAt).getHours(); if (hh >= 0 && hh < 24) { mph[hh].plays += 1; msH[hh] += hms; }\n" +
+    "        }\n" +
+    "        for (var kh = 0; kh < 24; kh++) mph[kh].minutes = Math.round(msH[kh] / 60000);\n" +
+    "        var ph = 0; for (var q = 1; q < 24; q++) if (mph[q].plays > mph[ph].plays) ph = q;\n" +
+    "        var ranks = Object.keys(byArt).map(function(k) { return { artist: byArt[k].artist, streams: byArt[k].streams, minutes: Math.round(byArt[k].ms / 60000) }; });\n" +
+    "        ranks.sort(function(a, b) { return b.streams - a.streams || (a.artist.toLowerCase() < b.artist.toLowerCase() ? -1 : 1); });\n" +
+    "        var mins = Math.round(totMs / 60000);\n" +
+    "        return { total: tot, totalMs: totMs, minutes: mins, hours: Math.round(mins / 60), uniqueTracks: Object.keys(tr).length, uniqueArtists: Object.keys(ar).length, uniqueAlbums: Object.keys(al).length, hasImported: !!historyImported, importedRanges: historyRanges.slice(), clocks: mph, peakHour: ph, artistRanks: ranks.slice(0, 50) };\n" +
+    "      }\n" +
+    "      case 'get_history_plays': return { version: 2, plays: historyPlays.slice(), importedRanges: historyRanges.slice() };\n" +
+    "      case 'get_history_page': {\n" +
+    "        var pNow = (args && typeof args.now === 'number' && args.now > 0) ? args.now : Date.now();\n" +
+    "        var pStart = (args && typeof args.start === 'number') ? args.start : null;\n" +
+    "        var pCur = (args && typeof args.cursor === 'string') ? args.cursor : null;\n" +
+    "        var pLim = (args && typeof args.limit === 'number' && args.limit >= 1) ? Math.min(500, Math.floor(args.limit)) : 100;\n" +
+    "        var win = [];\n" +
+    "        for (var wi = 0; wi < historyPlays.length; wi++) {\n" +
+    "          var wp = historyPlays[wi];\n" +
+    "          if (wp.playedAt > pNow) continue;\n" +
+    "          if (pStart !== null && wp.playedAt < pStart) continue;\n" +
+    "          var wms = (typeof wp.msPlayed === 'number') ? wp.msPlayed : wp.durationMs;\n" +
+    "          if (!(wms >= 30000)) continue;\n" +
+    "          if (!wp.uri || wp.uri.indexOf('spotify:track:') !== 0) continue;\n" +
+    "          win.push(wp);\n" +
+    "        }\n" +
+    "        win.sort(function(a, b) { return b.playedAt - a.playedAt || (a.uri < b.uri ? -1 : 1); });\n" +
+    "        var ix0 = 0;\n" +
+    "        if (pCur) { for (var ci = 0; ci < win.length; ci++) { if ((win[ci].uri + '@' + win[ci].playedAt) === pCur) { ix0 = ci + 1; break; } } }\n" +
+    "        var slice = win.slice(ix0, ix0 + pLim);\n" +
+    "        var nxt = (ix0 + pLim < win.length && slice.length > 0) ? (slice[slice.length - 1].uri + '@' + slice[slice.length - 1].playedAt) : null;\n" +
+    "        return { items: slice, nextCursor: nxt, total: win.length };\n" +
+    "      }\n" +
       "      case 'read_history_file': {\n" +
     "        var perErr = window.__MOCK_FILE_ERRORS__;\n" +
     "        if (perErr && args.path && perErr[args.path]) throw new Error(perErr[args.path]);\n" +
@@ -237,6 +281,7 @@ function buildInitScript(
     "      case 'import_history': {\n" +
     "        var rows = args.rows || [];\n" +
     "        var seenImp = {};\n" +
+    "        for (var hi = 0; hi < historyPlays.length; hi++) { seenImp[historyPlays[hi].uri + '@' + historyPlays[hi].playedAt] = 1; }\n" +
     "        var kept = 0; var dShort = 0; var dSkip = 0; var dNoUri = 0; var dDup = 0; var dInv = 0;\n" +
     "        for (var ri = 0; ri < rows.length; ri++) {\n" +
     "          var r = rows[ri];\n" +
@@ -246,15 +291,15 @@ function buildInitScript(
     "          var ms = typeof r.ms_played === 'number' ? r.ms_played : (typeof r.msPlayed === 'number' ? r.msPlayed : (typeof r.durationMs === 'number' ? r.durationMs : null));\n" +
     "          if (!isFinite(ts) || ts <= 0 || ms === null || ms < 0 || ts > Date.now()) { dInv += 1; continue; }\n" +
     "          var uri = (r.spotify_track_uri || r.uri || '').trim();\n" +
-    "          if (!uri) { dNoUri += 1; continue; }\n" +
+    "          if (!uri || uri.indexOf('spotify:track:') !== 0) { dNoUri += 1; continue; }\n" +
     "          if (ms < 30000) { dShort += 1; continue; }\n" +
-    "          var re = (r.reason_end || r.reasonEnd || '').trim();\n" +
-    "          if (r.skipped === true || re === 'fwdbtn') { dSkip += 1; continue; }\n" +
     "          var k = uri + '@' + ts;\n" +
     "          if (seenImp[k]) { dDup += 1; continue; }\n" +
     "          seenImp[k] = 1; kept += 1;\n" +
-    "          historyPlays.push({ trackId: uri.split(':').pop() || uri, trackName: r.master_metadata_track_name || r.trackName || 'Unknown', artists: r.master_metadata_album_artist_name || r.artists || '', playedAt: ts, image: null, uri: uri, durationMs: ms, msPlayed: ms, skipped: false, source: 'imported' });\n" +
+    "          var skippedFlag = (r.skipped === true) || ((r.reason_end || r.reasonEnd || '').trim() === 'fwdbtn');\n" +
+    "          historyPlays.push({ trackId: uri.split(':').pop() || uri, trackName: r.master_metadata_track_name || r.trackName || 'Unknown', artists: r.master_metadata_album_artist_name || r.artists || '', playedAt: ts, image: null, uri: uri, durationMs: ms, msPlayed: ms, skipped: !!skippedFlag, albumName: r.master_metadata_album_album_name || r.albumName || '', album: r.master_metadata_album_album_name || r.albumName || '', source: 'imported' });\n" +
     "        }\n" +
+    "        historyPlays.sort(function(a, b) { return b.playedAt - a.playedAt || (a.uri < b.uri ? -1 : 1); });\n" +
     "        if (kept > 0) { historyImported = true; if (historyRanges.indexOf('mock-import') === -1) historyRanges.push('mock-import'); }\n" +
     "        return { total: rows.length, kept: kept, droppedShort: dShort, droppedSkipped: dSkip, droppedNoUri: dNoUri, droppedDuplicate: dDup, droppedInvalid: dInv };\n" +
     "      }\n" +
@@ -263,12 +308,11 @@ function buildInitScript(
     "        var puri = (pl.uri || '').trim();\n" +
     "        var patRaw = pl.playedAt;\n" +
     "        var pat = (typeof patRaw === 'string' && /^\\d+$/.test(String(patRaw).trim())) ? Number(String(patRaw).trim()) : Number(patRaw);\n" +
-    "        if (!puri) return { reason: 'no-uri' };\n" +
+    "        if (!puri || puri.indexOf('spotify:track:') !== 0) return { reason: 'no-uri' };\n" +
     "        if (!isFinite(pat) || pat <= 0) return { reason: 'invalid' };\n" +
     "        if (pat > Date.now()) return { reason: 'future' };\n" +
     "        var pms = typeof pl.msPlayed === 'number' ? pl.msPlayed : (typeof pl.durationMs === 'number' ? pl.durationMs : 0);\n" +
     "        if (pms < 30000) return { reason: 'short' };\n" +
-    "        if (pl.skipped === true) return { reason: 'skipped' };\n" +
     "        var pk = puri + '@' + pat;\n" +
     "        if (historySeen[pk]) return { reason: 'duplicate' };\n" +
     "        historySeen[pk] = 1;\n" +
@@ -350,6 +394,17 @@ function buildInitScript(
   );
 }
 
+/** Seed localStorage before boot without failing in private mode. */
+export async function seedStorage(page: Page, entries: Record<string, string>): Promise<void> {
+  await page.addInitScript((seed) => {
+    try {
+      for (const [k, v] of Object.entries(seed as Record<string, string>)) localStorage.setItem(k, v);
+    } catch {
+      /* private mode: prefs last the session */
+    }
+  }, entries);
+}
+
 /**
  * Installs the Tauri v2 boundary stub (plus Spotify SDK + localStorage seeds)
  * so the real src/main.tsx -> src/App.tsx boots logged-in with fixtures.
@@ -367,10 +422,8 @@ export async function stubTauri(page: Page, opts: StubTauriOptions = {}): Promis
       opts.authStatus ?? null,
     ),
   );
-  // index.html references the real SDK tag; keep the suite hermetic by
-  // serving a stub that fires the ready callback. The injected
-  // <script data-spotify-sdk> tag from the init script does not survive HTML
-  // parsing, so the product's own loadScript() element takes this path.
+  // index.html references the real SDK tag; the suite stays hermetic via
+  // the route stub below, which fires the ready callback.
   await page.route(/sdk\.scdn\.co/, (route) =>
     route.fulfill({
       status: 200,

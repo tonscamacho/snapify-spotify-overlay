@@ -14,12 +14,16 @@ import {
   PROFILE_SHORT_TRACKS,
 } from "./fixtures";
 
+// Live-width dock clearance (resolution matrix): at the default 1280x720
+// harness viewport the live dock is 140..1140, so a y24 seed sits under it
+// (the old 1920-ref 460..1460 left 24..444 just clear by 16px). Seed below
+// the band (y96) so boot is idempotent and no pane/dock overlap is possible.
 const PROFILE_LAYOUT = {
   version: 3,
   preset: "custom",
   panes: [
-    { id: "profile", type: "profile", x: 24, y: 24, w: 420, h: 560, opacity: 0.92, visible: true, z: 1 },
-    { id: "player", type: "player", x: 456, y: 24, w: 340, h: 230, opacity: 0.92, visible: true, z: 2 },
+    { id: "profile", type: "profile", x: 24, y: 96, w: 420, h: 560, opacity: 0.92, visible: true, z: 1 },
+    { id: "player", type: "player", x: 456, y: 96, w: 340, h: 230, opacity: 0.92, visible: true, z: 2 },
   ],
 };
 
@@ -41,6 +45,37 @@ async function paneBox(page: Page, pane: string) {
 async function selectRangeMenu(profile: ReturnType<Page["locator"]>, value: string) {
   await profile.locator(".range-btn").click();
   await profile.locator(`[role="option"][data-value="${value}"]`).click();
+}
+
+/** Real-hover a clock wedge at its geometric midpoint (a thin wedge's
+ *  box center can fall off the sliver). Centers the chart first so pane
+ *  chrome never covers the point. */
+async function hoverClockWedge(
+  page: Page,
+  profile: ReturnType<Page["locator"]>,
+  clock: "streams" | "minutes",
+  hour: string,
+) {
+  const chart = profile.locator(`[data-clock="${clock}"]`);
+  await chart.evaluate((el) => el.scrollIntoView({ block: "center" }));
+  const pt = await chart.locator(`[data-hour="${hour}"]`).evaluate((el) => {
+    const path = el as unknown as SVGPathElement;
+    const svg = path.ownerSVGElement;
+    if (!svg) throw new Error("wedge has no svg");
+    const rect = svg.getBoundingClientRect();
+    const h = Number(path.getAttribute("data-hour") ?? "0");
+    const mid = ((-90 + (h + 0.5) * 15) * Math.PI) / 180;
+    // Every wedge spans radially from the R_IN hole (30) outward, so the
+    // baseline mid-ring (31) is always on the fill, however thin.
+    const rr = 31;
+    const scale = rect.width / 200;
+    return {
+      x: rect.x + (100 + rr * Math.cos(mid)) * scale,
+      y: rect.y + (100 + rr * Math.sin(mid)) * scale,
+    };
+  });
+  await page.mouse.move(pt.x, pt.y);
+  return chart;
 }
 
 test("chip toggle hides and shows the profile pane", async ({ page }) => {
@@ -85,19 +120,33 @@ test("header, timeframe, tiles, genres, clocks, and grids render", async ({ page
   await expect(profile.getByText("14", { exact: true }).first()).toBeVisible();
   await expect(profile.getByText("indie", { exact: true }).first()).toBeVisible();
 
-  // Genre strip derives from the short_term artists window.
+  // Genre strip follows the slice's most-streamed artists: Short Band One
+  // and Short Band Two each stream once in the 4W window, so indie weighs 1.
   await expect(profile.getByText("Top genres", { exact: true })).toBeVisible();
-  await expect(profile.getByText("indie · 2").first()).toBeVisible();
+  await expect(profile.getByText("indie · 1").first()).toBeVisible();
 
-  // Listening clocks: one AM dial + one PM dial, totals sum to the slice.
+  // Listening clocks: two 24-wedge radial coxcombs (streams + minutes
+  // streamed) sharing the slice buckets; each wedge carries its tooltip.
   await expect(profile.getByText("Listening clocks", { exact: true })).toBeVisible();
-  const dials = profile.getByRole("img", { name: /listening clock/ });
-  await expect(dials).toHaveCount(2);
-  const labels = await dials.evaluateAll((els) => els.map((el) => el.getAttribute("aria-label") ?? ""));
-  expect(labels.some((l) => l.startsWith("AM listening clock"))).toBe(true);
-  expect(labels.some((l) => l.startsWith("PM listening clock"))).toBe(true);
-  const total = labels.reduce((n, l) => n + Number(/(\d+) streams?/.exec(l)?.[1] ?? 0), 0);
-  expect(total).toBe(4);
+  await expect(profile.locator('[data-clock="streams"] [data-hour]')).toHaveCount(24);
+  await expect(profile.locator('[data-clock="minutes"] [data-hour]')).toHaveCount(24);
+  await expect(profile.getByText("streams", { exact: true })).toBeVisible();
+  await expect(profile.getByText("minutes streamed", { exact: true })).toBeVisible();
+  const streamsAria = profile.locator('[data-clock="streams"]');
+  await expect(streamsAria.locator("svg")).toHaveAttribute(
+    "aria-label",
+    /streams listening clock: 4 streams/,
+  );
+  // Hovering an hour wedge surfaces its tooltip copy (midpoint hover:
+  // a thin wedge's box center can fall off the sliver).
+  const streamsClock = await hoverClockWedge(page, profile, "streams", "0");
+  await expect(streamsClock.locator(".cox-tip")).toContainText(
+    /00:00 - 01:00: \d[\d,]* streams?/,
+  );
+  const minutesClock = await hoverClockWedge(page, profile, "minutes", "0");
+  await expect(minutesClock.locator(".cox-tip")).toContainText(
+    /00:00 - 01:00: \d[\d,]* minutes?/,
+  );
 
   // Grids: default range fetches short_term, so tops come from the 4W window.
   await expect(profile.getByText("Top songs", { exact: true })).toBeVisible();
@@ -227,7 +276,7 @@ test("toggle off/on restores the exact profile geometry", async ({ page }) => {
   await bootProfile(page);
   await page.getByRole("button", { name: "Dismiss shortcut hint" }).click();
   const before = await paneBox(page, "profile");
-  expect(before).toEqual({ x: 24, y: 24, w: 420, h: 560 });
+  expect(before).toEqual({ x: 24, y: 96, w: 420, h: 560 });
 
   const chip = page.getByTitle("Toggle Profile pane");
   await chip.click();
@@ -254,7 +303,7 @@ test("reload keeps the persisted profile geometry", async ({ page }) => {
 
   await stubTauri(page, { layout: JSON.parse(saved!) });
   await page.reload();
-  expect(await paneBox(page, "profile")).toEqual({ x: 24, y: 24, w: 420, h: 560 });
+  expect(await paneBox(page, "profile")).toEqual({ x: 24, y: 96, w: 420, h: 560 });
   await expect(page.locator('section[data-pane="player"]')).toHaveCount(0);
 });
 
@@ -300,6 +349,6 @@ test("collapse is header-only and the OS region tightens to the header", async (
   // Expand restores the full pane.
   await profile.getByRole("button", { name: "Expand Profile pane" }).click();
   await expect(profile).not.toHaveAttribute("data-collapsed", "true");
-  expect(await paneBox(page, "profile")).toEqual({ x: 24, y: 24, w: 420, h: 560 });
+  expect(await paneBox(page, "profile")).toEqual({ x: 24, y: 96, w: 420, h: 560 });
   await expect(profile.locator(".detail-head .detail-title")).toContainText(PROFILE_ME_NAME);
 });

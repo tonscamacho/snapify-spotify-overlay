@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   HISTORY_IMPORT_MAX_BYTES,
   HISTORY_MIN_MS,
+  HISTORY_PAGE_SIZE,
   HISTORY_STORE_CAP,
   HISTORY_STORE_VERSION,
+  buildHistoryIndex,
+  isTrackUri,
   mergeHistory,
+  pageHistoryPlays,
   parseExtendedHistory,
   sliceStoreRange,
   syncAppend,
+  syncAppendWithIndex,
   trimStoreToCap,
 } from "./history";
 import type { HistoryPlay } from "./history";
@@ -42,8 +47,16 @@ describe("history constants", () => {
     expect(HISTORY_IMPORT_MAX_BYTES).toBe(25 * 1024 * 1024);
   });
 
-  it("pins the 50k store cap so the pane can never grow without bound", () => {
+  it("keeps the legacy 50k cap export but never trims (paging bounds the UI)", () => {
     expect(HISTORY_STORE_CAP).toBe(50_000);
+    expect(HISTORY_PAGE_SIZE).toBe(100);
+  });
+
+  it("gates countable URIs to spotify:track: (podcasts drop as no-uri)", () => {
+    expect(isTrackUri("spotify:track:abc")).toBe(true);
+    expect(isTrackUri("spotify:episode:abc")).toBe(false);
+    expect(isTrackUri("spotify:show:abc")).toBe(false);
+    expect(isTrackUri("")).toBe(false);
   });
 });
 
@@ -70,6 +83,7 @@ describe("parseExtendedHistory", () => {
         durationMs: 200000,
         msPlayed: 200000,
         skipped: false,
+        albumName: "Album A",
         source: "imported",
       },
     ]);
@@ -101,28 +115,68 @@ describe("parseExtendedHistory", () => {
     });
   });
 
-  it("drops short, skipped, forward-button, and empty-uri rows into their own buckets", () => {
+  it("keeps skipped-long/fwdbtn-long and drops only short/podcast/no-uri", () => {
     const { plays, counts } = parseExtendedHistory(
       [
         endsong({ spotify_track_uri: "spotify:track:keep", ms_played: 200000, ts: "2024-07-01T01:00:00.000Z" }),
         endsong({ spotify_track_uri: "spotify:track:short", ms_played: 29999 }),
-        endsong({ spotify_track_uri: "spotify:track:skipped", skipped: true }),
-        endsong({ spotify_track_uri: "spotify:track:fwd", reason_end: "fwdbtn", skipped: false }),
+        endsong({ spotify_track_uri: "spotify:track:skipped-long", skipped: true, ms_played: 200000 }),
+        endsong({ spotify_track_uri: "spotify:track:fwd-long", reason_end: "fwdbtn", skipped: false, ms_played: 200000, ts: "2024-07-01T01:00:01.000Z" }),
+        endsong({ spotify_track_uri: "spotify:track:skipped-short", skipped: true, ms_played: 10000 }),
         endsong({ spotify_track_uri: "" }),
+        endsong({ spotify_track_uri: "spotify:episode:pod1", ms_played: 200000 }),
         endsong({ spotify_track_uri: "spotify:track:exact", ms_played: 30000 }),
       ],
       NOW,
     );
     expect(counts).toEqual({
-      total: 6,
-      kept: 2,
-      droppedShort: 1,
-      droppedSkipped: 2,
-      droppedNoUri: 1,
+      total: 8,
+      kept: 4,
+      droppedShort: 2,
+      droppedSkipped: 0,
+      droppedNoUri: 2,
       droppedDuplicate: 0,
       droppedInvalid: 0,
     });
-    expect(plays.map((p) => p.uri)).toEqual(["spotify:track:keep", "spotify:track:exact"]);
+    expect(plays.map((p) => p.uri).sort()).toEqual(
+      ["spotify:track:exact", "spotify:track:fwd-long", "spotify:track:keep", "spotify:track:skipped-long"].sort(),
+    );
+    expect(plays.find((p) => p.uri === "spotify:track:skipped-long")?.skipped).toBe(true);
+  });
+
+  it("counts skipped-long rows (stats.fm parity) and drops skipped-short as short", () => {
+    const long = parseExtendedHistory([endsong({ spotify_track_uri: "spotify:track:sl", skipped: true, ms_played: 200000 })], NOW);
+    expect(long.counts.kept).toBe(1);
+    expect(long.counts.droppedSkipped).toBe(0);
+    expect(long.plays[0].skipped).toBe(true);
+    const short = parseExtendedHistory([endsong({ spotify_track_uri: "spotify:track:ss", skipped: true, ms_played: 5000 })], NOW);
+    expect(short.counts.kept).toBe(0);
+    expect(short.counts.droppedShort).toBe(1);
+  });
+
+  it("drops podcast/episode URIs as no-uri", () => {
+    const { counts, plays } = parseExtendedHistory([endsong({ spotify_track_uri: "spotify:episode:xyz", ms_played: 200000 })], NOW);
+    expect(counts.droppedNoUri).toBe(1);
+    expect(plays).toEqual([]);
+  });
+
+  it("keeps the import message math honest on stats.fm-scale proportions", () => {
+    // Synthetic 341182-row shape mirroring the wild report:
+    // old rule kept 191047; new rule keeps 191047 + 40561 skipped-long.
+    // Build a 1000-row miniature with the same bucket ratios and assert
+    // kept + dropped* == total plus the kept lift equals skipped-long.
+    const rows: Record<string, unknown>[] = [];
+    for (let i = 0; i < 560; i++) rows.push(endsong({ spotify_track_uri: `spotify:track:keep-${i}`, ts: new Date(T1 + i * 1000).toISOString(), ms_played: 200000 }));
+    for (let i = 0; i < 319; i++) rows.push(endsong({ spotify_track_uri: `spotify:track:short-${i}`, ts: new Date(T1 + i * 1000).toISOString(), ms_played: 10000 }));
+    for (let i = 0; i < 119; i++) rows.push(endsong({ spotify_track_uri: `spotify:track:skip-${i}`, ts: new Date(T1 + (560 + i) * 1000).toISOString(), ms_played: 200000, skipped: true }));
+    rows.push(endsong({ spotify_track_uri: "" }));
+    rows.push(endsong({ spotify_track_uri: "spotify:track:keep-0", ts: new Date(T1).toISOString(), ms_played: 200000 }));
+    const { counts } = parseExtendedHistory(rows, NOW);
+    expect(counts.total).toBe(1000);
+    expect(counts.kept + counts.droppedShort + counts.droppedSkipped + counts.droppedNoUri + counts.droppedDuplicate + counts.droppedInvalid).toBe(1000);
+    expect(counts.kept).toBe(560 + 119);
+    expect(counts.droppedDuplicate).toBe(1);
+    expect(counts.droppedSkipped).toBe(0);
   });
 
   it("counts garbage rows as invalid and never throws", () => {
@@ -262,7 +316,7 @@ describe("mergeHistory", () => {
     expect(mergeHistory("nope", 42).version).toBe(1);
   });
 
-  it("trims to the store cap newest first, evicting the oldest rows", () => {
+  it("grows trim-free newest first (cap removed, paging bounds the UI)", () => {
     const plays: HistoryPlay[] = Array.from({ length: HISTORY_STORE_CAP + 500 }, (_, i) => ({
       trackId: `t${i}`,
       trackName: `Song ${i}`,
@@ -276,13 +330,12 @@ describe("mergeHistory", () => {
       source: "imported" as const,
     }));
     const merged = mergeHistory([], plays);
-    expect(merged.plays).toHaveLength(HISTORY_STORE_CAP);
-    // Newest survives, oldest evicted.
+    expect(merged.plays).toHaveLength(HISTORY_STORE_CAP + 500);
     expect(merged.plays[0].playedAt).toBe(T1 + (HISTORY_STORE_CAP + 499) * 1000);
-    expect(merged.plays[merged.plays.length - 1].playedAt).toBe(T1 + 500 * 1000);
+    expect(merged.plays[merged.plays.length - 1].playedAt).toBe(T1);
   });
 
-  it("leaves small stores untouched", () => {
+  it("leaves small stores untouched and trim is identity", () => {
     const plays: HistoryPlay[] = [
       {
         trackId: "a",
@@ -298,6 +351,7 @@ describe("mergeHistory", () => {
       },
     ];
     expect(trimStoreToCap(plays)).toHaveLength(1);
+    expect(trimStoreToCap(Array.from({ length: HISTORY_STORE_CAP + 10 }, (_, i) => ({ ...plays[0], uri: `spotify:track:t${i}`, playedAt: T1 + i })))).toHaveLength(HISTORY_STORE_CAP + 10);
     expect(mergeHistory([], plays).plays).toHaveLength(1);
   });
 });
@@ -374,12 +428,14 @@ describe("syncAppend", () => {
     expect(store.version).toBe(1);
   });
 
-  it("refuses duplicates, short, skipped, missing-uri, future, and invalid listens", () => {
+  it("appends skipped-long, refuses short/podcast/missing-uri/future/invalid", () => {
     const base = { version: 1 as const, plays: [listen()], importedRanges: [] };
     expect(syncAppend(base, listen(), NOW).event.reason).toBe("duplicate");
     expect(syncAppend(base, listen({ uri: "spotify:track:new", playedAt: T3, msPlayed: 10000, durationMs: 10000 }), NOW).event.reason).toBe("short");
-    expect(syncAppend(base, listen({ uri: "spotify:track:new", playedAt: T3, skipped: true }), NOW).event.reason).toBe("skipped");
+    expect(syncAppend(base, listen({ uri: "spotify:track:new", playedAt: T3, skipped: true, msPlayed: 200000, durationMs: 200000 }), NOW).event.reason).toBe("appended");
+    expect(syncAppend(base, listen({ uri: "spotify:track:short-skip", playedAt: T3, skipped: true, msPlayed: 5000, durationMs: 5000 }), NOW).event.reason).toBe("short");
     expect(syncAppend(base, { ...listen(), uri: "" }, NOW).event.reason).toBe("no-uri");
+    expect(syncAppend(base, listen({ uri: "spotify:episode:pod1", playedAt: T3 }), NOW).event.reason).toBe("no-uri");
     expect(syncAppend(base, listen({ uri: "spotify:track:new", playedAt: NOW + 5000 }), NOW).event.reason).toBe("future");
     expect(syncAppend(base, null, NOW).event.reason).toBe("invalid");
     expect(syncAppend(base, listen(), NOW).store.plays).toHaveLength(1);
@@ -392,7 +448,7 @@ describe("syncAppend", () => {
     expect(plays).toEqual([]);
   });
 
-  it("caps a full store: the oldest row evicts to admit the new listen", () => {
+  it("grows a full store without evicting (cap removed)", () => {
     const plays: HistoryPlay[] = Array.from({ length: HISTORY_STORE_CAP }, (_, i) => ({
       trackId: `t${i}`,
       trackName: `Song ${i}`,
@@ -409,10 +465,53 @@ describe("syncAppend", () => {
     const fresh = listen({ uri: "spotify:track:newest", trackId: "newest", playedAt: NOW });
     const { store, event } = syncAppend(base, fresh, NOW);
     expect(event.reason).toBe("appended");
-    expect(store.plays).toHaveLength(HISTORY_STORE_CAP);
+    expect(store.plays).toHaveLength(HISTORY_STORE_CAP + 1);
     expect(store.plays[0].uri).toBe("spotify:track:newest");
-    // The input store is untouched and the oldest row is gone.
     expect(base.plays).toHaveLength(HISTORY_STORE_CAP);
-    expect(store.plays.some((p) => p.uri === "spotify:track:t0")).toBe(false);
+    expect(store.plays.some((p) => p.uri === "spotify:track:t0")).toBe(true);
+  });
+
+  it("probes an index set for O(1)-ish dedupe without rescanning", () => {
+    const base = { version: 1 as const, plays: [{ trackId: "aaa", trackName: "Song One", artists: "Band A", playedAt: T2, image: null, uri: "spotify:track:aaa", durationMs: 200000, msPlayed: 200000, skipped: false, source: "api" as const }], importedRanges: [] as string[] };
+    const index = buildHistoryIndex(base.plays);
+    expect(index.has("spotify:track:aaa@" + String(T2))).toBe(true);
+    const dup = { trackId: "aaa", trackName: "Song One", artists: "Band A", playedAt: T2, image: null, uri: "spotify:track:aaa", durationMs: 200000, msPlayed: 200000, skipped: false, source: "api" as const };
+    expect(syncAppendWithIndex(base, dup, index, NOW).event.reason).toBe("duplicate");
+    const fresh = { trackId: "new", trackName: "New", artists: "Band A", playedAt: T3, image: null, uri: "spotify:track:new", durationMs: 200000, msPlayed: 200000, skipped: false, source: "api" as const };
+    const res = syncAppendWithIndex(base, fresh, index, NOW);
+    expect(res.event.reason).toBe("appended");
+    expect(index.has("spotify:track:new@" + String(T3))).toBe(true);
+  });
+});
+
+describe("pageHistoryPlays", () => {
+  function play(uri: string, playedAt: number): HistoryPlay {
+    return {
+      trackId: uri.split(":")[2] ?? uri,
+      trackName: uri,
+      artists: "A",
+      playedAt,
+      image: null,
+      uri,
+      durationMs: 200000,
+      msPlayed: 200000,
+      skipped: false,
+      source: "imported",
+    };
+  }
+
+  it("pages 100-row windows with cursor and honest total (memory bounded)", () => {
+    const plays: HistoryPlay[] = Array.from({ length: 250 }, (_, i) => play(`spotify:track:t${i}`, T1 + i * 1000)).sort((a, b) => b.playedAt - a.playedAt);
+    const p1 = pageHistoryPlays(plays, {});
+    expect(p1.total).toBe(250);
+    expect(p1.items).toHaveLength(100);
+    expect(p1.nextCursor).not.toBeNull();
+    const p2 = pageHistoryPlays(plays, { cursor: p1.nextCursor, limit: 100 });
+    expect(p2.items).toHaveLength(100);
+    const p3 = pageHistoryPlays(plays, { cursor: p2.nextCursor, limit: 100 });
+    expect(p3.items).toHaveLength(50);
+    expect(p3.nextCursor).toBeNull();
+    const keys = [...p1.items, ...p2.items, ...p3.items].map((p) => `${p.uri}@${p.playedAt}`);
+    expect(new Set(keys).size).toBe(250);
   });
 });

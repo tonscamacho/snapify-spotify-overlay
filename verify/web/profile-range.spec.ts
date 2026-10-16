@@ -205,6 +205,8 @@ test("empty tops and recents render honest empty states", async ({ page }) => {
   await expect(profile.getByText("No top artists", { exact: true })).toBeVisible();
   await expect(profile.getByText("No top albums", { exact: true })).toBeVisible();
   await expect(profile.getByText("No recent streams", { exact: true })).toBeVisible();
+  // No tops and no streams means truly no genre data: the honest empty state.
+  await expect(profile.getByText("No genres yet.", { exact: true })).toBeVisible();
   // The header still renders: only the lists are empty.
   await expect(profile.locator(".detail-head .detail-title")).toContainText(PROFILE_ME_NAME);
   await page.screenshot({ path: "verify/web/test-results/profile-empty.png" });
