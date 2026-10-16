@@ -210,8 +210,27 @@ fn frame_offset(win: &tauri::WebviewWindow) -> (f64, f64) {
     }
 }
 
-/// Path of the single backup copy kept next to a persisted JSON file:
-/// `<name>.json` -> `<name>.json.bak`.
+/// Window-level placement math (pure: no live Tauri needed).
+///
+/// The overlay window must cover the monitor work area. The config's
+/// restored rect is 1280x800, so on a 1920x1080 monitor a non-maximized
+/// window misplaces the whole surface even though every pane renders.
+pub(crate) fn window_covers_monitor(win_w: u32, win_h: u32, mon_w: u32, mon_h: u32) -> bool {
+    win_w >= mon_w && win_h >= mon_h
+}
+
+/// CSS/logical px -> physical px at the live scale factor. Tauri window
+/// sizes are logical (DPI-virtualized): at 125% OS scale a 1280-logical
+/// restored window already spans 1600 physical px, so a restored rect
+/// covers a different physical area than its numbers suggest. Maximizing
+/// sidesteps the whole mapping by filling the monitor's work area.
+pub(crate) fn logical_to_physical(logical_px: f64, scale: f64) -> Option<f64> {
+    if !(logical_px.is_finite() && scale.is_finite() && scale > 0.0) {
+        return None;
+    }
+    Some(logical_px * scale)
+}
+
 pub(crate) fn backup_path_for(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(".bak");
@@ -311,9 +330,6 @@ static BOOT_INSTANT: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLo
 static FIRST_REPORT_ONCE: std::sync::Once = std::sync::Once::new();
 static WINDOW_LISTENERS_ONCE: std::sync::Once = std::sync::Once::new();
 
-/// Records process boot. Called once from `lib.rs run()` before the Tauri
-/// event loop starts; the elapsed time is logged on the first overlay
-/// report (see `note_first_report`).
 pub fn note_boot() {
     let _ = BOOT_INSTANT.set(std::time::Instant::now());
 }
@@ -489,7 +505,6 @@ fn sanitize_regions(regions: Vec<OverlayRect>) -> Vec<OverlayRect> {
                 && r.y.is_finite()
         })
         .map(|mut r| {
-            // Sanitize pill radius: non-finite/negative becomes square.
             if !(r.radius.is_finite() && r.radius >= 0.0) {
                 r.radius = 0.0;
             }
@@ -573,8 +588,9 @@ pub fn set_overlay_regions(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_signature, atomic_write_json, backup_path_for, phys_rects, phys_regions,
-        radius_ellipse, read_json_guarded, sanitize_regions,
+        apply_signature, atomic_write_json, backup_path_for, logical_to_physical,
+        phys_rects, phys_regions, radius_ellipse, read_json_guarded, sanitize_regions,
+        window_covers_monitor,
     };
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -900,6 +916,128 @@ mod tests {
             })
             .collect();
         assert_eq!(sanitize_regions(regions).len(), super::MAX_REGIONS);
+    }
+
+    #[test]
+    fn window_config_is_maximized_transparent_overlay() {
+        // Window-level regression lock for the 1080p misplacement report:
+        // the overlay must be a maximized (not fullscreen) transparent
+        // always-on-top surface, centered at boot so a restored rect never
+        // cascades off the 1920x1080 work area. Panes render against the
+        // full work area, so any flag drift here misplaces the whole window
+        // while in-window geometry still looks right.
+        let raw = include_str!("../tauri.conf.json");
+        let cfg: serde_json::Value =
+            serde_json::from_str(raw).expect("tauri.conf.json parses");
+        let win = cfg
+            .pointer("/app/windows/0")
+            .expect("main window block exists");
+        assert_eq!(win["maximized"], true, "must start maximized");
+        assert_eq!(win["fullscreen"], false, "exclusive fullscreen hides games");
+        assert_eq!(win["transparent"], true, "game shows through gaps");
+        assert_eq!(win["decorations"], false, "frameless chromeless overlay");
+        assert_eq!(win["alwaysOnTop"], true, "pins over the game");
+        assert_eq!(win["center"], true, "boot lands on the current monitor");
+        assert_eq!(win["maximizable"], true, "maximize must be allowed");
+        assert_eq!(win["focus"], false, "boot must not steal the game");
+        assert_eq!(win["visible"], true, "first paint is visible");
+        // Restored-rect fallback survives only as a fallback: maximize owns
+        // placement, so these numbers must stay smaller than 1080p (a
+        // restored window is never the placement strategy).
+        let w = win["width"].as_u64().expect("width present");
+        let h = win["height"].as_u64().expect("height present");
+        assert!(w < 1920 && h < 1080, "restored rect stays a fallback");
+    }
+
+    #[test]
+    fn restored_1280x800_does_not_cover_1080p() {
+        // The exact reported failure: config restored rect 1280x800 on a
+        // 1920x1080 monitor. Panes at x=1440+ render (in-window geometry
+        // is fine) but the whole window is misplaced until maximized.
+        assert!(!window_covers_monitor(1280, 800, 1920, 1080));
+        // A maximized work-area fill does cover it (taskbar may shave the
+        // height: width is the binding constraint on 1080p).
+        assert!(window_covers_monitor(1920, 1080, 1920, 1080));
+        assert!(window_covers_monitor(1920, 1040, 1920, 1040));
+        assert!(!window_covers_monitor(1920, 1040, 1920, 1080));
+    }
+
+    #[test]
+    fn dpr_virtualization_shifts_the_restored_rect() {
+        // DPI virtualization cause: Tauri sizes are logical, so the same
+        // 1280x800 restored rect spans different physical pixels per OS
+        // scale. Maximizing sidesteps the mapping entirely.
+        assert_eq!(logical_to_physical(1920.0, 1.0), Some(1920.0));
+        assert_eq!(logical_to_physical(1536.0, 1.25), Some(1920.0));
+        assert_eq!(logical_to_physical(1280.0, 1.5), Some(1920.0));
+        // A 1920-logical window at 125% would overshoot to 2400 physical
+        // px: only maximize (not an explicit size) tracks the monitor.
+        assert_eq!(logical_to_physical(1920.0, 1.25), Some(2400.0));
+        assert_eq!(logical_to_physical(1280.0, 0.0), None);
+        assert_eq!(logical_to_physical(f64::NAN, 1.0), None);
+    }
+
+    #[test]
+    fn maximized_is_work_area_not_exclusive_fullscreen() {
+        // Taskbar/work-area cause: `maximized:true + fullscreen:false` fills
+        // the work area (taskbar excluded) instead of going exclusive
+        // fullscreen under/over the taskbar. A 40px taskbar leaves
+        // 1920x1040: still wider than any restored rect, narrower than
+        // fullscreen — the only correct combo for a game overlay.
+        let (full_w, full_h) = (1920u32, 1080u32);
+        let (work_w, work_h) = (1920u32, 1040u32);
+        assert!(work_w <= full_w && work_h < full_h);
+        assert!(!window_covers_monitor(1280, 800, work_w, work_h));
+        assert!(window_covers_monitor(work_w, work_h, work_w, work_h));
+    }
+
+    #[test]
+    fn maximized_covers_every_matrix_monitor() {
+        // Resolution-matrix follow-up: the maximized fill must cover the
+        // work area on laptop, QHD, 4K, ultrawide, and portrait stages, not
+        // just 1080p. The restored 1280x800 rect covers none of them.
+        for &(win_w, win_h, mon_w, mon_h) in [
+            (1366u32, 768u32, 1366u32, 768u32),
+            (1920, 1080, 1920, 1080),
+            (2560, 1440, 2560, 1440),
+            (3840, 2160, 3840, 2160),
+            (3440, 1440, 3440, 1440),
+            (1080, 1920, 1080, 1920),
+        ]
+        .iter()
+        {
+            assert!(
+                window_covers_monitor(win_w, win_h, mon_w, mon_h),
+                "maximized {win_w}x{win_h} must cover {mon_w}x{mon_h}"
+            );
+            assert!(
+                !window_covers_monitor(1280, 800, mon_w, mon_h)
+                    || (mon_w <= 1280 && mon_h <= 800),
+                "restored 1280x800 must not cover {mon_w}x{mon_h}"
+            );
+        }
+        // Work-area shave (40px taskbar) still covers on 1080p and QHD.
+        assert!(window_covers_monitor(1920, 1040, 1920, 1040));
+        assert!(window_covers_monitor(2560, 1400, 2560, 1400));
+        assert!(!window_covers_monitor(1920, 1040, 1920, 1080));
+    }
+
+    #[test]
+    fn dpr_matrix_maps_logical_to_physical() {
+        // DPR arms of the matrix: 125%/150%/200% OS scale map the same
+        // logical restored rect to different physical spans. Maximizing
+        // sidesteps the mapping; the origin tag still re-applies on hops.
+        assert_eq!(logical_to_physical(1366.0, 1.0), Some(1366.0));
+        assert_eq!(logical_to_physical(1536.0, 1.25), Some(1920.0));
+        assert_eq!(logical_to_physical(1280.0, 1.5), Some(1920.0));
+        assert_eq!(logical_to_physical(1920.0, 1.25), Some(2400.0));
+        assert_eq!(logical_to_physical(2560.0, 1.0), Some(2560.0));
+        assert_eq!(logical_to_physical(1728.0, 1.25), Some(2160.0));
+        assert_eq!(logical_to_physical(1920.0, 2.0), Some(3840.0));
+        assert_eq!(logical_to_physical(3440.0, 1.0), Some(3440.0));
+        assert_eq!(logical_to_physical(1080.0, 1.0), Some(1080.0));
+        assert_eq!(logical_to_physical(1080.0, 0.0), None);
+        assert_eq!(logical_to_physical(f64::NAN, 1.25), None);
     }
 
     #[test]

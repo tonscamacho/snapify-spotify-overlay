@@ -29,7 +29,7 @@ import {
   XIcon,
 } from "./components/icons";
 import { api, isSessionDead, parsePlayer, toThrottleError } from "./lib/spotify";
-import { HISTORY_MIN_MS, emptyStore, syncAppend } from "./lib/history";
+import { HISTORY_MIN_MS, buildHistoryIndex, emptyStore, syncAppendWithIndex } from "./lib/history";
 import { ActionGate, PendingQueue, flushDelayMs, shiftQueueForNext } from "./lib/pendingQueue";
 import { currentOverlayEpoch, reportOverlayMode, reportOverlayRegions, setOverlayDragCover, watchRegionElementSizes } from "./lib/overlay";
 import { ensurePlayer, isSdkReady, sdkPause, sdkResume, setSdkVolume } from "./lib/player-sdk";
@@ -59,6 +59,7 @@ import {
   defaultSceneLayout,
   defaultSceneLayoutFor,
   getPaneMin,
+  healPanesForDockForWidth,
   isCompactPane,
   loadNotchHover,
   loadSceneLayout,
@@ -389,7 +390,6 @@ export default function App() {
       if (next === "") localStorage.removeItem(OVERLAY_COLOR_KEY);
       else localStorage.setItem(OVERLAY_COLOR_KEY, next);
     } catch {
-      // Private mode. Choice lasts the session.
     }
   }, []);
   const [autostart, setAutostart] = useState(false);
@@ -408,9 +408,13 @@ export default function App() {
   const trackIdRef = useRef<string | null>(null);
   const snapRef = useRef<PlayerSnapshot>(EMPTY_SNAP);
   const uiScaleRef = useRef(uiScale);
-  // Local history mirror for the poll sync hook. Pure syncAppend keeps it
-  // idempotent on uri+playedAt; only appended rows hit append_listen_cmd.
+  // Local history mirror for the poll sync hook. `syncAppendWithIndex`
+  // keeps it idempotent on uri@playedAt via an O(1) index set (no full
+  // clone+scan per 5s poll); only appended rows hit append_listen_cmd.
+  // The full Rust store stays normalized (tracks + compact plays) and
+  // the pane pages (100/page) so no cap evicts lifetime truth.
   const historyStoreRef = useRef(emptyStore());
+  const historyIndexRef = useRef<Set<string>>(new Set());
   // Track-start anchor per uri: first-seen wall time plus the quantized
   // start estimate. PlayedAt stays fixed for one play so poll jitter
   // cannot mint duplicates; heard time gates the append.
@@ -444,7 +448,6 @@ export default function App() {
     try {
       localStorage.setItem("snapify-ui-scale", String(next));
     } catch {
-      // Private mode. Choice lasts the session.
     }
   }, []);
 
@@ -633,7 +636,6 @@ export default function App() {
     try {
       localStorage.setItem("snapify-coach-dismissed", "1");
     } catch {
-      // Private mode. Dismissal lasts the session.
     }
   }, []);
 
@@ -792,7 +794,12 @@ export default function App() {
               skipped: false,
               source: "api" as const,
             };
-            const res = syncAppend(historyStoreRef.current, listen, nowMs);
+            // O(1)-ish poll: probe the index set, prepend without a full
+            // scan+sort; the set is seeded lazily on first append.
+            if (historyIndexRef.current.size === 0 && historyStoreRef.current.plays.length > 0) {
+              historyIndexRef.current = buildHistoryIndex(historyStoreRef.current.plays);
+            }
+            const res = syncAppendWithIndex(historyStoreRef.current, listen, historyIndexRef.current, nowMs);
             historyStoreRef.current = res.store;
             if (res.event.reason === "appended" && res.event.play) {
               void invoke("append_listen_cmd", { play: res.event.play }).catch(() => {});
@@ -949,8 +956,6 @@ export default function App() {
     },
     [snap.track],
   );
-
-  // Boot: layout, auth, listeners.
   useEffect(() => {
     const w = window.innerWidth || 1280;
     const hgt = window.innerHeight || 800;
@@ -969,10 +974,22 @@ export default function App() {
       hgt,
       uiScaleRef.current,
     );
-    setLayout(clamped.panes);
+    // Live-width dock clearance (resolution matrix): the load-time 1920-ref
+    // heal leaves probes under the live centered dock on any other width
+    // (1500,24 is legal at 1920 but under the dock at 2560/3440/3840, and a
+    // clamped 1006,24 is under it at 1366). Clamp-then-heal with the live
+    // width moves those to y96; the trailing clamp keeps deoverlap inside.
+    const healed = healPanesForDockForWidth(clamped.panes, w, uiScaleRef.current);
+    const final = clampLayoutToArea(
+      { version: 3, preset: slot.preset, panes: healed },
+      w,
+      hgt,
+      uiScaleRef.current,
+    );
+    setLayout(final.panes);
     setPreset(slot.preset);
     // Always re-save: clamps stick, and v3-sourced docs upgrade to v4.
-    persist(clamped.panes, slot.preset);
+    persist(final.panes, slot.preset);
     invoke<boolean>("autostart_state").then(setAutostart).catch(() => {});
     invoke<unknown>("get_keybinds")
       .then((raw) => {
@@ -1053,9 +1070,6 @@ export default function App() {
       document.removeEventListener("visibilitychange", onVis);
     };
   }, [loggedIn, snap.isPlaying, snap.empty, snap.deviceId, fetchPlayer]);
-
-  // Interpolation tick for progress and lyric sync. Runs only while playing
-  // and visible; paused/hidden costs nothing.
   useEffect(() => {
     if (!loggedIn || !snap.isPlaying) return;
     const t = window.setInterval(() => {
@@ -1142,7 +1156,6 @@ export default function App() {
       localStorage.setItem("snapify-interact", interactive ? "1" : "0");
       localStorage.setItem("snapify-edit", editing ? "1" : "0");
     } catch {
-      // Private mode. Prefs last the session.
     }
   }, [loggedIn, interactive, settingsOpen, editing]);
 
@@ -1164,6 +1177,9 @@ export default function App() {
       // A live drag owns geometry mid-gesture and already pins to the live
       // area; never fight it.
       if (dragRef.current) return;
+      // Previewing never persists: a resize mid-preview must not commit the
+      // preview arrangement (the preset tests pin this).
+      if (previewBaseRef.current) return;
       const k = uiScaleRef.current || 1;
       const cur = layoutRef.current;
       const next = clampLayoutToArea(
@@ -1294,7 +1310,6 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1309,8 +1324,8 @@ export default function App() {
   }, []);
 
   // Serialized transport: one in-flight slot. A second next/prev while one
-  // is pending is ignored; a seek queues the latest position only. The
-  // trailing fetchPlayer was removed: the next scheduled poll confirms.
+  // is pending is ignored; a seek queues the latest position only. A
+  // trailing fetchPlayer (plus the fast/confirm re-fetch pair) confirms.
   // PR3: throttled writes park in the pending queue (coalesced by key) and
   // flush once on cooldown end. The flush runner lives after `run` and is
   // reached indirectly through this ref to avoid a callback cycle.
@@ -3027,7 +3042,6 @@ export default function App() {
           try {
             localStorage.setItem("snapify-lyric-scale", String(next));
           } catch {
-            // Private mode. Choice lasts the session.
           }
         }}
         onDyslexia={(v) => {
@@ -3035,7 +3049,6 @@ export default function App() {
           try {
             localStorage.setItem("snapify-dyslexia", v ? "1" : "0");
           } catch {
-            // Private mode. Choice lasts the session.
           }
         }}
         onTheme={(v) => {
@@ -3043,7 +3056,6 @@ export default function App() {
           try {
             localStorage.setItem("snapify-theme", v);
           } catch {
-            // Private mode. Theme lasts the session.
           }
         }}
         onDensity={(v) => {
@@ -3051,7 +3063,6 @@ export default function App() {
           try {
             localStorage.setItem("snapify-density", v);
           } catch {
-            // Private mode. Density lasts the session.
           }
         }}
         onSurface={(v) => {
@@ -3059,7 +3070,6 @@ export default function App() {
           try {
             localStorage.setItem("snapify-surface", v);
           } catch {
-            // Private mode. Surface lasts the session.
           }
         }}
         onCorners={(v) => {
@@ -3067,7 +3077,6 @@ export default function App() {
           try {
             localStorage.setItem("snapify-corners", v);
           } catch {
-            // Private mode. Corners last the session.
           }
         }}
         onAutostart={(v) => {
@@ -3088,7 +3097,6 @@ export default function App() {
           try {
             localStorage.setItem("snapify-karaoke", v ? "1" : "0");
           } catch {
-            // Private mode. Choice lasts the session.
           }
         }}
         onTransLang={(v) => {
@@ -3096,7 +3104,6 @@ export default function App() {
           try {
             localStorage.setItem("snapify-translang", v);
           } catch {
-            // Private mode. Choice lasts the session.
           }
         }}
         onResetLayout={() => {

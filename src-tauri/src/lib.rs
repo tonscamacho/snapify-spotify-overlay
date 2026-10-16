@@ -16,6 +16,31 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
+/// Window-level placement for the overlay surface.
+///
+/// The overlay is a maximized transparent always-on-top window: panes are
+/// laid out against the full monitor work area (1920x1080 on a 1080p
+/// display). Tauri applies `maximized:true` at creation, but every runtime
+/// restore path (`show`/`unminimize` after hide, login gate, tray,
+/// single-instance) can leave the window in its restored 1280x800 rect at
+/// the OS cascade position — panes render, but the whole window is
+/// misplaced on the monitor.
+///
+/// Re-asserting placement is idempotent: `center` lands a cascaded restore
+/// on the current monitor, `maximize` fills that monitor's work area
+/// (taskbar excluded, `fullscreen:false` preserved so the game stays
+/// visible). Transparent / decorations / click-through behavior is
+/// untouched. Only call on a show/restore transition or boot; never on a
+/// bare mode flip (a redundant maximize flashes a maximized window).
+fn ensure_overlay_placement(win: &tauri::WebviewWindow) {
+    let _ = win.center();
+    // Skip the redundant WM round-trip while already maximized: each
+    // maximize restyles a maximized window and flashes the compositor.
+    if !win.is_maximized().unwrap_or(true) {
+        let _ = win.maximize();
+    }
+}
+
 fn toggle_interactive(app: &tauri::AppHandle) {
     // Never hide the window here. Hiding/showing a maximized always-on-top
     // transparent window drops exclusive-fullscreen games out of focus and
@@ -24,11 +49,8 @@ fn toggle_interactive(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         if !win.is_visible().unwrap_or(true) {
             let _ = win.show();
-            // Hidden-across-flip strand fix: apply_region early-returns while
-            // hidden, so a mode+regions flush stored while hidden never
-            // reached the OS. Re-apply on show so the fresh stored state
-            // (not the pre-hide region) is what becomes visible. Dedupes to
-            // a no-op when nothing changed while hidden.
+            ensure_overlay_placement(&win);
+            // Re-apply region stored while hidden (apply_region skips hidden windows).
             crate::overlay::apply_region(app);
         }
         // Deliberately no set_focus: focusing steals the game on every toggle.
@@ -43,7 +65,9 @@ fn toggle_visibility(app: &tauri::AppHandle) {
             let _ = win.hide();
         } else {
             let _ = win.show();
-            // Re-apply stranded hidden-flip state (see toggle_interactive).
+            // Re-assert maximized placement: a restored show leaves the
+            // 1280x800 rect misplaced on a 1080p monitor.
+            ensure_overlay_placement(&win);
             crate::overlay::apply_region(app);
             // Deliberately no set_focus: showing must not steal the game.
         }
@@ -51,9 +75,6 @@ fn toggle_visibility(app: &tauri::AppHandle) {
     }
 }
 
-/// Frontend command surface for `toggle_visibility`: dock, settings, tray,
-/// and the global hotkey all funnel through the same flip so the paths
-/// cannot drift. The frontend already invokes this name.
 #[tauri::command]
 fn toggle_visibility_cmd(app: tauri::AppHandle) {
     toggle_visibility(&app);
@@ -67,7 +88,7 @@ fn toggle_visibility_cmd(app: tauri::AppHandle) {
 fn show_window(app: tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
-        // Re-apply stranded hidden-flip state (see toggle_interactive).
+        ensure_overlay_placement(&win);
         crate::overlay::apply_region(&app);
         // Deliberately no set_focus: showing must not steal the game.
         let _ = app.emit("overlay-visibility-changed", true);
@@ -85,7 +106,7 @@ fn set_login_window(app: tauri::AppHandle, logged_out: bool) {
         if logged_out {
             let _ = win.set_always_on_top(false);
             let _ = win.show();
-            // Re-apply stranded hidden-flip state (see toggle_interactive).
+            ensure_overlay_placement(&win);
             crate::overlay::apply_region(&app);
             let _ = win.set_focus();
         } else {
@@ -129,7 +150,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             "open-settings" => {
                 if let Some(win) = app.get_webview_window("main") {
                     let _ = win.show();
-                    // Re-apply stranded hidden-flip state (see toggle_interactive).
+                    ensure_overlay_placement(&win);
                     crate::overlay::apply_region(app);
                     let _ = win.set_focus();
                 }
@@ -176,9 +197,6 @@ fn register_shortcuts(app: &tauri::AppHandle, map: &HashMap<String, String>) -> 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Boot instant for the boot-to-first-overlay-report timing log (the
-    // elapsed time prints from `overlay::set_overlay_mode/regions` on the
-    // first frontend report).
     overlay::note_boot();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -188,9 +206,11 @@ pub fn run() {
             // relaunch without a trace.
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
-                // Re-apply stranded hidden-flip state (see toggle_interactive).
                 crate::overlay::apply_region(app);
                 let _ = win.unminimize();
+                // A relaunch restore can unminimize into the restored
+                // 1280x800 rect: re-assert maximized placement before focus.
+                ensure_overlay_placement(&win);
                 let _ = win.set_focus();
             }
         }))
@@ -258,6 +278,16 @@ pub fn run() {
             // before the frontend effect runs.
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_ignore_cursor_events(true);
+                // Window-level placement: the config's `maximized:true`
+                // should already fill the monitor work area, but an OS
+                // cascade / restored rect (1280x800) still misplaces the
+                // whole window on a 1080p display. Re-assert center+maximize
+                // once at boot so first paint covers the work area.
+                // (`--minimized` hides just below; its restore paths
+                // re-assert placement on show.)
+                if !std::env::args().any(|a| a == "--minimized") {
+                    ensure_overlay_placement(&win);
+                }
                 // Phase 5 desktop frost deliberately deferred: this window is
                 // maximized and transparent so the game shows through the gaps.
                 // A window-wide Mica/Acrylic/Vibrancy effect would frost the
@@ -365,6 +395,7 @@ pub fn run() {
             history::import_history,
             history::get_history_stats,
             history::get_history_plays,
+            history::get_history_page,
             history::read_history_file,
             history::append_listen_cmd,
         ])

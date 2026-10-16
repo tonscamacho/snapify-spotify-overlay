@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { stubTauri, commandsNamed } from "./tauri-mock";
+import { STADIUM_CLAMP_DIVISOR } from "./geometry";
 import { TRACK_NAME } from "./fixtures";
 
 // Track B (2.5.1 window chrome) + Track E (2.5.4 see-through verdict): the
@@ -105,9 +106,7 @@ async function expectRadii(page, paneRadius: number) {
     expect(hit!.radius).toBe(paneRadius);
   }
   const dock = (last.regions ?? []).find((r) => r.h > 70 && r.h < 90);
-  // The pill reports its painted 999 px radius; Rust clamps any radius at
-  // or above half the box to the same stadium, so >= h/2 is the stadium.
-  if (dock) expect(dock.radius).toBeGreaterThanOrEqual(Math.round(dock.h / 2));
+  if (dock) expect(dock.radius).toBeGreaterThanOrEqual(Math.round(dock.h / STADIUM_CLAMP_DIVISOR));
 }
 
 for (const w of [280, 360]) {

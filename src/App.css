@@ -272,8 +272,6 @@ select:focus-visible,
   border-radius: 999px;
 }
 
-/* ---------- player ---------- */
-
 /* ---------- player card ---------- */
 
 .player-card {
@@ -1181,7 +1179,17 @@ select:focus-visible,
   flex-wrap: wrap;
   row-gap: 4px;
   column-gap: 4px;
-  max-width: min(94vw, 760px);
+  /* Single-row desktop pill: 15 dock children (7 tbtn + 6 pane chips +
+     2 seps) measure ~927 px intrinsic, so the old 760 px cap wrapped to a
+     760x78 two-row pill at 1920x1080. Two changes: width:max-content so
+     the centered pill (left:50% leaves only half the viewport as
+     shrink-to-fit space, which wrapped at 1366 wide before any cap) sizes
+     to its content, and the cap rises to 1000 px so one row holds at any
+     viewport >= 1280 px. Below ~986 px 94vw shrinks under the content and
+     the kept wrap degrades gracefully to two rows, while data-narrow /
+     short keep their nowrap scroll row. */
+  width: max-content;
+  max-width: min(94vw, 1000px);
   padding: 6px 10px;
   background: var(--surface);
   background-clip: padding-box;
@@ -3073,8 +3081,6 @@ select:focus-visible,
   transform: scale(0.97);
 }
 
-/* ---------- PR8: scenes, stream-safe, collapse, mini, banner ---------- */
-
 /* ---------- Track A: responsive tiers (400x300 → 1280x800, uiScale 0.85–1.30) ----------
    Compact tiers shed secondary chrome before titles clip. No new motion is
    added (transform/opacity only elsewhere), and the reduced-motion block
@@ -3602,4 +3608,90 @@ select:focus-visible,
 
 .range-listbox [role="option"][aria-selected="true"] {
   font-weight: 600;
+}
+
+/* Listening clocks: two 24-wedge radial coxcombs (streams + minutes).
+   Static SVG, token colors only; motion is an opacity-only hover/focus
+   transition (no keyframes). The charts paint no background so the
+   transparent-root + clipped-halo invariants hold in every theme and
+   on glass; the tooltip reuses the surface-2 halo treatment. */
+.listening-clocks {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 2px 0 8px;
+  min-width: 0;
+}
+
+.cox-chart {
+  position: relative;
+  min-width: 0;
+}
+
+.cox-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.cox-wedge {
+  fill: var(--signal);
+  transition: opacity var(--dur) var(--ease);
+}
+
+.cox-wedge:hover,
+.cox-wedge:focus-visible {
+  opacity: 0.65;
+}
+
+.cox-wedge:focus {
+  outline: none;
+}
+
+.cox-spoke {
+  stroke: var(--faint);
+  stroke-width: 1;
+  opacity: 0.45;
+}
+
+.cox-total {
+  fill: var(--txt);
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.cox-cap {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--faint);
+  text-align: center;
+  overflow-wrap: break-word;
+}
+
+.cox-tip {
+  position: absolute;
+  left: 50%;
+  top: 2px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 4px);
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  background-clip: padding-box;
+  border: 1px solid var(--stroke);
+  color: var(--txt);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
+  overflow-wrap: break-word;
+  pointer-events: none;
+  z-index: 3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cox-wedge {
+    transition: none;
+  }
 }

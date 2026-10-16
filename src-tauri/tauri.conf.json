@@ -20,6 +20,7 @@
         "minHeight": 300,
         "fullscreen": false,
         "maximized": true,
+        "center": true,
         "transparent": true,
         "decorations": false,
         "shadow": false,

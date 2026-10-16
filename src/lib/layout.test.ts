@@ -2,15 +2,24 @@ import { describe, expect, it } from "vitest";
 import {
   clampLayoutToArea,
   clampPaneToArea,
+  clearDockRow,
+  clearDockRowForWidth,
   clonePanes,
   DEFAULT_STREAM,
   defaultLayoutFor,
   defaultSceneLayout,
   defaultSceneLayoutFor,
   defaultScenes,
+  deoverlapPanes,
+  dockColumnFor,
+  dockColumnForWidth,
+  DOCK_CLEAR_Y,
+  DOCK_MAX_W,
   effectiveArea,
   getCompactPaneMin,
   getPaneMin,
+  healPanesForDock,
+  healPanesForDockForWidth,
   isCompactPane,
   LAYOUT_UNDO_DEPTH,
   loadSceneLayout,
@@ -503,6 +512,154 @@ describe("clampPaneToArea", () => {
   });
 });
 
+describe("dock-column survey (desktop single-row pill)", () => {
+  it("centers the capped dock column on the 1920 reference stage", () => {
+    // DOCK_MAX_W must track the .dock max-width cap in App.css: the
+    // 15-child dock measures ~927 px intrinsic, so the 1000 px cap holds
+    // one row with slack while staying narrower than any >=1280 px stage.
+    expect(DOCK_MAX_W).toBe(1000);
+    expect(DOCK_CLEAR_Y).toBe(96);
+    expect(dockColumnFor()).toEqual({ x: 460, w: 1000 });
+  });
+});
+
+describe("clearDockRow", () => {
+  it("pushes a stale center pane below the dock row, keeping its size", () => {
+    const out = clearDockRow([pane({ id: "a", x: 600, y: 24, w: 360, h: 230 })]);
+    expect(out[0]).toMatchObject({ x: 600, y: 96, w: 360, h: 230 });
+  });
+
+  it("leaves panes clear of the dock column byte-identical (deliberate placements)", () => {
+    // Far-right lyrics, far-left minimal player, below-band and
+    // on-the-line customs: none intersect the 460..1460 column above y96.
+    const kept = [
+      pane({ id: "lyr", type: "lyrics", x: 1476, y: 24, w: 420, h: 420 }),
+      pane({ id: "min", x: 24, y: 24, w: 340, h: 236 }),
+      pane({ id: "cus", x: 100, y: 150, w: 340, h: 230 }),
+      pane({ id: "edge", type: "profile", x: 24, y: 96, w: 420, h: 560 }),
+    ];
+    expect(clearDockRow(kept)).toEqual(kept);
+  });
+
+  it("spares hidden panes so toggle-restore geometry survives", () => {
+    const out = clearDockRow([
+      pane({ id: "h", x: 600, y: 24, w: 360, h: 230, visible: false }),
+    ]);
+    expect(out[0]).toMatchObject({ x: 600, y: 24, w: 360, h: 230 });
+  });
+
+  it("does not mutate the input panes", () => {
+    const l = [pane({ id: "a", x: 600, y: 24, w: 360, h: 230 })];
+    clearDockRow(l);
+    expect(l[0].y).toBe(24);
+  });
+});
+
+describe("deoverlapPanes", () => {
+  it("shifts only the later pane down, never resizing or moving x", () => {
+    const out = deoverlapPanes([
+      pane({ id: "a", x: 600, y: 96, w: 360, h: 230 }),
+      pane({ id: "b", x: 700, y: 100, w: 360, h: 230 }),
+    ]);
+    expect(out[0]).toMatchObject({ x: 600, y: 96, w: 360, h: 230 });
+    expect(out[1]).toMatchObject({ x: 700, y: 96 + 230 + 8, w: 360, h: 230 });
+  });
+
+  it("leaves non-overlapping and edge-touching panes alone", () => {
+    // Focus factory adjacency: lyrics bottom 404, player top 416 — a
+    // 12 px gap, not an overlap.
+    const kept = [
+      pane({ id: "lyr", type: "lyrics", x: 24, y: 24, w: 420, h: 380 }),
+      pane({ id: "pl", x: 24, y: 416, w: 420, h: 190 }),
+    ];
+    expect(deoverlapPanes(kept)).toEqual(kept);
+  });
+
+  it("resolves a stack of three to a fixpoint", () => {
+    const out = deoverlapPanes([
+      pane({ id: "a", x: 600, y: 96, w: 360, h: 230 }),
+      pane({ id: "b", x: 600, y: 96, w: 360, h: 230 }),
+      pane({ id: "c", x: 600, y: 96, w: 360, h: 230 }),
+    ]);
+    expect(out.map((p) => p.y)).toEqual([96, 96 + 230 + 8, 96 + 2 * (230 + 8)]);
+    for (const p of out) expect(p).toMatchObject({ x: 600, w: 360, h: 230 });
+  });
+
+  it("ignores hidden panes on both sides", () => {
+    const out = deoverlapPanes([
+      pane({ id: "a", x: 600, y: 96, w: 360, h: 230, visible: false }),
+      pane({ id: "b", x: 600, y: 96, w: 360, h: 230 }),
+    ]);
+    expect(out[1]).toMatchObject({ y: 96 });
+  });
+
+  it("does not mutate the input panes", () => {
+    const l = [
+      pane({ id: "a", x: 600, y: 96, w: 360, h: 230 }),
+      pane({ id: "b", x: 600, y: 96, w: 360, h: 230 }),
+    ];
+    deoverlapPanes(l);
+    expect(l[1].y).toBe(96);
+  });
+});
+
+describe("healPanesForDock", () => {
+  it("clears the dock band first, then de-overlaps in one pass", () => {
+    // Stale pair persisted under the old two-row pill, overlapping each
+    // other as well as the dock.
+    const out = healPanesForDock([
+      pane({ id: "player", x: 600, y: 24, w: 360, h: 230 }),
+      pane({ id: "queue", type: "queue", x: 700, y: 30, w: 360, h: 236 }),
+    ]);
+    expect(out[0]).toMatchObject({ x: 600, y: 96, w: 360, h: 230 });
+    // Queue clears the dock (96) then the player (96+230+8 = 334).
+    expect(out[1]).toMatchObject({ x: 700, y: 334, w: 360, h: 236 });
+  });
+
+  it("is idempotent: healing a healed doc is a no-op", () => {
+    const seed = [
+      pane({ id: "player", x: 600, y: 24, w: 360, h: 230 }),
+      pane({ id: "queue", type: "queue", x: 700, y: 30, w: 360, h: 236 }),
+      pane({ id: "lyr", type: "lyrics", x: 1476, y: 24, w: 420, h: 420 }),
+    ];
+    const once = healPanesForDock(seed);
+    expect(healPanesForDock(once)).toEqual(once);
+    expect(seed[0].y).toBe(24);
+  });
+});
+
+describe("stale custom migration heals the dock band", () => {
+  it("migrateV3ToV4 heals dock overlap for direct callers", () => {
+    const v4 = migrateV3ToV4(
+      layout([pane({ id: "a", x: 600, y: 24, w: 360, h: 230 })]),
+    );
+    for (const s of ["game", "focus", "stream"] as const) {
+      expect(v4.scenes[s].panes[0]).toMatchObject({ x: 600, y: 96, w: 360, h: 230 });
+    }
+  });
+
+  it("loadSceneLayout heals a stale v3 custom doc", () => {
+    stubStorage({
+      "snapify-layout-v3": JSON.stringify(
+        layout([pane({ id: "a", x: 600, y: 24, w: 360, h: 230 })]),
+      ),
+    });
+    const doc = loadSceneLayout();
+    expect(doc?.scenes.game.panes[0]).toMatchObject({ x: 600, y: 96, w: 360, h: 230 });
+    expect(doc?.scenes.stream.panes[0]).toMatchObject({ x: 600, y: 96 });
+  });
+
+  it("loadSceneLayout preserves a deliberate non-overlapping custom", () => {
+    stubStorage({
+      "snapify-layout-v3": JSON.stringify(
+        layout([pane({ id: "a", x: 100, y: 150, w: 340, h: 230 })]),
+      ),
+    });
+    const doc = loadSceneLayout();
+    expect(doc?.scenes.game.panes[0]).toMatchObject({ x: 100, y: 150, w: 340, h: 230 });
+  });
+});
+
 describe("migrateV3ToV4", () => {
   it("seeds every scene with the v3 arrangement and parks on game", () => {
     const v3 = layout([pane({ id: "a", x: 111, y: 222 })]);
@@ -711,5 +868,110 @@ describe("profile pane minimum (Batch 2c contract)", () => {
       1024,
     );
     expect(out).toMatchObject({ x: 24, y: 24, w: 420, h: 900 });
+  });
+});
+
+describe("resolution matrix (2.10.0 placement follow-up)", () => {
+  it("centers the live dock column per stage width", () => {
+    // 1920 ref stays byte-identical; other widths shift with 94vw/1000 cap.
+    expect(dockColumnForWidth(1920)).toEqual({ x: 460, w: 1000 });
+    expect(dockColumnForWidth(1366)).toEqual({ x: (1366 - 1000) / 2, w: 1000 });
+    expect(dockColumnForWidth(2560)).toEqual({ x: (2560 - 1000) / 2, w: 1000 });
+    expect(dockColumnForWidth(3440)).toEqual({ x: (3440 - 1000) / 2, w: 1000 });
+    expect(dockColumnForWidth(3840)).toEqual({ x: (3840 - 1000) / 2, w: 1000 });
+    expect(dockColumnForWidth(1080)).toEqual({ x: (1080 - 1000) / 2, w: 1000 });
+  });
+
+  it("leaves a 1920-legal probe alone at 1920 but clears it at live widths", () => {
+    // 1500,24 sits just right of the 1920 dock (460..1460): legal there,
+    // under the live dock everywhere else.
+    const probe = [pane({ id: "l", type: "lyrics", x: 1500, y: 24, w: 360, h: 230 })];
+    expect(clearDockRowForWidth(probe, 1920)).toEqual(probe);
+    expect(clearDockRowForWidth(probe, 2560)[0]).toMatchObject({ x: 1500, y: 96 });
+    expect(clearDockRowForWidth(probe, 3440)[0]).toMatchObject({ x: 1500, y: 96 });
+    expect(clearDockRowForWidth(probe, 3840)[0]).toMatchObject({ x: 1500, y: 96 });
+  });
+
+  it("clears a clamped probe that slides inside the live column at 1366", () => {
+    // Clamp-then-heal order: 1500,24 clamps to 1006,24 at 1366, which is
+    // inside the live 183..1183 column even though the unclamped x was not.
+    const clamped = clampLayoutToArea(
+      layout([pane({ id: "l", type: "lyrics", x: 1500, y: 24, w: 360, h: 230 })]),
+      1366,
+      768,
+    );
+    expect(clamped.panes[0]).toMatchObject({ x: 1006, y: 24 });
+    const healed = healPanesForDockForWidth(clamped.panes, 1366);
+    expect(healed[0]).toMatchObject({ x: 1006, y: 96 });
+  });
+
+  it("divides the live dock column by uiScale before comparing", () => {
+    // At k=1.25 the CSS dock 460..1460 is 368..1168 logical: a logical
+    // 1500,24 probe stays clear, a logical 600,24 probe still clears.
+    const wide = [pane({ x: 1500, y: 24, w: 360, h: 230 })];
+    expect(clearDockRowForWidth(wide, 1920, 1.25)).toEqual(wide);
+    const stale = [pane({ x: 600, y: 24, w: 360, h: 230 })];
+    expect(clearDockRowForWidth(stale, 1920, 1.25)[0]).toMatchObject({ y: 96 });
+  });
+
+  it("skips top clearance on narrow effective stages (bottom dock)", () => {
+    const top = [pane({ x: 100, y: 24, w: 300, h: 200 })];
+    // 400 CSS px at k=1 is narrow (<480): dock lives at the bottom.
+    expect(clearDockRowForWidth(top, 400)).toEqual(top);
+    expect(healPanesForDockForWidth(top, 400)).toEqual(top);
+  });
+
+  it("keeps the far-corner probe inside every matrix stage via clamp", () => {
+    const seed = layout([pane({ id: "p", x: 1500, y: 800, w: 340, h: 236 })]);
+    for (const [w, h] of [
+      [1366, 768],
+      [1920, 1080],
+      [2560, 1440],
+      [3840, 2160],
+      [3440, 1440],
+      [1080, 1920],
+    ] as const) {
+      const out = clampLayoutToArea(seed, w, h);
+      const p = out.panes[0];
+      expect(p.x + p.w, `${w}x${h} east`).toBeLessThanOrEqual(w);
+      expect(p.y + p.h, `${w}x${h} south`).toBeLessThanOrEqual(h);
+      expect(p.x, `${w}x${h} west`).toBeGreaterThanOrEqual(0);
+      expect(p.y, `${w}x${h} north`).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("keeps the 420-wide profile inside every matrix stage at 125% uiScale", () => {
+    const seed = layout([
+      { ...pane({ x: 1440, y: 24, w: 420, h: 560 }), id: "profile", type: "profile" },
+    ]);
+    for (const [w, h] of [
+      [1366, 768],
+      [1920, 1080],
+      [2560, 1440],
+      [3840, 2160],
+      [3440, 1440],
+      [1080, 1920],
+    ] as const) {
+      const out = clampLayoutToArea(seed, w, h, 1.25);
+      for (const p of out.panes) {
+        expect(p.x + p.w, `${w}x${h} logical east`).toBeLessThanOrEqual(w / 1.25 + 1e-9);
+        expect((p.x + p.w) * 1.25, `${w}x${h} painted east`).toBeLessThanOrEqual(w + 1e-9);
+      }
+    }
+  });
+
+  it("places the full preset inside ultrawide and portrait stages", () => {
+    for (const [w, h] of [
+      [2560, 1440],
+      [3840, 2160],
+      [3440, 1440],
+      [1080, 1920],
+    ] as const) {
+      const l = defaultLayoutFor(w, h);
+      for (const p of l.panes) {
+        expect(p.x + p.w, `${w}x${h} ${p.id} east`).toBeLessThanOrEqual(w);
+        expect(p.y + p.h, `${w}x${h} ${p.id} south`).toBeLessThanOrEqual(h);
+      }
+    }
   });
 });

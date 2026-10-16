@@ -298,6 +298,144 @@ export function defaultLayoutFor(areaW: number, areaH: number, uiScale = 1): Lay
   };
 }
 
+/* ---------- Load-time dock clearance (desktop positioning fix) ----------
+ * Stale custom docs predate the single-row dock: panes persisted under the
+ * old two-row pill (or dragged there) reload overlapping the edit-mode
+ * toolbar. Factory presets bypass this file's parse path (they are built
+ * in code, not parsed), so healing here touches persisted customs only.
+ *
+ * Layering: coerce (load/migrate) heals with the 1920 reference stage
+ * below — parse time knows no viewport. The boot path then runs
+ * clampLayoutToArea with the live window, which re-fits anything the
+ * shift pushed past an edge. clampLayoutToArea itself never heals, so
+ * deliberate drag placements survive resizes and every clamp unit pin
+ * keeps its exact geometry.
+ *
+ * The dock column mirrors .dock in App.css (fixed top-12 pill, max-width
+ * min(94vw, DOCK_MAX_W), centered): DOCK_MAX_W must track the CSS cap.
+ * Panes fully left/right of that column (e.g. lyrics x1476, the minimal
+ * player x24 w340) never intersect it and load byte-identical. */
+export const DOCK_REF_W = 1920;
+export const DOCK_TOP = 12;
+/** Must match the .dock max-width cap in App.css. */
+export const DOCK_MAX_W = 1000;
+/** Panes starting above this line inside the dock column move below it. */
+export const DOCK_CLEAR_Y = 96;
+/** Vertical gap left when de-overlapping panes. */
+export const DOCK_DEOVERLAP_GAP = 8;
+
+/** Centered dock column on the reference stage. Pure. */
+export function dockColumnFor(refW: number = DOCK_REF_W): { x: number; w: number } {
+  const w = Math.min(refW * 0.94, DOCK_MAX_W);
+  return { x: (refW - w) / 2, w };
+}
+
+/** Centered dock column on the live stage width (CSS px). Mirrors .dock
+ *  (max-width min(94vw, DOCK_MAX_W), centered): at 1920 it equals the
+ *  reference column, at 2560/3440/3840 it shifts right, at 1366/1080 it
+ *  shifts left. Pure. */
+export function dockColumnForWidth(stageW: number): { x: number; w: number } {
+  const safe = Number.isFinite(stageW) && stageW > 0 ? stageW : DOCK_REF_W;
+  const w = Math.min(safe * 0.94, DOCK_MAX_W);
+  return { x: (safe - w) / 2, w };
+}
+
+function rectsOverlap(
+  a: { x: number; y: number; w: number; h: number },
+  b: { x: number; y: number; w: number; h: number },
+): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+/** Push visible panes that start inside the dock band clear of it
+ *  (y -> DOCK_CLEAR_Y). Only panes horizontally intersecting the dock
+ *  column move; widths/heights/x are never touched, hidden panes keep
+ *  their restore geometry. Pure: inputs are copied, never mutated. */
+export function clearDockRow(panes: PaneState[]): PaneState[] {
+  const dock = dockColumnFor();
+  return panes.map((p) => {
+    if (p.visible === false) return { ...p };
+    if (p.y >= DOCK_CLEAR_Y) return { ...p };
+    if (!(p.x < dock.x + dock.w && dock.x < p.x + p.w)) return { ...p };
+    return { ...p, y: DOCK_CLEAR_Y };
+  });
+}
+
+/** Minimal pane-to-pane de-overlap for restored docs: when two visible
+ *  panes intersect, the later one shifts down just below the earlier
+ *  (plus gap). Never resizes and never moves x — only y, only on strict
+ *  overlap, so deliberate non-overlapping placements load untouched.
+ *  Runs to a fixpoint (bounded by pane count) so a shift that lands on a
+ *  third pane resolves too. Pure: inputs are copied, never mutated. */
+export function deoverlapPanes(
+  panes: PaneState[],
+  gap: number = DOCK_DEOVERLAP_GAP,
+): PaneState[] {
+  const out = panes.map((p) => ({ ...p }));
+  for (let pass = 0; pass < out.length; pass++) {
+    let moved = false;
+    for (let i = 0; i < out.length; i++) {
+      const p = out[i];
+      if (p.visible === false) continue;
+      for (let j = 0; j < i; j++) {
+        const q = out[j];
+        if (q.visible === false) continue;
+        if (rectsOverlap(p, q)) {
+          p.y = q.y + q.h + gap;
+          moved = true;
+        }
+      }
+    }
+    if (!moved) break;
+  }
+  return out;
+}
+
+/** Load-time heal for persisted customs: dock clearance first (freed
+ *  panes may land on a sibling), then pane-to-pane de-overlap.
+ *  Idempotent — healing a healed doc is a no-op. Pure. */
+export function healPanesForDock(panes: PaneState[]): PaneState[] {
+  return deoverlapPanes(clearDockRow(panes));
+}
+
+/** Live-width dock clearance (resolution-matrix fix): the 1920-ref heal
+ *  above leaves probes under the live centered dock on any other width
+ *  (e.g. 1500,24 is just right of the 1920 dock but under the 2560/
+ *  3440/3840 dock, and clamped 1006,24 is under the 1366 dock). The dock
+ *  lives outside the uiScale zoom wrapper (CSS px) while layout state is
+ *  logical, so the CSS column is divided by k before comparing. Narrow/
+ *  short stages move the dock to the bottom row (App.css data-narrow/
+ *  short), so top clearance is skipped there. Pure. */
+export function clearDockRowForWidth(
+  panes: PaneState[],
+  stageW: number,
+  uiScale = 1,
+): PaneState[] {
+  const k = Number.isFinite(uiScale) && uiScale > 0 ? uiScale : 1;
+  const effW = stageW / k;
+  // Bottom-dock stages never need top clearance.
+  if (effW < 480) return panes.map((p) => ({ ...p }));
+  const css = dockColumnForWidth(stageW);
+  const dock = { x: css.x / k, w: css.w / k };
+  return panes.map((p) => {
+    if (p.visible === false) return { ...p };
+    if (p.y >= DOCK_CLEAR_Y) return { ...p };
+    if (!(p.x < dock.x + dock.w && dock.x < p.x + p.w)) return { ...p };
+    return { ...p, y: DOCK_CLEAR_Y };
+  });
+}
+
+/** Boot/resize twin of healPanesForDock with the live stage width:
+ *  clamp-then-heal (not heal-then-clamp) so a clamped x that slides inside
+ *  the live column still clears. Idempotent. Pure. */
+export function healPanesForDockForWidth(
+  panes: PaneState[],
+  stageW: number,
+  uiScale = 1,
+): PaneState[] {
+  return deoverlapPanes(clearDockRowForWidth(panes, stageW, uiScale));
+}
+
 function num(v: unknown, fallback: number): number {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
@@ -333,7 +471,9 @@ function coerceLayout(parsed: unknown): LayoutState | null {
   return {
     version: 3,
     preset: typeof l.preset === "string" && l.preset ? l.preset : "custom",
-    panes,
+    // Stale customs predate the single-row dock: heal the dock band and
+    // pane overlaps now so a persisted doc can never reload under chrome.
+    panes: healPanesForDock(panes),
   };
 }
 
@@ -385,16 +525,6 @@ export const STREAM_HIDE_DELAY_MS = 2500;
  *  collapsed pane. Specs still assert the 72 px ceiling. */
 export const EXPANDED_COMPACT_H = 68;
 
-/** Legacy alias: collapsed player is now header-only, not 68 px.
- *  Kept so older imports still compile; new code uses EXPANDED_COMPACT_H. */
-export const COLLAPSED_PLAYER_H = EXPANDED_COMPACT_H;
-
-/** Legacy mini breakpoint (280). The compact gate now uses COMPACT_W (360)
- *  with a floor-inclusive height arm (see App.tsx); the CSS fallback query
- *  is 357 px to match (359 pane minus the 2 px border). Kept so older
- *  imports still compile; new code uses COMPACT_W. */
-export const MINI_PLAYER_W = 280;
-
 function isSceneName(v: unknown): v is SceneName {
   return v === "game" || v === "focus" || v === "stream";
 }
@@ -411,7 +541,8 @@ function coerceSceneSlot(raw: unknown): SceneSlot | null {
   if (panes.length === 0) return null;
   return {
     preset: typeof s.preset === "string" && s.preset ? s.preset : "custom",
-    panes,
+    // Same stale-custom heal as the v3 path (see coerceLayout).
+    panes: healPanesForDock(panes),
   };
 }
 
@@ -454,7 +585,9 @@ export function defaultSceneLayoutFor(areaW: number, areaH: number): SceneLayout
 export function migrateV3ToV4(v3: LayoutState): SceneLayout {
   const slot = (preset: string, panes: PaneState[]): SceneSlot => ({
     preset,
-    panes: clonePanes(panes),
+    // Direct callers bypass the coerce heal, so heal here too; docs that
+    // already came through coerce are unaffected (the heal is idempotent).
+    panes: healPanesForDock(clonePanes(panes)),
   });
   return {
     version: 4,
