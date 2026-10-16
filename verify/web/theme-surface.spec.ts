@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { stubTauri } from "./tauri-mock";
+import { stubTauri, seedStorage } from "./tauri-mock";
 
 // Pastel + glass surface matrix (2.5.4 Track A): candy washes used to beat
 // the glass base (opaque, specificity 0,4,0 over 0,3,0), the glass tokens
@@ -27,15 +27,7 @@ const FULL_LAYOUT = {
 
 async function bootAt(page: Page, theme: string, surface: string) {
   await stubTauri(page, { layout: FULL_LAYOUT, edit: true });
-  await page.addInitScript(
-    ({ theme, surface }) => {
-      try {
-        localStorage.setItem("snapify-theme", theme);
-        localStorage.setItem("snapify-surface", surface);
-      } catch { /* private mode: prefs last the session */ }
-    },
-    { theme, surface },
-  );
+  await seedStorage(page, { "snapify-theme": theme, "snapify-surface": surface });
   await page.goto("/");
   await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
   await expect(page.locator(".app")).toHaveAttribute("data-surface", surface);

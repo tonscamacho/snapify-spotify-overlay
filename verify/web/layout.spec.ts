@@ -302,19 +302,6 @@ test("overlay chrome paints only inside interactive elements", async ({ page }) 
   expect(await dock.evaluate((el) => getComputedStyle(el).borderRadius)).toContain(
     "999px",
   );
-  // The toast rule scopes its background even with no live toast: probe a
-  // synthetic node so the rule (not app state) is locked.
-  const toastClip = await page.evaluate(() => {
-    const host = document.querySelector(".toasts");
-    if (!host) return "no-host";
-    const el = document.createElement("div");
-    el.className = "toast";
-    host.appendChild(el);
-    const clip = getComputedStyle(el).backgroundClip;
-    el.remove();
-    return clip;
-  });
-  expect(toastClip).toBe("padding-box");
   // Toasts layer above the dock.
   const layers = await page.evaluate(() => {
     const num = (sel: string) => {

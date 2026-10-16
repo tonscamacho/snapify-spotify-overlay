@@ -153,7 +153,6 @@ export default function VisualizerPane(p: Props) {
     try {
       mq.addEventListener("change", onChange);
     } catch {
-      // Older engines use the legacy listener form.
       mq.addListener(onChange);
     }
     return () => {

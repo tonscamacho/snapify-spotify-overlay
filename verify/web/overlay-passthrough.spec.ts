@@ -128,8 +128,6 @@ test("region reports stay under 10 per second during a drag", async ({ page }) =
   const elapsedS = (Date.now() - t0) / 1000;
   const after = (await commandsNamed(page, "set_overlay_regions")).length;
   const rate = (after - before) / elapsedS;
-  // eslint-disable-next-line no-console
-  console.log(`region reports during drag: ${after - before} in ${elapsedS.toFixed(2)}s = ${rate.toFixed(2)}/s`);
   expect(rate).toBeLessThan(10);
 });
 
@@ -263,8 +261,6 @@ test("130% UI scale keeps reported regions aligned with panes", async ({ page })
       h: Math.round(r.height),
     };
   });
-  // eslint-disable-next-line no-console
-  console.log(`130% zoom: pane ${JSON.stringify(pane)} vs regions ${JSON.stringify(last.regions)}`);
   const match = (last.regions ?? []).some(
     (rg) =>
       Math.abs(rg.x - pane.x) <= 1 &&

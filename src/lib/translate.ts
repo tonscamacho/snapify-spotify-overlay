@@ -141,8 +141,6 @@ export async function translateBatch(
   return out;
 }
 
-// ---------- romaji / transliteration ----------
-
 // [romaji, hiragana, katakana] per mora. Covers gojuon, dakuten,
 // handakuten, yoon digraphs (via the trailing-i + small ya/yu/yo rule
 // in toRomaji), vu, and the small-ka counter forms.

@@ -604,8 +604,6 @@ export default function SettingsModal(p: Props) {
             ))}
           </span>
         </div>
-        {/* Scene + preset-cycle + streaming-safe live here so the dock stays
-          slim. Scene and cycle commit immediately, never as a preview. */}
         <div className="row">
           <span>Scene</span>
           <span className="seg" role="group" aria-label="Scene">

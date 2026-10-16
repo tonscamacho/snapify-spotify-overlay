@@ -65,9 +65,6 @@ fn clear_verifier_disk() {
     let _ = std::fs::remove_file(verifier_path());
 }
 
-/// Human-readable bind failure for 127.0.0.1:3000. Pure for testability:
-/// AddrInUse names the likely holder (another Snapify window or the dev
-/// server) plus the fix; anything else reports the raw error.
 fn bind_error_message(e: &std::io::Error) -> String {
     if e.kind() == std::io::ErrorKind::AddrInUse {
         "Port 3000 is busy — likely another Snapify Overlay instance or `npm run dev` holds 127.0.0.1:3000. Free it: quit the extra Snapify window (check the tray), stop the dev server, or run `netstat -ano | findstr :3000` and stop that PID; then login again.".to_string()
@@ -171,10 +168,6 @@ fn save_fallback(app: &AppHandle, refresh: &str) -> Result<(), String> {
     }
 }
 
-/// Restart-loss warning attached to every credential-save failure surface.
-/// The session stays live in memory for this run, so callers still finish
-/// logged-in; the message makes the reboot consequence visible now instead
-/// of only after a restart drops the login.
 fn persist_failure_message(message: &str) -> String {
     format!("{message} — this login will not survive a restart.")
 }
@@ -273,7 +266,6 @@ impl RefreshError {
     }
 }
 
-/// Drop a dead session everywhere: memory, OS keyring, and the frontend gate.
 fn kill_session(app: &AppHandle, state: &AuthState) {
     if let Ok(mut tokens) = state.tokens.lock() {
         *tokens = None;
@@ -667,7 +659,6 @@ pub async fn refresh_now(app: &AppHandle) -> Result<String, String> {
     }
 }
 
-/// Returns a valid access token, refreshing silently when expired.
 pub async fn access_token(app: &AppHandle) -> Result<String, String> {
     let state = app
         .try_state::<AuthState>()
@@ -692,10 +683,6 @@ pub async fn access_token(app: &AppHandle) -> Result<String, String> {
         .ok_or_else(|| "Not logged in. Start login first.".to_string())
 }
 
-/// Best-effort restore of a saved session at startup. A fresh disk verifier
-/// (login started <120 s ago) re-arms the callback listener so a mid-login
-/// restart resumes; a stale one is already deleted by the loader, and the
-/// next callback fails clean with "Login session expired. Start again."
 pub fn restore_session(app: &AppHandle) {
     if let Some(refresh) = load_refresh_token(app) {
         if let Some(state) = app.try_state::<AuthState>() {

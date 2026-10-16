@@ -344,10 +344,6 @@ async fn call_inner(
             None
         };
         let res = {
-            // Reads and writes serialize on separate permits: transport
-            // takes the fast lane past a parked library read, and polls
-            // never wait behind a slow write. GET is the read set; every
-            // PUT/POST/DELETE is a write.
             let gate = if method == Method::GET {
                 spotify_read_gate()
             } else {
@@ -496,8 +492,6 @@ async fn interpret(
 }
 
 fn trim_snippet(body: &str) -> String {
-    // Spotify gateway errors arrive as HTML pages. Trim them so the
-    // overlay toast never dumps markup like the 411 page did.
     let short = body
         .replace(|c: char| c.is_whitespace(), " ")
         .split_whitespace()
@@ -1100,8 +1094,6 @@ const EMBED_MIN_INTERVAL: Duration = Duration::from_millis(1500);
 const EMBED_TIMEOUT: Duration = Duration::from_secs(10);
 const EMBED_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-/// Pure mapping for the kill-switch so tests never mutate process env:
-/// unset → ON; explicit off-words → OFF; anything else → ON.
 fn embed_flag_from_env(raw: Option<&str>) -> bool {
     match raw {
         None => true,
@@ -1370,8 +1362,6 @@ async fn fetch_embed_html(playlist_id: &str) -> Result<String, String> {
     res.text().await.map_err(|e| e.to_string())
 }
 
-/// Third source after terminal 403. `Some` only on full success; `None` on
-/// ANY failure so the caller keeps the original 403 (→ existing wall).
 async fn try_embed_fallback(
     playlist_id: &str,
     limit: i64,
@@ -1427,10 +1417,6 @@ pub async fn get_playlist_items(
             .await
             {
                 Ok(v) => Ok(v),
-                // Third source (GO-gate): the public embed page, only after
-                // a double-403 and only when the kill-switch is on. ANY
-                // alternate-source failure keeps the original 403 so the
-                // existing wall + Play + Retry + Open-in-Spotify survives.
                 Err(e2) if embed_retry_gate(&e, &e2) => {
                     match try_embed_fallback(&playlist_id, limit, offset).await {
                         Some(v) => Ok(v),

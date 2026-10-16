@@ -14,15 +14,6 @@ import { TRACK_NAME, TRACK_ARTISTS } from "./fixtures";
 // sibling mini track); this spec asserts the shared transport, the mini
 // volume presence (closed, zero width, no spill), and makes
 // no claim about the sibling buttons either way.
-//
-// Generator (record): this file writes the captures.
-//   pre-fix:  CENTER_SNAP_PREFIX=before npx playwright test -c playwright.config.ts verify/web/player-center.spec.ts
-//   post-fix: npx playwright test -c playwright.config.ts verify/web/player-center.spec.ts
-// Both runs seed the same geometry; the app clamps per its own floors, so
-// `before-*` shows the 190 px floor + top-aligned card and `after-*` shows
-// the 120 px floor + centered card. The pre-fix run is expected to fail
-// the centering and 120-floor assertions (that failure is the repro); the
-// screenshots are written before the assertions either way.
 
 const PREFIX = process.env.CENTER_SNAP_PREFIX ?? "after";
 const DIR = "docs/bug-reports/2.5.3";

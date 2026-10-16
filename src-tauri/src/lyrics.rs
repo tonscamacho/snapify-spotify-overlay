@@ -55,14 +55,12 @@ struct CacheEntry {
     last_access: u64,
 }
 
-/// Max tracks held on disk. Eviction is access-ordered (LRU).
 const MAX_CACHED_TRACKS: usize = 500;
 
 fn effective_recency(e: &CacheEntry) -> u64 {
     e.last_access.max(e.fetched_at)
 }
 
-/// Drops the least-recently-used entries beyond the cap, in place.
 fn trim_to_cap(map: &mut HashMap<String, CacheEntry>) {
     if (map.len()) <= MAX_CACHED_TRACKS {
         return;
@@ -119,8 +117,6 @@ fn read_cache(app: &AppHandle) -> HashMap<String, CacheEntry> {
         Some(p) => p,
         None => return HashMap::new(),
     };
-    // Corrupt primaries heal from the `.bak` copy inside
-    // `read_json_guarded`; doubly-corrupt starts empty.
     let text = match read_json_guarded(&path, |t| {
         serde_json::from_str::<HashMap<String, CacheEntry>>(t).is_ok()
     }) {
@@ -150,7 +146,6 @@ fn cache_key(track_id: &str, duration_ms: i64) -> String {
 }
 
 fn parse_timestamp(s: &str) -> Option<i64> {
-    // mm:ss.xx or mm:ss.xxx
     let mut parts = s.split(':');
     let min: i64 = parts.next()?.parse().ok()?;
     let rest = parts.next()?;
@@ -241,14 +236,12 @@ pub fn parse_lrc(text: &str) -> Vec<LyricCue> {
         if line.is_empty() {
             continue;
         }
-        // Global offset tag.
         if line.starts_with("[offset:") && line.ends_with(']') {
             if let Ok(v) = line[8..line.len() - 1].parse::<i64>() {
                 offset = v;
             }
             continue;
         }
-        // Collect leading [..] tags.
         let mut tags: Vec<String> = Vec::new();
         let mut rest = line;
         while rest.starts_with('[') {
@@ -262,7 +255,6 @@ pub fn parse_lrc(text: &str) -> Vec<LyricCue> {
         if tags.is_empty() {
             continue;
         }
-        // Skip pure ID tags (ti, ar, al, au, length, by, re, ve).
         let times: Vec<i64> = tags.iter().filter_map(|t| parse_timestamp(t)).collect();
         if times.is_empty() {
             continue;

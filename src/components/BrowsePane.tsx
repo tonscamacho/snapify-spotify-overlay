@@ -361,7 +361,6 @@ function mergeSearch(pages: SearchResults[]): SearchResults {
     takeLib(out.shows, pg.shows);
     takeLib(out.audiobooks, pg.audiobooks);
   }
-  // Un-split episodes back out of the tracks pool.
   const eps = out.tracks.filter((t) => t.uri.startsWith("spotify:episode:"));
   out.tracks = out.tracks.filter((t) => !t.uri.startsWith("spotify:episode:"));
   out.episodes = eps;
@@ -1025,7 +1024,6 @@ export default function BrowsePane(p: Props) {
           ]);
           if (stale()) return;
           const base = parseAlbumDetail(a);
-          // Merge paged tracks strip for the detail view.
           if (base && base.kind === "album") {
             const paged = tr as Record<string, unknown>;
             const items = Array.isArray(paged["items"])
@@ -1112,14 +1110,13 @@ export default function BrowsePane(p: Props) {
         if (!stale()) setDetailLoading(false);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 
   useEffect(() => {
     if (top) void fetchDetail(top);
     if (!top) setDetail(null);
-  }, [top?.kind, top && "id" in top ? (top as { id: string }).id : null]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [top?.kind, top && "id" in top ? (top as { id: string }).id : null]);
 
   useEffect(() => {
     if (p.state.view !== "search") return;
@@ -1185,7 +1182,6 @@ export default function BrowsePane(p: Props) {
     } finally {
       setProfileLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1201,7 +1197,6 @@ export default function BrowsePane(p: Props) {
   };
   const errInline = useCallback(
     (m: string) => p.onError(scopeHint(m) ?? m),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
   const lib = useLibrarySaved(
@@ -1474,8 +1469,6 @@ export default function BrowsePane(p: Props) {
         {p.state.view === "library" && (
           <>
             <span className="sep" aria-hidden="true" />
-            {/* Single library-section control at all widths: the select
-              drives the same lib tab state directly. */}
             <select
               className="browse-tab-select"
               aria-label="Library section"

@@ -1,22 +1,3 @@
-// Walled (friend / non-owned) playlist tracks.
-//
-// Contract for the walled-tracks patch (see docs/plans/friend-playlist-tracks-patch.md):
-// an alternate track source behind a kill-switch flag (default ON per the
-// GO gate; SNAPIFY_EMBED_FALLBACK=0 restores the wall) with the honest wall
-// as the fallback. These specs pin the flag-OFF behavior with the existing
-// mock seams only (stubTauri fixtures + failNext on get_playlist_items):
-//
-// - a single 403 recovers to rendered tracks on Retry (the fallback half of
-//   the contract: the list is recoverable, Play stays intact throughout);
-// - a persistent 403 keeps the honest wall with Play + Retry + Open in
-//   Spotify, and Play still fires play_context from the wall;
-// - an owned playlist with seeded tracks renders without ever touching the wall.
-//
-// When the patch's alternate source lands (flag ON), the first test's wall
-// step is replaced by an automatic tracks render: the spec already accepts
-// both orders (race-poll below) and the final assertions — track rows
-// visible, Play intact — hold in both worlds.
-
 import { test, expect, type Page } from "@playwright/test";
 import { stubTauri, commandsNamed, failNext } from "./tauri-mock";
 import { buildFixtures, type VerifyFixtures } from "./fixtures";

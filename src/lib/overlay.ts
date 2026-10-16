@@ -160,7 +160,6 @@ function logFirstRegionReport(): void {
   if (firstReportLogged) return;
   firstReportLogged = true;
   try {
-    // eslint-disable-next-line no-console
     console.info(`snapify: boot-to-first-region-report ${Date.now() - BOOT_T0}ms`);
     if (typeof performance !== "undefined" && typeof performance.mark === "function") {
       performance.mark("snapify-first-region-report");
@@ -249,12 +248,10 @@ export function watchRegionElementSizes(onDirty: () => void): () => void {
     try {
       ro?.disconnect();
     } catch {
-      // Teardown must not throw.
     }
     try {
       mo?.disconnect();
     } catch {
-      // Teardown must not throw.
     }
   };
 }

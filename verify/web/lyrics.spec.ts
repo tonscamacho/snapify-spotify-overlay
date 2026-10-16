@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { stubTauri, commandsNamed } from "./tauri-mock";
+import { stubTauri, commandsNamed, seedStorage } from "./tauri-mock";
 import { ACTIVE_CUE_T, ACTIVE_LINE, TRACK_ID, TRACK_NAME, TRACK_ARTISTS, TRACK_ALBUM, TRACK_DURATION_MS, TRACK_URI, DEVICE_ID, type LyricCueFixture } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
@@ -151,13 +151,7 @@ test("translation batches visible lines with auto-detect and lang tags", async (
     });
   });
   await stubTauri(page, { fixtures: { player: pausedPlayer(TRACK_ID) as never } });
-  await page.addInitScript(() => {
-    try {
-      localStorage.setItem("snapify-translang", "es");
-    } catch {
-      // Ignore storage failures in the test browser.
-    }
-  });
+  await seedStorage(page, { "snapify-translang": "es" });
   await page.goto("/");
 
   const pane = page.locator('section[data-pane="lyrics"]');
@@ -192,13 +186,7 @@ test("track change replaces translations, leaving no stale lines", async ({
     });
   });
   await stubTauri(page, { fixtures: { player: pausedPlayer(TRACK_ID) as never } });
-  await page.addInitScript(() => {
-    try {
-      localStorage.setItem("snapify-translang", "es");
-    } catch {
-      // Ignore storage failures in the test browser.
-    }
-  });
+  await seedStorage(page, { "snapify-translang": "es" });
   await page.goto("/");
   const pane = page.locator('section[data-pane="lyrics"]');
   await expect(pane.locator('button.line.on .trans[lang="es"]')).toContainText(
@@ -234,13 +222,7 @@ test("lyrics text size multiplier scales lines from the stored preference", asyn
   page,
 }) => {
   await stubTauri(page);
-  await page.addInitScript(() => {
-    try {
-      localStorage.setItem("snapify-lyric-scale", "1.3");
-    } catch {
-      // Ignore storage failures in the test browser.
-    }
-  });
+  await seedStorage(page, { "snapify-lyric-scale": "1.3" });
   await page.goto("/");
   const pane = page.locator('section[data-pane="lyrics"]');
   const container = pane.locator(".lyrics");
@@ -261,13 +243,7 @@ test("dyslexia mode widens lyric lines from the stored preference", async ({
   page,
 }) => {
   await stubTauri(page);
-  await page.addInitScript(() => {
-    try {
-      localStorage.setItem("snapify-dyslexia", "1");
-    } catch {
-      // Ignore storage failures in the test browser.
-    }
-  });
+  await seedStorage(page, { "snapify-dyslexia": "1" });
   await page.goto("/");
   const pane = page.locator('section[data-pane="lyrics"]');
   await expect(pane.locator(".lyrics.lyrics-dyslexia")).toBeVisible();

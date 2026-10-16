@@ -33,7 +33,6 @@ export default function LyricsPane(p: Props) {
       window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
 
-  // Cues render raw; no per-track calibration shift.
   const cues = p.lyrics.kind === "ready" ? p.lyrics.data.cues : [];
 
   const synced = p.lyrics.kind === "ready" && p.lyrics.data.synced;

@@ -203,8 +203,6 @@ test("episode detail carries a show-notes link", async ({ page }) => {
   await expect(browse.locator(".detail-title")).toContainText("Verify Episode");
 });
 
-// PlayerPane episode/like behaviors live here because player.spec.ts is
-// reserved for the device panel under the v2 track bounds.
 test("episode resume chip, 15s seek, notes, and honest speed", async ({ page }) => {
   const seed = buildFixtures();
   await stubTauri(page, {

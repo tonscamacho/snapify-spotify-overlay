@@ -76,7 +76,6 @@ export function parseLrc(text: string): LyricCue[] {
       if (Number.isFinite(v) && Number.isInteger(v)) offset = v;
       continue;
     }
-    // Collect leading [..] tags.
     const tags: string[] = [];
     let rest = line;
     while (rest.startsWith("[")) {

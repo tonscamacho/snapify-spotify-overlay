@@ -133,8 +133,6 @@ pub fn load_map(app: &AppHandle) -> HashMap<String, String> {
         Some(p) => p,
         None => return map,
     };
-    // Corrupt primaries heal from the `.bak` copy inside
-    // `read_json_guarded`; doubly-corrupt falls back to defaults.
     let text = match read_json_guarded(&path, |t| {
         serde_json::from_str::<HashMap<String, String>>(t).is_ok()
     }) {
@@ -198,8 +196,6 @@ pub fn get_keybinds(store: State<'_, KeybindStore>) -> HashMap<String, String> {
     store.0.lock().unwrap().clone()
 }
 
-/// Startup global-shortcut failures (busy/conflicting registrations) for
-/// the Settings keybind rows. Empty when every global chord grabbed cleanly.
 #[tauri::command]
 pub fn keybind_startup_errors(state: State<'_, KeybindIssues>) -> Vec<String> {
     state.0.lock().unwrap().clone()

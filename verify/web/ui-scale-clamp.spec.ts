@@ -5,7 +5,7 @@
 // arm asserts the shared positioning invariants from ./geometry: pane
 // inside the viewport, top chrome centered, regions tight to paint.
 import { test, expect, type Page } from "@playwright/test";
-import { stubTauri } from "./tauri-mock";
+import { stubTauri, seedStorage } from "./tauri-mock";
 import {
   assertNotchCentered,
   assertPaneWithinStage,
@@ -64,14 +64,7 @@ test("boot at persisted 125% clamps the strand layout inside the stage", async (
   page,
 }) => {
   await stubTauri(page, { layout: STRAND_LAYOUT, edit: true, notchHover: true });
-  // Persisted pref (snapify-ui-scale): boot clamps with the real k, not 1.
-  await page.addInitScript(() => {
-    try {
-      localStorage.setItem("snapify-ui-scale", "1.25");
-    } catch {
-      // Private mode: the load path still defaults to 1.
-    }
-  });
+  await seedStorage(page, { "snapify-ui-scale": "1.25" });
   await page.goto("/");
   await dismissCoach(page);
 
@@ -126,13 +119,7 @@ test.describe("devicePixelRatio 1.5", () => {
   }) => {
     expect(await page.evaluate(() => window.devicePixelRatio)).toBe(1.5);
     await stubTauri(page, { layout: STRAND_LAYOUT, edit: true, notchHover: true });
-    await page.addInitScript(() => {
-      try {
-        localStorage.setItem("snapify-ui-scale", "1.25");
-      } catch {
-        // Private mode: the load path still defaults to 1.
-      }
-    });
+    await seedStorage(page, { "snapify-ui-scale": "1.25" });
     await page.goto("/");
     await dismissCoach(page);
 
